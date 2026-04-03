@@ -599,6 +599,22 @@ function esc(s) {
   if (!s) return '';
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
+function cleanTitle(s) {
+  if (!s) return '';
+  var t = s.replace(/<[^>]+>/g, '');
+  t = t.replace(/```[\s\S]*?```/g, '').replace(/```\w*/g, '');
+  t = t.replace(/^#+\s*/gm, '').replace(/\*\*/g, '').replace(/__/g, '');
+  if (t.indexOf('Conversation info') === 0) {
+    var parts = t.split('\n\n');
+    for (var i = 0; i < parts.length; i++) {
+      var p = parts[i].trim();
+      if (p && p.indexOf('Conversation info') !== 0 && p.indexOf('Sender ') !== 0 && p.indexOf('untrusted') < 0) { t = p; break; }
+    }
+  }
+  t = t.replace(/\s+/g, ' ').trim();
+  if (t.length > 80) { var sp = t.lastIndexOf(' ', 80); t = t.substring(0, sp > 40 ? sp : 80) + '...'; }
+  return t;
+}
 
 // Load stats
 async function loadStats() {
@@ -662,7 +678,7 @@ async function loadSessions() {
 
     container.innerHTML = d.sessions.map(s => {
       const isBrowser = s.source === 'browser';
-      const title = s.title || (isBrowser ? (s.service || 'Browser') : s.session_id.substring(0,8));
+      const title = cleanTitle(s.title) || (isBrowser ? (s.service || 'Browser') : s.session_id.substring(0,8));
       const proj = isBrowser ? '' : projectName(s.cwd);
       const itemClass = isBrowser ? 'session-item browser' : 'session-item';
       const clickFn = isBrowser

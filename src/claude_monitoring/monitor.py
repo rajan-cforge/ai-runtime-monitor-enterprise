@@ -25,6 +25,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import shutil
 import signal
 import sqlite3
@@ -641,6 +642,31 @@ class JSONLSessionWatcher:
             return "Slack"
         return None
 
+    @staticmethod
+    def _clean_title(text):
+        """Strip markdown, HTML tags, and metadata from title text."""
+        # Remove <system-reminder>...</system-reminder> and similar tags
+        t = re.sub(r"<[^>]+>", "", text)
+        # Remove code fences and their content markers
+        t = re.sub(r"```[\s\S]*?```", "", t)
+        t = re.sub(r"```\w*", "", t)
+        # Remove markdown heading markers
+        t = re.sub(r"^#+\s*", "", t, flags=re.MULTILINE)
+        # Remove bold/italic markers
+        t = t.replace("**", "").replace("__", "")
+        # Remove metadata prefixes
+        if t.startswith("Conversation info"):
+            # Skip to actual content after metadata blocks
+            parts = t.split("\n\n")
+            for part in parts:
+                stripped = part.strip()
+                if stripped and not stripped.startswith("Conversation info") and not stripped.startswith("Sender ") and "untrusted metadata" not in stripped:
+                    t = stripped
+                    break
+        # Collapse whitespace
+        t = re.sub(r"\s+", " ", t).strip()
+        return t
+
     def _set_session_title(self, session_id, text):
         """Set session title from first user message if not already set."""
         try:
@@ -653,18 +679,21 @@ class JSONLSessionWatcher:
 
                 if is_openclaw:
                     clean_text, source_hint = self._extract_openclaw_user_text(text)
+                    clean_text = self._clean_title(clean_text)
+                    if not clean_text or clean_text.startswith("Conversation info"):
+                        clean_text = "OpenClaw session"
                     if source_hint:
-                        title = f"OpenClaw \u00b7 {source_hint}: {clean_text}"
+                        title = f"OpenClaw · {source_hint}: {clean_text}"
                     else:
                         title = f"OpenClaw: {clean_text}"
                 else:
-                    title = text
+                    title = self._clean_title(text)
 
-                # Truncate at word boundary around 100 chars
-                if len(title) > 120:
-                    truncated = title[:120]
+                # Truncate at word boundary around 80 chars
+                if len(title) > 80:
+                    truncated = title[:80]
                     last_space = truncated.rfind(" ")
-                    if last_space > 60:
+                    if last_space > 40:
                         truncated = truncated[:last_space]
                     title = truncated.rstrip() + "..."
                 self.db.execute("UPDATE sessions SET title=? WHERE session_id=?", (title, session_id))
