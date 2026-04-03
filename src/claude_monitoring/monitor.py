@@ -3190,7 +3190,7 @@ def backfill_existing_sessions(watcher):
 # ─────────────────────────────────────────────────────────────
 
 
-def start_monitoring():
+def start_monitoring(cp_url=None, cp_api_key=None):
     """Start all monitoring layers and the web dashboard."""
     print("=" * 62)
     print("  AI Runtime Monitor — CrowdStrike-Style Full Visibility")
@@ -3302,6 +3302,18 @@ def start_monitoring():
     print(f"\n  Dashboard: http://localhost:{DASHBOARD_PORT}")
     print("\n  Press Ctrl+C to stop")
     print("=" * 62)
+
+    # Control plane sync agent (optional)
+    sync_agent = None
+    if cp_url and cp_api_key:
+        try:
+            from claude_monitoring.sync import SyncAgent
+
+            sync_agent = SyncAgent(cp_url, cp_api_key)
+            sync_agent.start()
+            print(f"  Control Plane sync: {cp_url} (every 30s)")
+        except ImportError:
+            print("  WARNING: requests library needed for control plane sync (pip install requests)")
 
     # Initial process scan
     procs = proc_scanner.scan_once()
@@ -3448,6 +3460,8 @@ def main():
     parser.add_argument("--port", type=int, default=DASHBOARD_PORT, help=f"Dashboard port (default: {DASHBOARD_PORT})")
     parser.add_argument("--init-config", action="store_true", help="Generate default config.toml")
     parser.add_argument("--with-proxy", action="store_true", help="Also start HTTPS proxy for deep API capture")
+    parser.add_argument("--control-plane", type=str, default="", help="Control plane URL (e.g. http://localhost:9090)")
+    parser.add_argument("--cp-api-key", type=str, default="", help="Control plane API key")
 
     args = parser.parse_args()
 
@@ -3479,7 +3493,7 @@ def main():
             )
             print(f"Proxy started on port {get_proxy_port()}")
             print(f"To enable: export HTTPS_PROXY=http://127.0.0.1:{get_proxy_port()}")
-        start_monitoring()
+        start_monitoring(cp_url=args.control_plane or None, cp_api_key=args.cp_api_key or None)
     else:
         parser.print_help()
         print("\n  Quick start: python3 ai_monitor.py --start")
