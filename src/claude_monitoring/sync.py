@@ -146,7 +146,7 @@ class SyncAgent:
                     "total_input_tokens": r["total_input_tokens"] or 0,
                     "total_output_tokens": r["total_output_tokens"] or 0,
                     "total_turns": r["total_turns"] or 0,
-                    "total_cost": 0,
+                    "total_cost": r["total_cost"] or 0,
                     "last_activity": r["last_activity"],
                 }
             )
