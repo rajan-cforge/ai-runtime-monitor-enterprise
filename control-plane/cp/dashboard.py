@@ -182,6 +182,30 @@ async def fleet_alerts(
     return {"total": total, "alerts": [dict(r._mapping) for r in rows]}
 
 
+@router.get("/api/v1/fleet/stats/alert_trend")
+async def alert_trend(db=Depends(get_db)):
+    """7-day alert trend by severity for stacked bar chart."""
+    rows = db.execute(
+        text(
+            """SELECT date(timestamp) AS day, severity, COUNT(*) AS cnt
+               FROM fleet_alerts
+               WHERE timestamp >= now() - interval '7 days'
+               GROUP BY date(timestamp), severity
+               ORDER BY day"""
+        )
+    ).fetchall()
+    # Pivot into {days: [...], critical: [...], high: [...], medium: [...], low: [...]}
+    days_set = sorted({str(r[0]) for r in rows})
+    result = {"days": days_set, "critical": [], "high": [], "medium": [], "low": []}
+    lookup = {}
+    for r in rows:
+        lookup[(str(r[0]), r[1])] = r[2]
+    for day in days_set:
+        for sev in ("critical", "high", "medium", "low"):
+            result[sev].append(lookup.get((day, sev), 0))
+    return result
+
+
 @router.post("/api/v1/fleet/alerts/{alert_id}/dismiss")
 async def dismiss_alert(alert_id: int, db=Depends(get_db)):
     """Dismiss a fleet alert."""
