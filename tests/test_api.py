@@ -1023,3 +1023,117 @@ class TestDashboardAPI:
         assert resp.status == 200
         result = json.loads(resp.read())
         assert result["stored"] == 0
+
+    def test_options_returns_cors_headers(self, api_server):
+        req = Request(f"{api_server}/api/stats", method="OPTIONS")
+        resp = urlopen(req)
+        assert resp.status == 200
+
+    def test_post_unknown_path_404(self, api_server):
+        from urllib.error import HTTPError
+
+        req = Request(
+            f"{api_server}/api/nonexistent",
+            data=b"{}",
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with pytest.raises(HTTPError) as exc_info:
+            urlopen(req)
+        assert exc_info.value.code == 404
+
+    def test_api_sessions_with_search(self, api_server):
+        resp = urlopen(f"{api_server}/api/sessions?q=sonnet")
+        assert resp.status == 200
+        data = json.loads(resp.read())
+        assert "sessions" in data
+
+    def test_api_sessions_sort_by_turns(self, api_server):
+        resp = urlopen(f"{api_server}/api/sessions?sort=turns")
+        assert resp.status == 200
+        data = json.loads(resp.read())
+        assert "sessions" in data
+
+    def test_api_sessions_sort_by_tokens(self, api_server):
+        resp = urlopen(f"{api_server}/api/sessions?sort=tokens")
+        assert resp.status == 200
+        data = json.loads(resp.read())
+        assert "sessions" in data
+
+    def test_api_sessions_source_all(self, api_server):
+        resp = urlopen(f"{api_server}/api/sessions?source=all&include_browser=true")
+        assert resp.status == 200
+        data = json.loads(resp.read())
+        assert "sessions" in data
+
+    def test_api_session_detail_missing_id(self, api_server):
+        from urllib.error import HTTPError
+
+        with pytest.raises(HTTPError) as exc_info:
+            urlopen(f"{api_server}/api/session?id=")
+        assert exc_info.value.code == 400
+
+    def test_api_insights_returns_data(self, api_server):
+        resp = urlopen(f"{api_server}/api/insights")
+        assert resp.status == 200
+        data = json.loads(resp.read())
+        assert isinstance(data, dict)
+
+    def test_api_mcp_stats_returns_data(self, api_server):
+        resp = urlopen(f"{api_server}/api/mcp/stats")
+        assert resp.status == 200
+        data = json.loads(resp.read())
+        assert isinstance(data, dict)
+
+    def test_api_mcp_servers_returns_data(self, api_server):
+        resp = urlopen(f"{api_server}/api/mcp/servers")
+        assert resp.status == 200
+        data = json.loads(resp.read())
+        assert isinstance(data, dict)
+
+    def test_api_export_events_since_date(self, api_server):
+        resp = urlopen(f"{api_server}/api/export?type=events&since=2025-01-01")
+        assert resp.status == 200
+        data = json.loads(resp.read())
+        assert data["export_type"] == "events"
+
+    def test_api_export_events_until_date(self, api_server):
+        resp = urlopen(f"{api_server}/api/export?type=events&until=2027-01-01")
+        assert resp.status == 200
+        data = json.loads(resp.read())
+        assert data["export_type"] == "events"
+
+    def test_api_export_events_multiple_type_filter(self, api_server):
+        resp = urlopen(f"{api_server}/api/export?type=events&event_type=tool_use,token_usage")
+        assert resp.status == 200
+        data = json.loads(resp.read())
+        assert data["export_type"] == "events"
+        for ev in data["data"]:
+            assert ev["event_type"] in ("tool_use", "token_usage")
+
+    def test_api_export_traffic_json(self, api_server):
+        resp = urlopen(f"{api_server}/api/export?type=traffic&format=json")
+        assert resp.status == 200
+        data = json.loads(resp.read())
+        assert data["export_type"] == "traffic"
+
+    def test_api_sessions_sort_newest(self, api_server):
+        resp = urlopen(f"{api_server}/api/sessions?sort=newest")
+        assert resp.status == 200
+        data = json.loads(resp.read())
+        assert "sessions" in data
+
+    def test_api_insights_efficiency(self, api_server):
+        resp = urlopen(f"{api_server}/api/insights/efficiency")
+        assert resp.status == 200
+        data = json.loads(resp.read())
+        assert isinstance(data, dict)
+
+    def test_api_insights_projects_with_cwd(self, api_server):
+        from urllib.parse import quote
+
+        cwd = quote("/home/user/project-b")
+        resp = urlopen(f"{api_server}/api/insights/projects?cwd={cwd}")
+        assert resp.status == 200
+        data = json.loads(resp.read())
+        assert isinstance(data, dict)
