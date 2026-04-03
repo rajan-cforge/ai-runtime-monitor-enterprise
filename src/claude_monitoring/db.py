@@ -142,6 +142,13 @@ def init_db(db_path=None):
     except sqlite3.OperationalError:
         pass  # Column already exists
 
+    c.execute("""CREATE TABLE IF NOT EXISTS alert_dismissals (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        event_id INTEGER NOT NULL UNIQUE,
+        dismissed_at TEXT NOT NULL,
+        reason TEXT
+    )""")
+
     # Indexes
     c.execute("CREATE INDEX IF NOT EXISTS idx_events_ts ON events(timestamp)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_events_session ON events(session_id)")

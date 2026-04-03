@@ -1574,6 +1574,73 @@ class DashboardHandler(BaseHTTPRequestHandler):
         else:
             self._send_json({"error": "not found", "path": path}, 404)
 
+    def do_POST(self):
+        parsed = urlparse(self.path)
+        path = parsed.path
+
+        post_routes = {
+            "/api/alerts/dismiss": self._api_alerts_dismiss,
+        }
+
+        handler = post_routes.get(path)
+        if handler:
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                body = self.rfile.read(length) if length else b""
+                try:
+                    payload = json.loads(body) if body else {}
+                except (json.JSONDecodeError, ValueError):
+                    self._send_json({"error": "invalid JSON"}, 400)
+                    return
+                handler(payload)
+            except BrokenPipeError:
+                pass
+            except Exception as e:
+                try:
+                    self._send_json({"error": str(e)}, 500)
+                except BrokenPipeError:
+                    pass
+        else:
+            self._send_json({"error": "not found", "path": path}, 404)
+
+    def do_OPTIONS(self):
+        self.send_response(200)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.end_headers()
+
+    def _api_alerts_dismiss(self, payload):
+        event_id = payload.get("event_id")
+        reason = payload.get("reason", "")
+        if event_id is None:
+            self._send_json({"error": "event_id is required"}, 400)
+            return
+        try:
+            event_id = int(event_id)
+        except (TypeError, ValueError):
+            self._send_json({"error": "event_id must be an integer"}, 400)
+            return
+        db = get_thread_db()
+        row = db.execute(
+            "SELECT id FROM events WHERE id=? AND event_type='sensitive_data'",
+            (event_id,),
+        ).fetchone()
+        if not row:
+            self._send_json({"error": "event not found"}, 404)
+            return
+        now = datetime.now(timezone.utc).isoformat()
+        try:
+            db.execute(
+                "INSERT INTO alert_dismissals (event_id, dismissed_at, reason) VALUES (?, ?, ?)",
+                (event_id, now, reason),
+            )
+            db.commit()
+        except sqlite3.IntegrityError:
+            self._send_json({"error": "alert already dismissed"}, 409)
+            return
+        self._send_json({"ok": True, "event_id": event_id, "dismissed_at": now})
+
     def _send_json(self, data, status=200):
         body = json.dumps(data, default=str).encode("utf-8")
         self.send_response(status)
@@ -1991,11 +2058,14 @@ class DashboardHandler(BaseHTTPRequestHandler):
         offset = int(params.get("offset", ["0"])[0])
         severity_filter = params.get("severity", [""])[0]
         category_filter = params.get("category", [""])[0]
+        include_dismissed = params.get("include_dismissed", ["false"])[0].lower() == "true"
         rows = db.execute(
             """SELECT e.id, e.timestamp, e.session_id, e.data_json,
-                      s.title, s.cwd
+                      s.title, s.cwd,
+                      d.id AS dismissal_id
                FROM events e
                LEFT JOIN sessions s ON e.session_id = s.session_id
+               LEFT JOIN alert_dismissals d ON e.id = d.event_id
                WHERE e.event_type='sensitive_data'
                ORDER BY e.id DESC LIMIT 1000"""
         ).fetchall()
@@ -2010,9 +2080,14 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 data = {}
             sev = data.get("severity", "medium")
             cats = data.get("categories", ["credential"])
+            dismissed = r["dismissal_id"] is not None
             severity_counts[sev] = severity_counts.get(sev, 0) + 1
             for cat in cats:
                 category_counts[cat] = category_counts.get(cat, 0) + 1
+
+            # Filter out dismissed alerts unless requested
+            if dismissed and not include_dismissed:
+                continue
 
             # Apply filters
             if severity_filter and sev != severity_filter:
@@ -2050,6 +2125,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     "context": data.get("context", ""),
                     "snippet": data.get("snippet", ""),
                     "turn_number": turn_count,
+                    "dismissed": dismissed,
                 }
             )
         self._send_json(
