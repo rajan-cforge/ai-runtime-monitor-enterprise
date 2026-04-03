@@ -89,6 +89,7 @@ SCRIPT_PATH = Path(__file__).resolve()
 # In-memory live feed buffer
 live_feed = deque(maxlen=500)
 live_feed_lock = threading.Lock()
+_live_feed_seen = set()  # dedup: last 1000 event hashes
 
 # Track active session CWDs for file monitoring
 active_session_cwds = set()
@@ -104,7 +105,21 @@ plan_info = {"is_subscription": False, "plan_tier": ""}
 
 
 def push_live_event(event):
-    """Push event to the in-memory live feed."""
+    """Push event to the in-memory live feed, with dedup."""
+    ts = event.get("timestamp", "")
+    sid = event.get("session_id", "")
+    etype = event.get("event_type", "")
+    summary = event.get("summary", "")[:80]
+    # Only dedup events that have enough identity fields (real monitor events)
+    if ts and etype:
+        key = f"{ts}|{sid}|{etype}|{summary}"
+        h = hashlib.sha256(key.encode()).hexdigest()[:12]
+        with live_feed_lock:
+            if h in _live_feed_seen:
+                return
+            _live_feed_seen.add(h)
+            if len(_live_feed_seen) > 1000:
+                _live_feed_seen.clear()
     with live_feed_lock:
         live_feed.append(event)
 
