@@ -4,7 +4,7 @@ import json
 import threading
 from http.server import HTTPServer
 from unittest.mock import patch
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
 import pytest
 
@@ -844,3 +844,91 @@ class TestDashboardAPI:
         assert "text/csv" in resp.headers.get("Content-Type", "")
         body = resp.read().decode()
         assert "day" in body  # header
+
+    # ── Alert dismissal endpoints ───────────────────────────────────
+
+    def test_dismiss_alert_creates_record(self, api_server):
+        # First get the alert IDs
+        resp = urlopen(f"{api_server}/api/alerts?include_dismissed=true")
+        data = json.loads(resp.read())
+        alert_id = data["alerts"][0]["id"]
+
+        # Dismiss it
+        req = Request(
+            f"{api_server}/api/alerts/dismiss",
+            data=json.dumps({"event_id": alert_id, "reason": "false_positive"}).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        resp = urlopen(req)
+        assert resp.status == 200
+        result = json.loads(resp.read())
+        assert result["ok"] is True
+        assert result["event_id"] == alert_id
+
+    def test_dismiss_nonexistent_event_returns_404(self, api_server):
+        from urllib.error import HTTPError
+
+        req = Request(
+            f"{api_server}/api/alerts/dismiss",
+            data=json.dumps({"event_id": 99999}).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with pytest.raises(HTTPError) as exc_info:
+            urlopen(req)
+        assert exc_info.value.code == 404
+
+    def test_dismiss_bad_input_returns_400(self, api_server):
+        from urllib.error import HTTPError
+
+        req = Request(
+            f"{api_server}/api/alerts/dismiss",
+            data=json.dumps({}).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with pytest.raises(HTTPError) as exc_info:
+            urlopen(req)
+        assert exc_info.value.code == 400
+
+    def test_alerts_include_dismissed_status(self, api_server):
+        # Get alerts with dismissed included
+        resp = urlopen(f"{api_server}/api/alerts?include_dismissed=true")
+        data = json.loads(resp.read())
+        # All alerts should have a 'dismissed' field
+        for alert in data["alerts"]:
+            assert "dismissed" in alert
+            assert isinstance(alert["dismissed"], bool)
+
+    def test_alerts_dismissed_hidden_by_default(self, api_server):
+        # First dismiss an alert
+        resp = urlopen(f"{api_server}/api/alerts?include_dismissed=true")
+        data = json.loads(resp.read())
+        alert_id = data["alerts"][0]["id"]
+        req = Request(
+            f"{api_server}/api/alerts/dismiss",
+            data=json.dumps({"event_id": alert_id, "reason": "test"}).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            urlopen(req)
+        except Exception:
+            pass  # May already be dismissed from earlier test
+
+        # Default query should hide dismissed alerts
+        resp = urlopen(f"{api_server}/api/alerts")
+        data = json.loads(resp.read())
+        dismissed_ids = [a["id"] for a in data["alerts"] if a.get("dismissed")]
+        assert alert_id not in dismissed_ids
+
+    def test_severity_counts_correct(self, api_server):
+        resp = urlopen(f"{api_server}/api/alerts?include_dismissed=true")
+        data = json.loads(resp.read())
+        sc = data["severity_counts"]
+        assert sc["critical"] == 1
+        assert sc["high"] == 1
+        assert sc["medium"] == 0
+        assert sc["low"] == 0
+        assert data["total"] == 2
