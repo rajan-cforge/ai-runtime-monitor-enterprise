@@ -136,6 +136,12 @@ def init_db(db_path=None):
     except sqlite3.OperationalError:
         pass  # Column already exists
 
+    # Add agent_type column to sessions if missing (migration)
+    try:
+        c.execute("ALTER TABLE sessions ADD COLUMN agent_type TEXT")
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+
     # Indexes
     c.execute("CREATE INDEX IF NOT EXISTS idx_events_ts ON events(timestamp)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_events_session ON events(session_id)")
