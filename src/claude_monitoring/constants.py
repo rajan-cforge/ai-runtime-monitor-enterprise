@@ -17,6 +17,7 @@ AI_PROCESS_EXACT = {
     "ollama",
     "Cursor",
     "Windsurf",
+    "openclaw-gateway",
 }
 
 # Substring pattern matching with exclusions
@@ -35,6 +36,9 @@ AI_PROCESS_PATTERNS = {
     "bedrock": {"exclude": []},
     "codex": {"exclude": []},
     "windsurf": {"exclude": []},
+    "openclaw": {"exclude": []},
+    "moltbot": {"exclude": []},
+    "clawdbot": {"exclude": []},
 }
 
 # ─────────────────────────────────────────────────────────────
@@ -103,6 +107,9 @@ AI_HOSTS = {
     # LM Studio (local)
     "localhost:1234": "lmstudio_local",
     "127.0.0.1:1234": "lmstudio_local",
+    # OpenClaw (local)
+    "localhost:18789": "openclaw_local",
+    "127.0.0.1:18789": "openclaw_local",
     # OpenRouter
     "openrouter.ai": "openrouter_api",
     # Azure OpenAI

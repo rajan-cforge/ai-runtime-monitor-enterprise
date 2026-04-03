@@ -47,5 +47,3 @@ class TestExtractUrls:
     def test_no_urls(self):
         text = "This has no web addresses"
         assert extract_urls(text) == []
-
-

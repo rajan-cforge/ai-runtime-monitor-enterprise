@@ -380,6 +380,91 @@ class TestCheckSensitive:
         data = json.loads(rows[0][0])
         assert data["severity"] == "low"
 
+    def test_telegram_sender_id_not_flagged_as_phone(self, watcher, db):
+        """Telegram sender_id (10-digit number) should not trigger phone_number alerts."""
+        watcher._ensure_session("sens-tg-1", "/tmp/s.jsonl")
+        text = (
+            "Conversation info (untrusted metadata):\n"
+            "```json\n"
+            '{"message_id": "4", "sender_id": "7465847486", "sender": "Aj K"}\n'
+            "```\n\nhello"
+        )
+        watcher._check_sensitive(text, "sens-tg-1", "2026-04-02T00:00:00Z", "user_prompt")
+        db.commit()
+
+        rows = db.execute(
+            "SELECT data_json FROM events WHERE session_id='sens-tg-1' AND event_type='sensitive_data'"
+        ).fetchall()
+        # Should produce zero alerts — phone_number is the only pattern that would match,
+        # and it should be filtered out because "sender_id" is in the text
+        assert len(rows) == 0
+
+    def test_sender_id_filter_preserves_real_alerts(self, watcher, db):
+        """If text has sender_id AND a real secret, the real secret should still alert."""
+        watcher._ensure_session("sens-tg-2", "/tmp/s.jsonl")
+        # Text contains sender_id (triggers phone_number) AND an AWS key (triggers aws_key)
+        text = '{"sender_id": "7465847486"}\nAKIAIOSFODNN7REALKEY is exposed'
+        watcher._check_sensitive(text, "sens-tg-2", "2026-04-02T00:00:00Z", "user_prompt")
+        db.commit()
+
+        rows = db.execute(
+            "SELECT data_json FROM events WHERE session_id='sens-tg-2' AND event_type='sensitive_data'"
+        ).fetchall()
+        # Should still fire for the aws_key, just not for phone_number
+        assert len(rows) >= 1
+        data = json.loads(rows[0][0])
+        assert "phone_number" not in data["patterns"]
+        assert "aws_key" in data["patterns"]
+
+    def test_credit_card_in_api_metadata_not_flagged(self, watcher, db):
+        """Credit card regex matching numeric API metadata should be suppressed."""
+        watcher._ensure_session("sens-cc-1", "/tmp/s.jsonl")
+        # Simulates API proxy traffic with large token counts that look like card numbers
+        text = (
+            '{"input_tokens": 4512345678901234, "output_tokens": 500, '
+            '"model": "claude-sonnet-4-6", "responseId": "msg_012345"}'
+        )
+        watcher._check_sensitive(text, "sens-cc-1", "2026-04-02T00:00:00Z", "tool_result")
+        db.commit()
+
+        rows = db.execute(
+            "SELECT data_json FROM events WHERE session_id='sens-cc-1' AND event_type='sensitive_data'"
+        ).fetchall()
+        # No credit_card alerts from API metadata
+        for row in rows:
+            data = json.loads(row[0])
+            assert "credit_card" not in data["patterns"], (
+                f"credit_card should not trigger in API metadata, got patterns={data['patterns']}"
+            )
+
+    def test_credit_card_in_anthropic_traffic_not_flagged(self, watcher, db):
+        """Credit card regex in anthropic API context should be suppressed."""
+        watcher._ensure_session("sens-cc-2", "/tmp/s.jsonl")
+        text = "api.anthropic.com cache_read_input_tokens=6511234567890123"
+        watcher._check_sensitive(text, "sens-cc-2", "2026-04-02T00:00:00Z", "tool_result")
+        db.commit()
+
+        rows = db.execute(
+            "SELECT data_json FROM events WHERE session_id='sens-cc-2' AND event_type='sensitive_data'"
+        ).fetchall()
+        for row in rows:
+            data = json.loads(row[0])
+            assert "credit_card" not in data["patterns"]
+
+    def test_real_credit_card_still_flagged(self, watcher, db):
+        """An actual credit card number in user text should still be flagged."""
+        watcher._ensure_session("sens-cc-3", "/tmp/s.jsonl")
+        text = "My card number is 4111 1111 1111 1111 and CVV 123"
+        watcher._check_sensitive(text, "sens-cc-3", "2026-04-02T00:00:00Z", "user_prompt")
+        db.commit()
+
+        rows = db.execute(
+            "SELECT data_json FROM events WHERE session_id='sens-cc-3' AND event_type='sensitive_data'"
+        ).fetchall()
+        assert len(rows) >= 1
+        data = json.loads(rows[0][0])
+        assert "credit_card" in data["patterns"]
+
 
 # ---------------------------------------------------------------------------
 # process_jsonl_file
@@ -1618,3 +1703,449 @@ class TestFullRoundtrip:
         assert not watcher._stop.is_set()
         watcher.stop()
         assert watcher._stop.is_set()
+
+
+# ---------------------------------------------------------------------------
+# OpenClaw JSONL Processing
+# ---------------------------------------------------------------------------
+
+OPENCLAW_SESSION_ID = "50a4dd45-d84b-4d63-a613-b7937e30874f"
+
+# Test data matches the real OpenClaw JSONL format exactly:
+# - No "sessionId" on message records (session ID derived from filename)
+# - Short "id" field is a *message* ID, not session ID
+# - "parentId" links messages in a tree
+# - toolCall uses "arguments" not "input"
+# - toolResult has "toolCallId" and "toolName" at message level
+# - usage has "input"/"output" (no _tokens suffix), "cacheRead"/"cacheWrite"
+# - "stopReason" not "stop_reason"
+OPENCLAW_JSONL_LINES = [
+    # type:"session" — initializes session with cwd; "id" IS the session ID here
+    {
+        "type": "session",
+        "version": 3,
+        "id": OPENCLAW_SESSION_ID,
+        "cwd": "/Users/rajanyadav/.openclaw/workspace",
+        "timestamp": "2026-04-02T02:19:03.480Z",
+    },
+    # type:"model_change" — sets the model before any messages
+    {
+        "type": "model_change",
+        "id": "91200416",
+        "parentId": None,
+        "timestamp": "2026-04-02T02:19:03.482Z",
+        "provider": "anthropic",
+        "modelId": "claude-sonnet-4-6",
+    },
+    # type:"message", role:"user" — has short "id" (message ID, NOT session ID)
+    {
+        "type": "message",
+        "id": "e52abbe8",
+        "parentId": "9a3f85a3",
+        "timestamp": "2026-04-02T02:19:03.495Z",
+        "message": {
+            "role": "user",
+            "content": [{"type": "text", "text": "hello, what can you do?"}],
+            "timestamp": 1775096343487,
+        },
+    },
+    # type:"message", role:"assistant" — toolCall with "arguments", usage with short keys
+    {
+        "type": "message",
+        "id": "b32f14bf",
+        "parentId": "e52abbe8",
+        "timestamp": "2026-04-02T02:19:06.799Z",
+        "message": {
+            "role": "assistant",
+            "content": [
+                {"type": "thinking", "thinking": "The user is saying hello. Let me check memory first."},
+                {
+                    "type": "toolCall",
+                    "id": "toolu_01E4xzfD8hYTnBdg6VFFVobN",
+                    "name": "memory_search",
+                    "arguments": {"query": "user preferences capabilities introduction"},
+                },
+            ],
+            "model": "claude-sonnet-4-6",
+            "usage": {
+                "input": 3,
+                "output": 93,
+                "cacheRead": 0,
+                "cacheWrite": 13257,
+                "totalTokens": 13353,
+                "cost": {"total": 0.05111775},
+            },
+            "stopReason": "toolUse",
+            "responseId": "msg_011ZhHTxqvHCvcMeNUNbidg3",
+        },
+    },
+    # type:"message", role:"toolResult" — content is a list of text blocks
+    {
+        "type": "message",
+        "id": "87242f6c",
+        "parentId": "b32f14bf",
+        "timestamp": "2026-04-02T02:19:06.962Z",
+        "message": {
+            "role": "toolResult",
+            "toolCallId": "toolu_01E4xzfD8hYTnBdg6VFFVobN",
+            "toolName": "memory_search",
+            "content": [{"type": "text", "text": '{"results": [], "provider": "auto"}'}],
+            "isError": False,
+            "timestamp": 1775096346935,
+        },
+    },
+    # type:"message", role:"assistant" — final text response
+    {
+        "type": "message",
+        "id": "7034008a",
+        "parentId": "87242f6c",
+        "timestamp": "2026-04-02T02:19:15.356Z",
+        "message": {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Hey! I'm your AI assistant running via OpenClaw.",
+                }
+            ],
+            "model": "claude-sonnet-4-6",
+            "usage": {
+                "input": 1,
+                "output": 255,
+                "cacheRead": 13257,
+                "cacheWrite": 138,
+                "totalTokens": 13651,
+                "cost": {"total": 0.008322},
+            },
+            "stopReason": "stop",
+            "responseId": "msg_015fYNXoNcEa4NP6jrPnm7mz",
+        },
+    },
+]
+
+
+class TestOpenClawJSONL:
+    """Tests for OpenClaw JSONL format processing — matches real file format."""
+
+    def _jsonl_path(self, tmp_path):
+        return str(tmp_path / f"{OPENCLAW_SESSION_ID}.jsonl")
+
+    def test_full_openclaw_file(self, watcher, db, tmp_path):
+        """Process a realistic OpenClaw JSONL file and verify all events land in the DB."""
+        jsonl_file = tmp_path / f"{OPENCLAW_SESSION_ID}.jsonl"
+        jsonl_file.write_text("\n".join(json.dumps(r) for r in OPENCLAW_JSONL_LINES) + "\n")
+
+        watcher.process_jsonl_file(str(jsonl_file))
+
+        # Session must exist
+        assert _count(db, "sessions", "session_id=?", (OPENCLAW_SESSION_ID,)) == 1
+
+        # All events must be under the real session ID, NOT under short message IDs
+        events = _rows(db, "events", "session_id=?", (OPENCLAW_SESSION_ID,))
+        event_types = [e[3] for e in events]  # event_type column
+
+        assert "user_prompt" in event_types
+        assert "assistant_response" in event_types
+        assert "tool_use" in event_types
+        assert "tool_result" in event_types
+        assert "token_usage" in event_types
+        assert "thinking" in event_types
+
+        # No events should be filed under short message IDs
+        assert _count(db, "events", "session_id='e52abbe8'") == 0
+        assert _count(db, "events", "session_id='b32f14bf'") == 0
+
+    def test_session_record_creates_session(self, watcher, db, tmp_path):
+        """type:'session' record should create the session row using its 'id' field."""
+        watcher._process_record(OPENCLAW_JSONL_LINES[0], self._jsonl_path(tmp_path))
+        assert _count(db, "sessions", "session_id=?", (OPENCLAW_SESSION_ID,)) == 1
+
+    def test_message_id_not_used_as_session_id(self, watcher, db, tmp_path):
+        """Short message 'id' field must NOT be used as session_id."""
+        # Process a message record that has id:"e52abbe8" — should NOT create
+        # a session with that ID; should use filename-derived UUID instead.
+        watcher._process_record(OPENCLAW_JSONL_LINES[2], self._jsonl_path(tmp_path))
+
+        assert _count(db, "sessions", "session_id='e52abbe8'") == 0
+        assert _count(db, "sessions", "session_id=?", (OPENCLAW_SESSION_ID,)) == 1
+
+    def test_session_id_from_filename(self, watcher, db, tmp_path):
+        """Records without sessionId should derive it from the JSONL filename."""
+        record = {
+            "type": "message",
+            "id": "abc12345",
+            "timestamp": "2026-04-02T10:00:01Z",
+            "message": {
+                "role": "user",
+                "content": "test prompt without sessionId",
+            },
+        }
+        watcher._process_record(record, self._jsonl_path(tmp_path))
+
+        assert _count(db, "sessions", "session_id=?", (OPENCLAW_SESSION_ID,)) == 1
+        assert _count(db, "events", "session_id=? AND event_type='user_prompt'", (OPENCLAW_SESSION_ID,)) == 1
+        # Must NOT use the short message id
+        assert _count(db, "sessions", "session_id='abc12345'") == 0
+
+    def test_session_id_from_record_id_only_for_session_type(self, watcher, db):
+        """Only type:'session' records should use their 'id' as session_id."""
+        record = {
+            "type": "session",
+            "id": OPENCLAW_SESSION_ID,
+            "timestamp": "2026-04-02T10:00:00Z",
+        }
+        watcher._process_record(record, "/fake/other.jsonl")
+        assert _count(db, "sessions", "session_id=?", (OPENCLAW_SESSION_ID,)) == 1
+
+    def test_toolcall_arguments_normalized_to_input(self, watcher, db, tmp_path):
+        """toolCall 'arguments' field should be renamed to 'input' for tool_use events."""
+        path = self._jsonl_path(tmp_path)
+        watcher._process_record(OPENCLAW_JSONL_LINES[0], path)
+        watcher._process_record(OPENCLAW_JSONL_LINES[3], path)
+
+        events = _rows(db, "events", "session_id=? AND event_type='tool_use'", (OPENCLAW_SESSION_ID,))
+        assert len(events) == 1
+        data = json.loads(events[0][5])  # data_json column
+        assert data["name"] == "memory_search"
+        assert data["id"] == "toolu_01E4xzfD8hYTnBdg6VFFVobN"
+        # The "arguments" field should have been normalized to "input"
+        assert data["input"] == {"query": "user preferences capabilities introduction"}
+        assert "input_preview" in data
+
+    def test_tool_result_role_processed(self, watcher, db, tmp_path):
+        """role:'toolResult' messages should produce tool_result events."""
+        path = self._jsonl_path(tmp_path)
+        watcher._process_record(OPENCLAW_JSONL_LINES[0], path)
+        watcher._process_record(OPENCLAW_JSONL_LINES[4], path)
+
+        events = _rows(db, "events", "session_id=? AND event_type='tool_result'", (OPENCLAW_SESSION_ID,))
+        assert len(events) == 1
+        data = json.loads(events[0][5])
+        assert data["tool_use_id"] == "toolu_01E4xzfD8hYTnBdg6VFFVobN"
+
+    def test_tool_result_with_list_content(self, watcher, db, tmp_path):
+        """toolResult whose content is a list of text blocks should be joined."""
+        path = self._jsonl_path(tmp_path)
+        watcher._process_record(OPENCLAW_JSONL_LINES[0], path)
+        watcher._process_record(OPENCLAW_JSONL_LINES[4], path)
+
+        events = _rows(db, "events", "session_id=? AND event_type='tool_result'", (OPENCLAW_SESSION_ID,))
+        data = json.loads(events[0][5])
+        # Content was a list: [{"type":"text","text":"..."}] — should be extracted
+        assert "results" in data["content"]
+
+    def test_usage_fields_normalized(self, watcher, db, tmp_path):
+        """OpenClaw usage fields (input/output/cacheRead/cacheWrite) should map correctly."""
+        path = self._jsonl_path(tmp_path)
+        watcher._process_record(OPENCLAW_JSONL_LINES[0], path)
+        watcher._process_record(OPENCLAW_JSONL_LINES[3], path)
+
+        events = _rows(db, "events", "session_id=? AND event_type='token_usage'", (OPENCLAW_SESSION_ID,))
+        assert len(events) >= 1
+        data = json.loads(events[0][5])
+        assert data["input_tokens"] == 3
+        assert data["output_tokens"] == 93
+        assert data["cache_read_tokens"] == 0
+        assert data["cache_write_tokens"] == 13257
+
+    def test_stop_reason_normalized(self, watcher, db, tmp_path):
+        """stopReason should be normalized to stop_reason in stored events."""
+        path = self._jsonl_path(tmp_path)
+        watcher._process_record(OPENCLAW_JSONL_LINES[0], path)
+        watcher._process_record(OPENCLAW_JSONL_LINES[3], path)
+
+        events = _rows(db, "events", "session_id=? AND event_type='token_usage'", (OPENCLAW_SESSION_ID,))
+        assert len(events) >= 1
+        data = json.loads(events[0][5])
+        assert data["stop_reason"] == "toolUse"
+
+    def test_no_session_id_anywhere_skips_record(self, watcher, db):
+        """A record with no sessionId, no id, and non-UUID filename should be skipped."""
+        record = {
+            "type": "message",
+            "message": {"role": "user", "content": "orphan prompt"},
+        }
+        watcher._process_record(record, "/fake/not-a-uuid.jsonl")
+        assert _count(db, "events") == 0
+
+    def test_claude_code_records_still_work(self, watcher, db):
+        """Ensure standard Claude Code JSONL records are unaffected by OpenClaw changes."""
+        user_record = {
+            "type": "user",
+            "sessionId": "cc-session-1",
+            "timestamp": "2026-03-30T10:00:00Z",
+            "message": {"content": "hello from Claude Code"},
+        }
+        assistant_record = {
+            "type": "assistant",
+            "sessionId": "cc-session-1",
+            "timestamp": "2026-03-30T10:00:01Z",
+            "message": {
+                "content": [
+                    {"type": "text", "text": "Hi there!"},
+                    {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "ls"}},
+                ],
+                "model": "claude-sonnet-4-6",
+                "usage": {"input_tokens": 100, "output_tokens": 50},
+                "stop_reason": "end_turn",
+            },
+        }
+        watcher._process_record(user_record, "/fake/cc.jsonl")
+        watcher._process_record(assistant_record, "/fake/cc.jsonl")
+
+        assert _count(db, "events", "session_id='cc-session-1' AND event_type='user_prompt'") == 1
+        assert _count(db, "events", "session_id='cc-session-1' AND event_type='tool_use'") == 1
+        assert _count(db, "events", "session_id='cc-session-1' AND event_type='assistant_response'") == 1
+
+    def test_real_openclaw_jsonl_file(self, watcher, db):
+        """Process the actual OpenClaw JSONL file on disk and verify events appear."""
+        import os
+
+        real_file = os.path.expanduser("~/.openclaw/agents/main/sessions/50a4dd45-d84b-4d63-a613-b7937e30874f.jsonl")
+        if not os.path.exists(real_file):
+            pytest.skip("Real OpenClaw JSONL file not present")
+
+        watcher.process_jsonl_file(real_file)
+
+        sid = "50a4dd45-d84b-4d63-a613-b7937e30874f"
+
+        # Session must exist
+        assert _count(db, "sessions", "session_id=?", (sid,)) == 1
+
+        # Must have events under the real session ID
+        events = _rows(db, "events", "session_id=?", (sid,))
+        event_types = [e[3] for e in events]
+
+        assert "user_prompt" in event_types, f"Missing user_prompt; got {set(event_types)}"
+        assert "assistant_response" in event_types, f"Missing assistant_response; got {set(event_types)}"
+        assert "tool_use" in event_types, f"Missing tool_use; got {set(event_types)}"
+        assert "tool_result" in event_types, f"Missing tool_result; got {set(event_types)}"
+        assert "token_usage" in event_types, f"Missing token_usage; got {set(event_types)}"
+
+        # Verify events were NOT filed under short message IDs
+        assert _count(db, "events", "session_id='e52abbe8'") == 0
+        assert _count(db, "events", "session_id='b32f14bf'") == 0
+        assert _count(db, "events", "session_id='7034008a'") == 0
+
+        # Verify tool_use events have input data (arguments→input normalization)
+        tool_events = _rows(db, "events", "session_id=? AND event_type='tool_use'", (sid,))
+        for te in tool_events:
+            data = json.loads(te[5])
+            assert data.get("name"), f"tool_use event missing name: {data}"
+            assert "input" in data, f"tool_use event missing input (arguments not normalized?): {data}"
+
+        # Verify model was set from model_change record
+        row = db.execute("SELECT model FROM sessions WHERE session_id=?", (sid,)).fetchone()
+        assert row[0] == "claude-sonnet-4-6", f"Expected model 'claude-sonnet-4-6', got '{row[0]}'"
+
+        # Verify title was set with OpenClaw prefix (cwd contains .openclaw)
+        row = db.execute("SELECT title FROM sessions WHERE session_id=?", (sid,)).fetchone()
+        assert row[0] is not None, "Title should be set"
+        assert "OpenClaw" in row[0], f"Title should contain 'OpenClaw', got '{row[0]}'"
+        assert "Telegram" in row[0], f"Title should contain 'Telegram', got '{row[0]}'"
+
+    def test_model_change_sets_session_model(self, watcher, db, tmp_path):
+        """type:'model_change' record should set the model on the session."""
+        path = self._jsonl_path(tmp_path)
+        watcher._process_record(OPENCLAW_JSONL_LINES[0], path)  # session
+        watcher._process_record(OPENCLAW_JSONL_LINES[1], path)  # model_change
+
+        row = db.execute("SELECT model FROM sessions WHERE session_id=?", (OPENCLAW_SESSION_ID,)).fetchone()
+        assert row[0] == "claude-sonnet-4-6"
+
+    def test_model_change_without_model_id_is_noop(self, watcher, db, tmp_path):
+        """model_change with no modelId should not crash or set empty model."""
+        path = self._jsonl_path(tmp_path)
+        watcher._process_record(OPENCLAW_JSONL_LINES[0], path)
+        record = {"type": "model_change", "id": "x", "timestamp": "2026-04-02T00:00:00Z"}
+        watcher._process_record(record, path)
+
+        row = db.execute("SELECT model FROM sessions WHERE session_id=?", (OPENCLAW_SESSION_ID,)).fetchone()
+        assert row[0] is None or row[0] == ""
+
+    def test_openclaw_title_strips_telegram_metadata(self, watcher, db, tmp_path):
+        """OpenClaw sessions should strip Telegram metadata and prefix with 'OpenClaw via Telegram'."""
+        path = self._jsonl_path(tmp_path)
+        watcher._process_record(OPENCLAW_JSONL_LINES[0], path)  # session with .openclaw cwd
+
+        telegram_prompt = (
+            "Conversation info (untrusted metadata):\n"
+            "```json\n"
+            '{"message_id": "4", "sender_id": "7465847486", "sender": "Aj K"}\n'
+            "```\n\n"
+            "Sender (untrusted metadata):\n"
+            "```json\n"
+            '{"label": "Aj K", "id": "7465847486", "name": "Aj K"}\n'
+            "```\n\n"
+            "hello, what can you do?"
+        )
+        record = {
+            "type": "message",
+            "id": "abc1",
+            "timestamp": "2026-04-02T10:00:00Z",
+            "message": {
+                "role": "user",
+                "content": [{"type": "text", "text": telegram_prompt}],
+            },
+        }
+        watcher._process_record(record, path)
+
+        row = db.execute("SELECT title FROM sessions WHERE session_id=?", (OPENCLAW_SESSION_ID,)).fetchone()
+        assert row[0] == "OpenClaw \u00b7 Telegram: hello, what can you do?"
+
+    def test_openclaw_title_no_metadata(self, watcher, db, tmp_path):
+        """OpenClaw sessions without metadata should still get 'OpenClaw:' prefix."""
+        path = self._jsonl_path(tmp_path)
+        watcher._process_record(OPENCLAW_JSONL_LINES[0], path)
+
+        record = {
+            "type": "message",
+            "id": "abc2",
+            "timestamp": "2026-04-02T10:00:00Z",
+            "message": {
+                "role": "user",
+                "content": [{"type": "text", "text": "plain prompt no metadata"}],
+            },
+        }
+        watcher._process_record(record, path)
+
+        row = db.execute("SELECT title FROM sessions WHERE session_id=?", (OPENCLAW_SESSION_ID,)).fetchone()
+        assert row[0] == "OpenClaw: plain prompt no metadata"
+
+    def test_claude_code_title_not_prefixed(self, watcher, db):
+        """Claude Code sessions should NOT get OpenClaw prefix in title."""
+        record = {
+            "type": "user",
+            "sessionId": "cc-title-test",
+            "timestamp": "2026-04-02T10:00:00Z",
+            "cwd": "/Users/rajanyadav/Projects/myproject",
+            "message": {"content": "fix the bug in main.py"},
+        }
+        watcher._process_record(record, "/fake/cc.jsonl")
+
+        row = db.execute("SELECT title FROM sessions WHERE session_id='cc-title-test'").fetchone()
+        assert row[0] == "fix the bug in main.py"
+        assert "OpenClaw" not in row[0]
+
+    def test_extract_openclaw_user_text_no_metadata(self):
+        """Text without metadata should pass through unchanged."""
+        from claude_monitoring.monitor import JSONLSessionWatcher
+
+        text, source = JSONLSessionWatcher._extract_openclaw_user_text("hello world")
+        assert text == "hello world"
+        assert source == ""
+
+    def test_extract_openclaw_user_text_with_telegram(self):
+        """Telegram-wrapped text should be extracted with Telegram hint."""
+        from claude_monitoring.monitor import JSONLSessionWatcher
+
+        text = (
+            "Conversation info (untrusted metadata):\n"
+            '```json\n{"message_id": "4", "sender_id": "123"}\n```\n\n'
+            "Sender (untrusted metadata):\n"
+            '```json\n{"id": "123", "name": "Test"}\n```\n\n'
+            "what is the weather?"
+        )
+        cleaned, source = JSONLSessionWatcher._extract_openclaw_user_text(text)
+        assert cleaned == "what is the weather?"
+        assert source == "Telegram"
