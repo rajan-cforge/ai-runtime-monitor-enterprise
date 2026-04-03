@@ -1,0 +1,28 @@
+{
+  "manifest_version": 3,
+  "name": "AI Runtime Monitor",
+  "version": "0.1.0",
+  "description": "Monitor AI coding agent sessions for security and compliance",
+  "permissions": ["storage"],
+  "host_permissions": ["http://127.0.0.1:9081/*", "http://localhost:9081/*"],
+  "content_scripts": [
+    {
+      "matches": ["*://claude.ai/*"],
+      "js": ["content_scripts/shared.js", "content_scripts/claude.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["*://chatgpt.com/*", "*://chat.openai.com/*"],
+      "js": ["content_scripts/shared.js", "content_scripts/chatgpt.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["*://gemini.google.com/*"],
+      "js": ["content_scripts/shared.js", "content_scripts/gemini.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "background": {"service_worker": "background.js"},
+  "action": {"default_popup": "popup/popup.html", "default_icon": {"16": "icons/icon-16.png", "48": "icons/icon-48.png"}},
+  "icons": {"16": "icons/icon-16.png", "48": "icons/icon-48.png", "128": "icons/icon-128.png"}
+}
