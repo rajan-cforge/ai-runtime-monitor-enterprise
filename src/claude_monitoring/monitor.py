@@ -801,6 +801,48 @@ class JSONLSessionWatcher:
             )
             self._update_session_stats(session_id, model=model, input_tokens=input_tokens, output_tokens=output_tokens)
 
+        # OpenClaw API call extraction: records with provider/api fields contain
+        # rich API metadata that we can insert into api_calls table (Option C from roadmap)
+        provider = message.get("provider", "")
+        api_type = message.get("api", "")
+        response_id = message.get("responseId", "")
+        if provider and api_type and (input_tokens or output_tokens):
+            cost_data = message.get("cost", message.get("usage", {}).get("cost", {}))
+            cost_total = cost_data.get("total", 0) if isinstance(cost_data, dict) else 0
+            # Map provider to destination host
+            host_map = {
+                "anthropic": "api.anthropic.com",
+                "openai": "api.openai.com",
+                "google": "generativelanguage.googleapis.com",
+            }
+            svc_map = {"anthropic": "anthropic_api", "openai": "openai_api", "google": "gemini_api"}
+            dest_host = host_map.get(provider, f"api.{provider}.com")
+            dest_service = svc_map.get(provider, f"{provider}_api")
+            try:
+                self.db.execute(
+                    """INSERT INTO api_calls (timestamp, session_id, destination_host, destination_service,
+                       model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
+                       estimated_cost_usd, stop_reason, request_id)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        timestamp,
+                        session_id,
+                        dest_host,
+                        dest_service,
+                        model,
+                        input_tokens,
+                        output_tokens,
+                        cache_read,
+                        cache_write,
+                        cost_total,
+                        stop_reason,
+                        response_id,
+                    ),
+                )
+                self.db.commit()
+            except Exception:
+                pass
+
     def _process_progress(self, record, session_id, timestamp):
         """Process a progress record."""
         data = record.get("data", {})

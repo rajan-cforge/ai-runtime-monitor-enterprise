@@ -1775,6 +1775,8 @@ OPENCLAW_JSONL_LINES = [
                 "totalTokens": 13353,
                 "cost": {"total": 0.05111775},
             },
+            "api": "anthropic-messages",
+            "provider": "anthropic",
             "stopReason": "toolUse",
             "responseId": "msg_011ZhHTxqvHCvcMeNUNbidg3",
         },
@@ -1817,6 +1819,8 @@ OPENCLAW_JSONL_LINES = [
                 "totalTokens": 13651,
                 "cost": {"total": 0.008322},
             },
+            "api": "anthropic-messages",
+            "provider": "anthropic",
             "stopReason": "stop",
             "responseId": "msg_015fYNXoNcEa4NP6jrPnm7mz",
         },
@@ -2149,3 +2153,57 @@ class TestOpenClawJSONL:
         cleaned, source = JSONLSessionWatcher._extract_openclaw_user_text(text)
         assert cleaned == "what is the weather?"
         assert source == "Telegram"
+
+    def test_openclaw_assistant_creates_api_call(self, watcher, db, tmp_path):
+        """OpenClaw assistant messages with provider/api fields should create api_calls rows."""
+        import sqlite3
+
+        db.row_factory = sqlite3.Row
+        path = str(tmp_path / f"{OPENCLAW_SESSION_ID}.jsonl")
+        watcher._process_record(OPENCLAW_JSONL_LINES[0], path)  # session
+        watcher._process_record(OPENCLAW_JSONL_LINES[3], path)  # assistant with usage
+
+        rows = db.execute("SELECT * FROM api_calls WHERE session_id = ?", (OPENCLAW_SESSION_ID,)).fetchall()
+        assert len(rows) >= 1
+        row = rows[0]
+        assert row["destination_host"] == "api.anthropic.com"
+        assert row["destination_service"] == "anthropic_api"
+        assert row["model"] == "claude-sonnet-4-6"
+        assert row["input_tokens"] == 3
+        assert row["output_tokens"] == 93
+        db.row_factory = None
+
+    def test_claude_code_assistant_does_not_create_api_call(self, watcher, db):
+        """Standard Claude Code assistant messages should NOT create api_calls rows."""
+        record = {
+            "type": "assistant",
+            "sessionId": "cc-api-test",
+            "timestamp": "2026-04-03T00:00:00Z",
+            "message": {
+                "content": [{"type": "text", "text": "Hello!"}],
+                "model": "claude-sonnet-4-6",
+                "usage": {"input_tokens": 100, "output_tokens": 50},
+                "stop_reason": "end_turn",
+            },
+        }
+        watcher._process_record(record, "/fake/cc.jsonl")
+
+        rows = db.execute("SELECT COUNT(*) FROM api_calls WHERE session_id = 'cc-api-test'").fetchone()
+        assert rows[0] == 0
+
+    def test_openclaw_api_call_has_cost(self, watcher, db, tmp_path):
+        """OpenClaw api_calls should include estimated_cost_usd from cost.total."""
+        import sqlite3
+
+        db.row_factory = sqlite3.Row
+        path = str(tmp_path / f"{OPENCLAW_SESSION_ID}.jsonl")
+        watcher._process_record(OPENCLAW_JSONL_LINES[0], path)
+        watcher._process_record(OPENCLAW_JSONL_LINES[3], path)
+
+        row = db.execute(
+            "SELECT estimated_cost_usd FROM api_calls WHERE session_id = ?",
+            (OPENCLAW_SESSION_ID,),
+        ).fetchone()
+        assert row is not None
+        assert row["estimated_cost_usd"] > 0
+        db.row_factory = None
