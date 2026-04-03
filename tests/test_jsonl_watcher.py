@@ -2207,3 +2207,45 @@ class TestOpenClawJSONL:
         assert row is not None
         assert row["estimated_cost_usd"] > 0
         db.row_factory = None
+
+
+# ---------------------------------------------------------------------------
+# Agent Type Detection
+# ---------------------------------------------------------------------------
+
+
+class TestAgentTypeDetection:
+    def test_openclaw_from_cwd(self, watcher):
+        assert watcher._detect_agent_type("/Users/x/.openclaw/workspace", "") == "openclaw"
+
+    def test_claude_code_from_jsonl_path(self, watcher):
+        assert watcher._detect_agent_type("", "/Users/x/.claude/projects/foo.jsonl") == "claude_code"
+
+    def test_cursor_from_cwd(self, watcher):
+        assert watcher._detect_agent_type("/Users/x/.cursor/workspace", "") == "cursor"
+
+    def test_unknown_when_no_match(self, watcher):
+        assert watcher._detect_agent_type("/Users/x/Projects/myapp", "/tmp/session.jsonl") == "unknown"
+
+    def test_openclaw_session_has_agent_type(self, watcher, db, tmp_path):
+        """Processing an OpenClaw session record sets agent_type='openclaw' on the session."""
+        path = str(tmp_path / f"{OPENCLAW_SESSION_ID}.jsonl")
+        watcher._process_record(OPENCLAW_JSONL_LINES[0], path)
+
+        row = db.execute("SELECT agent_type FROM sessions WHERE session_id = ?", (OPENCLAW_SESSION_ID,)).fetchone()
+        assert row is not None
+        assert row[0] == "openclaw"
+
+    def test_claude_code_session_has_agent_type(self, watcher, db):
+        """Processing a Claude Code record sets agent_type from jsonl_path."""
+        record = {
+            "type": "user",
+            "sessionId": "cc-agent-test",
+            "timestamp": "2026-04-03T00:00:00Z",
+            "message": {"content": "hello"},
+        }
+        watcher._process_record(record, "/Users/x/.claude/projects/foo/bar.jsonl")
+
+        row = db.execute("SELECT agent_type FROM sessions WHERE session_id = 'cc-agent-test'").fetchone()
+        assert row is not None
+        assert row[0] == "claude_code"

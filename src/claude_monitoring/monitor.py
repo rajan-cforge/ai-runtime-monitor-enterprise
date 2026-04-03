@@ -59,9 +59,11 @@ from claude_monitoring.config import (
     is_mcp_alert_on_unknown,
 )
 from claude_monitoring.constants import (
+    AGENT_TYPE_MAP,
     AI_HOSTS,
     ANTHROPIC_IP_PREFIXES,
     BROWSER_AI_PATTERNS,
+    BROWSER_SERVICE_AGENT_MAP,
     PLAN_LIMITS,
     SERVICE_CLASSIFICATION,
     SEVERITY_ORDER,
@@ -265,18 +267,29 @@ class JSONLSessionWatcher:
     def stop(self):
         self._stop.set()
 
+    @staticmethod
+    def _detect_agent_type(cwd, jsonl_path):
+        """Detect agent type from cwd or jsonl_path patterns."""
+        combined = (cwd or "") + "|" + str(jsonl_path or "")
+        for pattern, agent_type in AGENT_TYPE_MAP.items():
+            if pattern in combined:
+                return agent_type
+        return "unknown"
+
     def _ensure_session(self, session_id, jsonl_path, cwd=None, start_time=None):
         """Create or update session record."""
         try:
+            agent_type = self._detect_agent_type(cwd, jsonl_path)
             # Pass None instead of empty string so COALESCE preserves existing values
             self.db.execute(
-                """INSERT INTO sessions (session_id, start_time, cwd, jsonl_path, last_activity)
-                   VALUES (?, ?, ?, ?, ?)
+                """INSERT INTO sessions (session_id, start_time, cwd, jsonl_path, last_activity, agent_type)
+                   VALUES (?, ?, ?, ?, ?, ?)
                    ON CONFLICT(session_id) DO UPDATE SET
                      last_activity=excluded.last_activity,
                      cwd=COALESCE(excluded.cwd, sessions.cwd),
-                     jsonl_path=COALESCE(excluded.jsonl_path, sessions.jsonl_path)""",
-                (session_id, start_time or now_iso(), cwd or None, str(jsonl_path), now_iso()),
+                     jsonl_path=COALESCE(excluded.jsonl_path, sessions.jsonl_path),
+                     agent_type=COALESCE(excluded.agent_type, sessions.agent_type)""",
+                (session_id, start_time or now_iso(), cwd or None, str(jsonl_path), now_iso(), agent_type),
             )
             self.db.commit()
         except Exception:
@@ -1598,7 +1611,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
         if q:
             sql = f"""SELECT session_id, start_time, cwd, model,
                           total_input_tokens, total_output_tokens, total_turns,
-                          jsonl_path, last_activity, title
+                          jsonl_path, last_activity, title, agent_type
                    FROM sessions
                    WHERE title LIKE ? OR session_id LIKE ? OR cwd LIKE ? OR model LIKE ?
                    ORDER BY {order} LIMIT ?"""  # nosec B608
@@ -1606,7 +1619,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
         else:
             sql = f"""SELECT session_id, start_time, cwd, model,
                           total_input_tokens, total_output_tokens, total_turns,
-                          jsonl_path, last_activity, title
+                          jsonl_path, last_activity, title, agent_type
                    FROM sessions ORDER BY {order} LIMIT ?"""  # nosec B608
             rows = db.execute(sql, (limit,)).fetchall()
         sessions = [dict(r) for r in rows]
@@ -1668,6 +1681,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                         "total_turns": rd["total_turns"],
                         "total_duration": rd["total_duration"],
                         "alert_count": 0,
+                        "agent_type": BROWSER_SERVICE_AGENT_MAP.get(rd["service"], "unknown"),
                     }
                 )
 

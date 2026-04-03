@@ -273,6 +273,41 @@ KNOWN_EXAMPLE_SECRETS = {
 # Known/trusted MCP servers (user can extend via config)
 MCP_KNOWN_SERVERS: set[str] = set()
 
+# ─────────────────────────────────────────────────────────────
+# Agent Type Detection & Colors
+# ─────────────────────────────────────────────────────────────
+
+# Path pattern -> agent type (checked against cwd and jsonl_path)
+AGENT_TYPE_MAP = {
+    ".openclaw": "openclaw",
+    ".claude": "claude_code",
+    ".cursor": "cursor",
+    ".codex": "codex",
+}
+
+# Agent type -> (color hex, display label)
+AGENT_TYPE_COLORS = {
+    "openclaw": ("#238636", "OpenClaw"),
+    "claude_code": ("#2563eb", "Claude Code"),
+    "cursor": ("#7c3aed", "Cursor"),
+    "codex": ("#ea580c", "Codex"),
+    "chatgpt": ("#ea580c", "ChatGPT"),
+    "claude_web": ("#2563eb", "Claude Web"),
+    "copilot": ("#0891b2", "Copilot"),
+    "unknown": ("#6b7280", "Unknown"),
+}
+
+# Browser service -> agent type
+BROWSER_SERVICE_AGENT_MAP = {
+    "ChatGPT": "chatgpt",
+    "Gemini": "gemini",
+    "Claude Web": "claude_web",
+    "Perplexity": "perplexity",
+    "Copilot": "copilot",
+    "AI Studio": "ai_studio",
+    "DeepSeek": "deepseek",
+}
+
 # Subscription plan token limits (approximate monthly)
 PLAN_LIMITS = {
     "max_20x": {"monthly_tokens": 900_000_000, "label": "Max 20x"},

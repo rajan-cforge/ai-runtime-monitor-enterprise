@@ -55,7 +55,7 @@ body { background:var(--bg); color:var(--text); font-family:-apple-system,BlinkM
 .session-item .title { font-size:13px; font-weight:500; color:var(--text); line-height:1.3; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
 .session-item .meta { font-size:11px; color:var(--text2); margin-top:4px; display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
 .session-item .meta .project-badge { background:var(--surface2); border:1px solid var(--border); border-radius:3px; padding:1px 5px; font-size:10px; color:var(--cyan); }
-.session-item .meta .openclaw-badge { background:#238636; color:white; border-radius:3px; padding:1px 6px; font-size:0.75em; font-weight:600; }
+.session-item .meta .agent-badge { border-radius:3px; padding:1px 6px; font-size:0.75em; font-weight:600; color:white; }
 .session-item .project-path { font-size:11px; color:var(--text2); margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .session-item .stats-row { display:flex; gap:10px; margin-top:4px; font-size:11px; }
 .session-item .stats-row span { color:var(--text2); }
@@ -271,6 +271,14 @@ body { background:var(--bg); color:var(--text); font-family:-apple-system,BlinkM
               <option value="all">All Sources</option>
               <option value="cli">CLI Sessions</option>
               <option value="browser">Browser AI</option>
+            </select>
+            <select id="session-agent" onchange="loadSessions()" style="background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:6px 8px;color:var(--text);font-size:12px;cursor:pointer">
+              <option value="">All Agents</option>
+              <option value="claude_code">Claude Code</option>
+              <option value="openclaw">OpenClaw</option>
+              <option value="cursor">Cursor</option>
+              <option value="chatgpt">ChatGPT</option>
+              <option value="copilot">Copilot</option>
             </select>
             <select id="session-sort" onchange="loadSessions()">
               <option value="recent">Recent Activity</option>
@@ -542,6 +550,24 @@ function projectName(cwd) {
   const parts = cwd.replace(/\\/g,'/').split('/').filter(Boolean);
   return parts[parts.length-1] || '';
 }
+var AGENT_COLORS = {
+  openclaw:'#238636', claude_code:'#2563eb', cursor:'#7c3aed',
+  codex:'#ea580c', chatgpt:'#ea580c', claude_web:'#2563eb',
+  copilot:'#0891b2', gemini:'#4285f4', perplexity:'#20b2aa',
+  unknown:'#6b7280'
+};
+var AGENT_LABELS = {
+  openclaw:'OpenClaw', claude_code:'Claude Code', cursor:'Cursor',
+  codex:'Codex', chatgpt:'ChatGPT', claude_web:'Claude Web',
+  copilot:'Copilot', gemini:'Gemini', perplexity:'Perplexity',
+  unknown:'Unknown'
+};
+function agentBadge(agentType) {
+  if (!agentType || agentType === 'unknown') return '';
+  var color = AGENT_COLORS[agentType] || AGENT_COLORS.unknown;
+  var label = AGENT_LABELS[agentType] || agentType;
+  return '<span class="agent-badge" style="background:'+color+'">'+esc(label)+'</span>';
+}
 function shortPath(cwd) {
   if (!cwd) return '';
   var p = cwd.replace(/\\/g,'/');
@@ -606,11 +632,16 @@ async function loadSessions() {
     const search = document.getElementById('session-search').value.trim();
     const sort = document.getElementById('session-sort').value;
     const source = document.getElementById('session-source').value;
+    const agentFilter = document.getElementById('session-agent').value;
     let url = API + '/api/sessions?sort=' + sort + '&include_browser=true';
     if (source && source !== 'all') url += '&source=' + source;
     if (search) url += '&q=' + encodeURIComponent(search);
     const r = await fetch(url);
     const d = await r.json();
+    // Client-side agent type filter
+    if (agentFilter) {
+      d.sessions = d.sessions.filter(function(s) { return s.agent_type === agentFilter; });
+    }
     const container = document.getElementById('session-list-items');
 
     // Build title map for feed
@@ -635,7 +666,7 @@ async function loadSessions() {
         + '<span>' + (isBrowser ? esc(s.service || '') : (s.model||'unknown').replace('claude-','')) + '</span>'
         + '<span style="color:var(--text2)">' + (isBrowser ? (s.conversation_id||'').substring(0,12) : s.session_id.substring(0,8)) + '</span>'
         + (proj ? '<span class="project-badge">'+esc(proj)+'</span>' : '')
-        + ((s.cwd||'').indexOf('.openclaw') >= 0 ? '<span class="openclaw-badge">OpenClaw</span>' : '')
+        + agentBadge(s.agent_type)
         + '</div>'
         + '<div style="font-size:11px;color:var(--text2);margin-top:3px">Started: ' + fmtTimestamp(s.start_time) + '</div>'
         + '<div style="font-size:11px;color:var(--text2);margin-top:1px">Latest: ' + fmtActivityTime(s.last_activity) + '</div>'
