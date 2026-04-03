@@ -1,4 +1,4 @@
-.PHONY: install dev test lint format clean start start-deep stop status verify configure help
+.PHONY: install dev test lint format clean start start-deep stop status verify configure help coverage e2e security ci
 
 # Auto-detect python/pip — prefer python3/pip3 (macOS), fall back to python/pip
 PYTHON := $(shell command -v python3 2>/dev/null || command -v python 2>/dev/null)
@@ -70,6 +70,19 @@ lint: ## Run linter checks
 format: ## Auto-format code
 	$(PYTHON) -m ruff format src/ tests/
 	$(PYTHON) -m ruff check --fix src/ tests/
+
+coverage: ## Run tests with HTML coverage report
+	$(PYTHON) -m pytest --cov=claude_monitoring --cov-report=html --cov-fail-under=90
+	@echo "Coverage report: htmlcov/index.html"
+
+e2e: ## Run Playwright E2E tests
+	$(PYTHON) -m pytest tests/e2e/ -v
+
+security: ## Run security scans
+	$(PYTHON) -m bandit -r src/ -s B101,B404,B603,B607,B608 --severity-level medium
+	@echo "Security scan complete."
+
+ci: lint test ## Run full CI pipeline locally
 
 clean: ## Remove build artifacts
 	rm -rf dist/ build/ *.egg-info src/*.egg-info .pytest_cache .coverage htmlcov coverage.xml

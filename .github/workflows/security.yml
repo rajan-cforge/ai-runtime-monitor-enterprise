@@ -1,0 +1,18 @@
+name: Security
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pip-audit bandit
+      - run: pip install -e .
+      - run: pip-audit
+      - run: bandit -r src/ -s B101,B404,B603,B607,B608 --severity-level medium

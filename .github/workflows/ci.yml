@@ -40,7 +40,7 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - run: pip install -e ".[dev]"
-      - run: pytest --cov=claude_monitoring --cov-report=xml
+      - run: pytest --cov=claude_monitoring --cov-report=xml --cov-fail-under=90
       - uses: codecov/codecov-action@v4
         if: matrix.python-version == '3.12' && matrix.os == 'ubuntu-latest'
 
