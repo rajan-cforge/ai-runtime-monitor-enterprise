@@ -21,6 +21,7 @@ DEPENDENCIES:
 
 import argparse
 import csv
+import hashlib
 import io
 import json
 import os
@@ -264,9 +265,30 @@ class JSONLSessionWatcher:
         self.db = get_thread_db()
         self._stop = threading.Event()
         self._pending_commits = 0
+        self._load_file_positions()
 
     def stop(self):
         self._stop.set()
+
+    def _load_file_positions(self):
+        """Load persisted file positions from DB so restarts don't re-read files."""
+        try:
+            rows = self.db.execute("SELECT file_path, byte_offset FROM file_positions").fetchall()
+            for row in rows:
+                self.file_positions[row[0]] = row[1]
+        except Exception:
+            pass  # Table may not exist yet on first run
+
+    def _save_file_position(self, path_str, offset):
+        """Persist file position to DB."""
+        try:
+            self.db.execute(
+                "INSERT INTO file_positions (file_path, byte_offset, last_read) VALUES (?, ?, datetime('now')) "
+                "ON CONFLICT(file_path) DO UPDATE SET byte_offset=excluded.byte_offset, last_read=excluded.last_read",
+                (path_str, offset),
+            )
+        except Exception:
+            pass
 
     @staticmethod
     def _detect_agent_type(cwd, jsonl_path):
@@ -319,12 +341,15 @@ class JSONLSessionWatcher:
             pass
 
     def _store_event(self, timestamp, session_id, event_type, source, data):
-        """Store event in database and push to live feed."""
+        """Store event in database and push to live feed, with dedup."""
         data_json = json.dumps(data, default=str)
+        # Dedup hash: ensures identical events are never inserted twice
+        dedup_key = f"{timestamp}|{session_id}|{event_type}|{data_json}"
+        dedup_hash = hashlib.sha256(dedup_key.encode()).hexdigest()[:16]
         try:
             self.db.execute(
-                "INSERT INTO events (timestamp, session_id, event_type, source_layer, data_json) VALUES (?,?,?,?,?)",
-                (timestamp, session_id, event_type, source, data_json),
+                "INSERT OR IGNORE INTO events (timestamp, session_id, event_type, source_layer, data_json, dedup_hash) VALUES (?,?,?,?,?,?)",
+                (timestamp, session_id, event_type, source, data_json, dedup_hash),
             )
             self._pending_commits += 1
             # Batch commits for performance during backfill
@@ -391,7 +416,9 @@ class JSONLSessionWatcher:
                 with open(path_str, encoding="utf-8", errors="replace") as f:
                     f.seek(last_pos)
                     new_data = f.read()
-                    self.file_positions[path_str] = f.tell()
+                    new_pos = f.tell()
+                    self.file_positions[path_str] = new_pos
+                    self._save_file_position(path_str, new_pos)
             except OSError:
                 return
 

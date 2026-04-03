@@ -155,10 +155,24 @@ def init_db(db_path=None):
         reason TEXT
     )""")
 
+    # Persistent file positions — survives monitor restarts
+    c.execute("""CREATE TABLE IF NOT EXISTS file_positions (
+        file_path TEXT PRIMARY KEY,
+        byte_offset INTEGER NOT NULL DEFAULT 0,
+        last_read TEXT
+    )""")
+
+    # Add dedup_hash column to events if missing (migration for dedup fix)
+    try:
+        c.execute("ALTER TABLE events ADD COLUMN dedup_hash TEXT")
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+
     # Indexes
     c.execute("CREATE INDEX IF NOT EXISTS idx_events_ts ON events(timestamp)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_events_session ON events(session_id)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_events_type ON events(event_type)")
+    c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_events_dedup ON events(dedup_hash)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_sessions_last ON sessions(last_activity)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_file_events_ts ON file_events(timestamp)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_processes_pid ON processes(pid)")

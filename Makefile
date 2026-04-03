@@ -1,8 +1,12 @@
 .PHONY: install dev test lint format clean start start-deep stop status verify configure help coverage e2e security ci
 
-# Auto-detect python/pip — prefer python3/pip3 (macOS), fall back to python/pip
-PYTHON := $(shell command -v python3 2>/dev/null || command -v python 2>/dev/null)
-PIP := $(shell command -v pip3 2>/dev/null || command -v pip 2>/dev/null)
+# Auto-detect python/pip — prefer .venv, then python3.12, then python3
+PYTHON := $(shell \
+	if [ -x .venv/bin/python ]; then echo .venv/bin/python; \
+	elif command -v python3.12 >/dev/null 2>&1; then echo python3.12; \
+	elif command -v python3 >/dev/null 2>&1; then echo python3; \
+	else echo python; fi)
+PIP := $(PYTHON) -m pip
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2}'
