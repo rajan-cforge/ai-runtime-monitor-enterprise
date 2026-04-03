@@ -35,14 +35,25 @@ async def fleet_stats(db=Depends(get_db)):
             """SELECT COUNT(*),
                       COALESCE(SUM(total_input_tokens), 0),
                       COALESCE(SUM(total_output_tokens), 0),
-                      COALESCE(SUM(total_cost), 0)
+                      COALESCE(SUM(total_cost), 0),
+                      COALESCE(SUM(CASE WHEN total_cost > 0 THEN total_cost ELSE
+                          CASE
+                            WHEN model LIKE '%opus%' THEN
+                              total_input_tokens * 0.000015 + total_output_tokens * 0.000075
+                            WHEN model LIKE '%haiku%' THEN
+                              total_input_tokens * 0.0000008 + total_output_tokens * 0.000004
+                            ELSE
+                              total_input_tokens * 0.000003 + total_output_tokens * 0.000015
+                          END
+                      END), 0)
                FROM fleet_sessions"""
         )
     ).fetchone()
     stats["total_sessions"] = row[0]
     stats["total_input_tokens"] = int(row[1])
     stats["total_output_tokens"] = int(row[2])
-    stats["total_cost"] = float(row[3])
+    stats["total_cost_reported"] = float(row[3])
+    stats["total_cost"] = round(float(row[4]), 2)
 
     row = db.execute(text("SELECT COUNT(*) FROM fleet_events")).fetchone()
     stats["total_events"] = row[0]
