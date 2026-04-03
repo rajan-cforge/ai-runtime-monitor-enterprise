@@ -1007,15 +1007,15 @@ async function loadAlerts(customOffset) {
     const total = d.total || 0;
     document.getElementById('alerts-count').textContent = '(' + (alertOffset + d.alerts.length) + ' of ' + total + ')';
 
+    // Severity summary bar
+    const sc = d.severity_counts || {};
+
     // Update tab badge with highest severity count
     const tabBadge = document.getElementById('tab-alerts-badge');
     if (sc.critical > 0) tabBadge.textContent = '(' + sc.critical + ' critical)';
     else if (sc.high > 0) tabBadge.textContent = '(' + sc.high + ' high)';
     else if (total > 0) tabBadge.textContent = '(' + total + ')';
     else tabBadge.textContent = '';
-
-    // Severity summary bar
-    const sc = d.severity_counts || {};
     const sevBar = document.getElementById('alerts-severity-bar');
     const sevColors = {critical:'#f85149',high:'#d29922',medium:'#58a6ff',low:'#8b949e'};
     sevBar.innerHTML = '<div style="display:flex;gap:8px;flex-wrap:wrap">'
@@ -1091,7 +1091,7 @@ async function loadAlerts(customOffset) {
       container.innerHTML += '<div class="load-more-btn" style="text-align:center;padding:12px">'
         + '<button onclick="loadAlerts('+(alertOffset+200)+')" style="background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:8px 24px;color:var(--text);font-size:13px;cursor:pointer">Load More</button></div>';
     }
-  } catch(e) {}
+  } catch(e) { console.error('loadAlerts error:', e); }
 }
 function filterAlertsByPattern(p) {
   alertPatternFilter = p;
