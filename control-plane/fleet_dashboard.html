@@ -119,7 +119,7 @@ tr:hover td { background:var(--surface2); }
   <!-- Endpoints -->
   <div class="panel" id="panel-endpoints">
     <table>
-      <thead><tr><th>Status</th><th>Hostname</th><th>IP</th><th>OS</th><th>Last Heartbeat</th><th>Version</th></tr></thead>
+      <thead><tr><th>Status</th><th>Hostname</th><th>IP</th><th>OS</th><th>Sessions</th><th>Alerts</th><th>Last Heartbeat</th><th>Version</th></tr></thead>
       <tbody id="endpointsBody"></tbody>
     </table>
   </div>
@@ -254,10 +254,10 @@ tr:hover td { background:var(--surface2); }
   }
 
   async function loadEndpoints() {
-    const data = await apiFetch('/api/v1/endpoints');
+    const data = await apiFetch('/api/v1/fleet/endpoints');
     const tbody = document.getElementById('endpointsBody');
     if (!data || !data.length) {
-      tbody.innerHTML = '<tr><td colspan="6" class="empty-state">No endpoints registered</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="8" class="empty-state">No endpoints registered</td></tr>';
       return;
     }
     tbody.innerHTML = data.map(ep => {
@@ -265,9 +265,11 @@ tr:hover td { background:var(--surface2); }
       const st = endpointStatus(hb);
       return '<tr>'
         + '<td><span class="status-dot ' + st + '"></span>' + st + '</td>'
-        + '<td>' + escHtml(ep.hostname) + '</td>'
+        + '<td><strong>' + escHtml(ep.hostname) + '</strong></td>'
         + '<td>' + escHtml(ep.ip_address || '') + '</td>'
         + '<td>' + escHtml(ep.os || '') + '</td>'
+        + '<td>' + (ep.session_count || 0) + '</td>'
+        + '<td>' + (ep.alert_count || 0) + '</td>'
         + '<td>' + timeAgo(hb) + '</td>'
         + '<td>' + escHtml(ep.monitor_version || '') + '</td>'
         + '</tr>';

@@ -101,6 +101,45 @@ async def fleet_sessions(
     return [dict(r._mapping) for r in rows]
 
 
+@router.get("/api/v1/fleet/endpoints")
+async def fleet_endpoints(db=Depends(get_db)):
+    """Fleet endpoints for the dashboard (no auth required)."""
+    rows = db.execute(
+        text(
+            """SELECT e.endpoint_id, e.hostname, e.ip_address, e.os,
+                      e.monitor_version, e.first_seen, e.last_heartbeat, e.status,
+                      COALESCE(s.session_count, 0) AS session_count,
+                      COALESCE(a.alert_count, 0) AS alert_count
+               FROM endpoints e
+               LEFT JOIN (
+                   SELECT endpoint_id, COUNT(*) AS session_count
+                   FROM fleet_sessions GROUP BY endpoint_id
+               ) s ON e.endpoint_id = s.endpoint_id
+               LEFT JOIN (
+                   SELECT endpoint_id, COUNT(*) AS alert_count
+                   FROM fleet_alerts WHERE dismissed = false
+                   GROUP BY endpoint_id
+               ) a ON e.endpoint_id = a.endpoint_id
+               ORDER BY e.last_heartbeat DESC NULLS LAST"""
+        )
+    ).fetchall()
+    return [
+        {
+            "endpoint_id": str(r.endpoint_id),
+            "hostname": r.hostname,
+            "ip_address": r.ip_address or "",
+            "os": r.os or "",
+            "monitor_version": r.monitor_version or "",
+            "first_seen": r.first_seen.isoformat() if r.first_seen else None,
+            "last_heartbeat": r.last_heartbeat.isoformat() if r.last_heartbeat else None,
+            "status": r.status,
+            "session_count": r.session_count,
+            "alert_count": r.alert_count,
+        }
+        for r in rows
+    ]
+
+
 @router.get("/api/v1/fleet/alerts")
 async def fleet_alerts(
     db=Depends(get_db),
