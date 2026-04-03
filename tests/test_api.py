@@ -932,3 +932,94 @@ class TestDashboardAPI:
         assert sc["medium"] == 0
         assert sc["low"] == 0
         assert data["total"] == 2
+
+    # --- Browser ingest endpoint tests ---
+
+    def test_browser_ingest_valid_events(self, api_server):
+        events = [
+            {
+                "service": "ChatGPT",
+                "url": "https://chatgpt.com/c/abc",
+                "type": "user_prompt",
+                "text": "hello world",
+                "timestamp": "2026-01-01T12:00:00Z",
+                "conversation_id": "abc",
+                "title": "Test Chat",
+            },
+            {
+                "service": "Claude Web",
+                "url": "https://claude.ai/chat/xyz",
+                "type": "assistant_response",
+                "text": "Here is the answer to your question.",
+                "timestamp": "2026-01-01T12:00:01Z",
+                "conversation_id": "xyz",
+                "title": "Claude Chat",
+            },
+        ]
+        req = Request(
+            f"{api_server}/api/browser/ingest",
+            data=json.dumps({"events": events}).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        resp = urlopen(req)
+        assert resp.status == 200
+        result = json.loads(resp.read())
+        assert result["stored"] == 2
+        assert "alerts" in result
+
+    def test_browser_ingest_empty_list(self, api_server):
+        req = Request(
+            f"{api_server}/api/browser/ingest",
+            data=json.dumps({"events": []}).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        resp = urlopen(req)
+        assert resp.status == 200
+        result = json.loads(resp.read())
+        assert result["stored"] == 0
+
+    def test_browser_ingest_bad_json(self, api_server):
+        from urllib.error import HTTPError
+
+        req = Request(
+            f"{api_server}/api/browser/ingest",
+            data=b"not json at all{{{",
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with pytest.raises(HTTPError) as exc_info:
+            urlopen(req)
+        assert exc_info.value.code == 400
+
+    def test_browser_ingest_oversized(self, api_server):
+        from urllib.error import HTTPError
+
+        events = [{"service": f"svc-{i}", "type": "user_prompt", "text": "x"} for i in range(101)]
+        req = Request(
+            f"{api_server}/api/browser/ingest",
+            data=json.dumps({"events": events}).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with pytest.raises(HTTPError) as exc_info:
+            urlopen(req)
+        assert exc_info.value.code == 400
+
+    def test_browser_ingest_missing_fields(self, api_server):
+        events = [
+            {"text": "no service or type"},
+            {"service": "ChatGPT"},
+            {"type": "user_prompt"},
+        ]
+        req = Request(
+            f"{api_server}/api/browser/ingest",
+            data=json.dumps({"events": events}).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        resp = urlopen(req)
+        assert resp.status == 200
+        result = json.loads(resp.read())
+        assert result["stored"] == 0

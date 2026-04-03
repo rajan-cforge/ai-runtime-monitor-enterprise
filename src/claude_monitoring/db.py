@@ -142,6 +142,12 @@ def init_db(db_path=None):
     except sqlite3.OperationalError:
         pass  # Column already exists
 
+    # Add source column to browser_sessions if missing (migration)
+    try:
+        c.execute("ALTER TABLE browser_sessions ADD COLUMN source TEXT DEFAULT 'history'")
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+
     c.execute("""CREATE TABLE IF NOT EXISTS alert_dismissals (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         event_id INTEGER NOT NULL UNIQUE,

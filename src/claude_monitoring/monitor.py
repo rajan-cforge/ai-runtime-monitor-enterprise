@@ -1597,12 +1597,16 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
         post_routes = {
             "/api/alerts/dismiss": self._api_alerts_dismiss,
+            "/api/browser/ingest": self._api_browser_ingest,
         }
 
         handler = post_routes.get(path)
         if handler:
             try:
                 length = int(self.headers.get("Content-Length", 0))
+                if length > 1_000_000:
+                    self._send_json({"error": "payload too large"}, 413)
+                    return
                 body = self.rfile.read(length) if length else b""
                 try:
                     payload = json.loads(body) if body else {}
@@ -1657,6 +1661,57 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self._send_json({"error": "alert already dismissed"}, 409)
             return
         self._send_json({"ok": True, "event_id": event_id, "dismissed_at": now})
+
+    def _api_browser_ingest(self, payload):
+        """Receive browser capture events from the Chrome extension."""
+        events = payload.get("events", [])
+        if not isinstance(events, list) or len(events) > 100:
+            self._send_json({"error": "events must be a list of max 100 items"}, 400)
+            return
+
+        db = get_thread_db()
+        stored = 0
+        alerts = 0
+
+        for ev in events:
+            if not isinstance(ev, dict):
+                continue
+            service = ev.get("service", "")
+            url = ev.get("url", "")
+            text = ev.get("text", "")
+            ev_type = ev.get("type", "")
+            timestamp = ev.get("timestamp", now_iso())
+            conv_id = ev.get("conversation_id")
+            title = ev.get("title", "")
+
+            if not service or not ev_type:
+                continue
+
+            try:
+                db.execute(
+                    """INSERT INTO browser_sessions
+                       (service, url, title, conversation_id,
+                        visit_time, duration_seconds, source)
+                       VALUES (?, ?, ?, ?, ?, 0, 'extension')""",
+                    (service, url, title, conv_id, timestamp),
+                )
+                stored += 1
+            except Exception:
+                continue
+
+            # Scan captured text for sensitive data
+            if text:
+                matches = scan_sensitive(text[:5000])
+                if matches:
+                    alerts += len(matches)
+
+        if stored > 0:
+            try:
+                db.commit()
+            except Exception:
+                pass
+
+        self._send_json({"stored": stored, "alerts": alerts})
 
     def _send_json(self, data, status=200):
         body = json.dumps(data, default=str).encode("utf-8")

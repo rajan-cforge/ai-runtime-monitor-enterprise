@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { width: 300px; font-family: -apple-system, BlinkMacSystemFont, sans-serif; background: #1a1a2e; color: #e0e0e0; padding: 16px; }
+    h2 { font-size: 14px; margin-bottom: 12px; color: #fff; }
+    .status { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; padding: 8px; background: #16213e; border-radius: 6px; }
+    .dot { width: 10px; height: 10px; border-radius: 50%; }
+    .dot.online { background: #238636; }
+    .dot.offline { background: #dc3545; }
+    .stat { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid #2a2a4a; font-size: 12px; }
+    .stat-value { color: #58a6ff; font-weight: 600; }
+    .btn { display: block; width: 100%; padding: 8px; margin-top: 12px; background: #238636; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px; text-align: center; text-decoration: none; }
+    .btn:hover { background: #2ea043; }
+    .footer { margin-top: 12px; font-size: 10px; color: #666; text-align: center; }
+  </style>
+</head>
+<body>
+  <h2>AI Runtime Monitor</h2>
+  <div class="status">
+    <div class="dot" id="status-dot"></div>
+    <span id="status-text">Checking...</span>
+  </div>
+  <div class="stat"><span>Events today</span><span class="stat-value" id="today-count">-</span></div>
+  <div class="stat"><span>Buffer</span><span class="stat-value" id="buffer-count">0</span></div>
+  <a class="btn" href="http://localhost:9081" target="_blank">Open Dashboard</a>
+  <div class="footer">All data stays on your machine</div>
+  <script src="popup.js"></script>
+</body>
+</html>
