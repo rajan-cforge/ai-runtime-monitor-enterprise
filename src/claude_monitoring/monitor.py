@@ -3241,6 +3241,23 @@ def start_monitoring(cp_url=None, cp_api_key=None):
     db_conn.close()
     print(f"\n  Database: {DB_PATH}")
 
+    # Verify dedup integrity on startup
+    check_db = get_thread_db()
+    try:
+        count = check_db.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+        distinct = check_db.execute("SELECT COUNT(DISTINCT dedup_hash) FROM events WHERE dedup_hash IS NOT NULL").fetchone()[0]
+        if count > 0 and distinct > 0 and count != distinct:
+            dupes = count - distinct
+            print(f"  Dedup check: found {dupes} duplicate events, cleaning up...")
+            check_db.execute("""DELETE FROM events WHERE dedup_hash IS NOT NULL AND id NOT IN
+                (SELECT MIN(id) FROM events GROUP BY dedup_hash)""")
+            check_db.commit()
+            print(f"  Cleaned {dupes} duplicates")
+    except Exception:
+        pass
+    finally:
+        check_db.close()
+
     # Detect plan/subscription
     info = detect_plan_info()
     if info["is_subscription"]:
