@@ -817,6 +817,14 @@ const FEED_ICONS = {
   connection:'&#x1f310;', file_created:'&#x1f4c1;', file_modified:'&#x270f;&#xfe0f;', file_deleted:'&#x1f5d1;&#xfe0f;',
   bash_progress:'&#x1f4bb;', system_event:'&#x2699;&#xfe0f;', browser_ai:'&#x1f310;'
 };
+var _feedSeen = {};
+function cleanFeedSummary(s) {
+  if (!s) return '';
+  return s.replace(/^\[?Start with this:[\s\S]{0,200}?\]?\s*/i, '')
+    .replace(/^\[?Conversation info \(untrusted m[\s\S]{0,200}?\]?\s*/i, '')
+    .replace(/<[^>]+>/g, '').replace(/```[\s\S]*?```/g, '')
+    .replace(/\s+/g, ' ').trim();
+}
 async function pollFeed() {
   try {
     const url = API + '/api/feed?limit=50' + (lastFeedTs ? '&since=' + encodeURIComponent(lastFeedTs) : '');
@@ -827,15 +835,20 @@ async function pollFeed() {
 
     for (const ev of d.events) {
       if (!showTokens && ev.event_type === 'token_usage') continue;
+      // Client-side dedup
+      var feedKey = (ev.timestamp||'') + '|' + (ev.event_type||'') + '|' + (ev.summary||'').substring(0,60);
+      if (_feedSeen[feedKey]) continue;
+      _feedSeen[feedKey] = 1;
+      if (Object.keys(_feedSeen).length > 500) _feedSeen = {};
       const div = document.createElement('div');
       div.className = 'feed-item ' + ev.event_type;
       // Show session title context in feed
       const sessTitle = ev.session_id ? (sessionTitleMap[ev.session_id] || ev.session_id.substring(0,8)) : '';
-      const ctxHtml = sessTitle && ev.session_id ? '<span class="session-ctx">['+esc(sessTitle.substring(0,30))+']</span> ' : '';
+      const ctxHtml = sessTitle && ev.session_id ? '<span class="session-ctx">['+esc(cleanTitle(sessTitle).substring(0,30))+']</span> ' : '';
       div.innerHTML = '<span class="time">'+fmtTime(ev.timestamp)+'</span>'
         + '<span class="icon">'+(FEED_ICONS[ev.event_type]||'&#x2022;')+'</span>'
         + '<span class="type">'+ev.event_type.replace(/_/g,' ').toUpperCase()+'</span>'
-        + '<span class="detail">'+ctxHtml+esc(ev.summary||'')+'</span>';
+        + '<span class="detail">'+ctxHtml+esc(cleanFeedSummary(ev.summary||''))+'</span>';
       div.style.cursor = 'pointer';
       div.onclick = ((evData) => () => {
         const existing = div.querySelector('.feed-expand');
