@@ -308,6 +308,33 @@ BROWSER_SERVICE_AGENT_MAP = {
     "DeepSeek": "deepseek",
 }
 
+# ─────────────────────────────────────────────────────────────
+# Tool Risk Assessment
+# ─────────────────────────────────────────────────────────────
+
+# Tool name -> (risk_level, description)
+TOOL_RISK_MAP = {
+    "exec": ("critical", "Shell command execution"),
+    "Bash": ("critical", "Shell command execution"),
+    "bash": ("critical", "Shell command execution"),
+    "write": ("high", "File creation/overwrite"),
+    "Write": ("high", "File creation/overwrite"),
+    "edit": ("high", "File modification"),
+    "Edit": ("high", "File modification"),
+    "read": ("medium", "File read access"),
+    "Read": ("medium", "File read access"),
+    "web_fetch": ("medium", "External URL fetch"),
+    "WebFetch": ("medium", "External URL fetch"),
+    "web_search": ("low", "Search query"),
+    "WebSearch": ("low", "Search query"),
+    "memory_search": ("low", "Agent memory search"),
+    "memory_get": ("low", "Agent memory read"),
+    "sessions_spawn": ("high", "Sub-agent spawning"),
+    "Agent": ("high", "Sub-agent spawning"),
+    "Glob": ("low", "File pattern search"),
+    "Grep": ("low", "Content search"),
+}
+
 # Subscription plan token limits (approximate monthly)
 PLAN_LIMITS = {
     "max_20x": {"monthly_tokens": 900_000_000, "label": "Max 20x"},
