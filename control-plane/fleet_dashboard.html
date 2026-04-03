@@ -81,6 +81,16 @@ tr:hover td { background:var(--surface2); }
 .model-list { display:flex; flex-wrap:wrap; gap:8px; margin-top:16px; }
 .model-chip { background:var(--surface); border:1px solid var(--border); border-radius:6px; padding:8px 14px; font-size:12px; }
 .model-chip .count { color:var(--blue); font-weight:600; margin-left:6px; }
+
+.health-card { background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:12px 16px; display:flex; align-items:center; gap:10px; min-width:280px; flex:1; }
+.health-card:hover { border-color:var(--blue); }
+.health-card .hc-dot { width:10px; height:10px; border-radius:50%; flex-shrink:0; }
+.health-card .hc-dot.green { background:var(--green); }
+.health-card .hc-dot.yellow { background:var(--orange); }
+.health-card .hc-dot.red { background:var(--red); }
+.health-card .hc-info { flex:1; }
+.health-card .hc-name { font-weight:600; font-size:13px; }
+.health-card .hc-meta { font-size:11px; color:var(--text2); margin-top:2px; }
 </style>
 </head>
 <body>
@@ -110,6 +120,8 @@ tr:hover td { background:var(--surface2); }
       <div class="stat-card"><div class="label">Total Cost</div><div class="value orange" id="stat-cost">--</div></div>
       <div class="stat-card"><div class="label">Active Alerts</div><div class="value red" id="stat-alerts">--</div></div>
     </div>
+    <h3 style="margin-bottom:12px;font-size:14px;color:var(--text2)">Endpoint Health</h3>
+    <div id="endpointHealthCards" style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:20px"></div>
     <h3 style="margin-bottom:12px;font-size:14px;color:var(--text2)">Alert Severity Breakdown</h3>
     <div class="stats" id="severityRow"></div>
     <h3 style="margin:20px 0 12px;font-size:14px;color:var(--text2)">Model Usage</h3>
@@ -231,6 +243,26 @@ tr:hover td { background:var(--surface2); }
     document.getElementById('stat-tokens').textContent = formatTokens((data.total_input_tokens || 0) + (data.total_output_tokens || 0));
     document.getElementById('stat-cost').textContent = formatCost(data.total_cost);
     document.getElementById('stat-alerts').textContent = data.total_alerts || 0;
+
+    // Endpoint health cards
+    const epData = await apiFetch('/api/v1/fleet/endpoints');
+    const hcContainer = document.getElementById('endpointHealthCards');
+    if (epData && epData.length) {
+      hcContainer.innerHTML = epData.map(ep => {
+        const hb = ep.last_heartbeat;
+        const sec = hb ? Math.floor((Date.now() - new Date(hb).getTime()) / 1000) : 9999;
+        const dotColor = sec < 60 ? 'green' : sec < 300 ? 'yellow' : 'red';
+        return '<div class="health-card">'
+          + '<div class="hc-dot ' + dotColor + '"></div>'
+          + '<div class="hc-info">'
+          + '<div class="hc-name">' + escHtml(ep.hostname) + '</div>'
+          + '<div class="hc-meta">' + (ep.session_count || 0) + ' sessions &middot; '
+          + (ep.alert_count || 0) + ' alerts &middot; Last: ' + timeAgo(hb) + '</div>'
+          + '</div></div>';
+      }).join('');
+    } else {
+      hcContainer.innerHTML = '<span style="color:var(--text2)">No endpoints connected</span>';
+    }
 
     // Severity breakdown
     const sevRow = document.getElementById('severityRow');
