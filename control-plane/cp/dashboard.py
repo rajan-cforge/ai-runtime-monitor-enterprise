@@ -159,18 +159,38 @@ async def fleet_alerts(
     include_dismissed: bool = False,
 ):
     """Fleet alerts across all endpoints."""
-    query = """SELECT fa.*, e.hostname
-               FROM fleet_alerts fa
-               JOIN endpoints e ON fa.endpoint_id = e.endpoint_id
-               WHERE 1=1"""
+    # Base filter for both count and data queries
+    where = " WHERE 1=1"
     params: dict = {}
     if not include_dismissed:
-        query += " AND fa.dismissed = false"
+        where += " AND fa.dismissed = false"
     if severity:
-        query += " AND fa.severity = :sev"
+        where += " AND fa.severity = :sev"
         params["sev"] = severity
+
+    # Total count (for "Showing X of Y")
+    count_row = db.execute(
+        text("SELECT COUNT(*) FROM fleet_alerts fa" + where), params
+    ).fetchone()
+    total = count_row[0]
+
+    query = "SELECT fa.*, e.hostname FROM fleet_alerts fa JOIN endpoints e ON fa.endpoint_id = e.endpoint_id" + where
     query += " ORDER BY fa.timestamp DESC LIMIT :limit"
     params["limit"] = limit
 
     rows = db.execute(text(query), params).fetchall()
-    return [dict(r._mapping) for r in rows]
+    return {"total": total, "alerts": [dict(r._mapping) for r in rows]}
+
+
+@router.post("/api/v1/fleet/alerts/{alert_id}/dismiss")
+async def dismiss_alert(alert_id: int, db=Depends(get_db)):
+    """Dismiss a fleet alert."""
+    result = db.execute(
+        text("UPDATE fleet_alerts SET dismissed = true, dismissed_at = now() WHERE id = :aid AND dismissed = false"),
+        {"aid": alert_id},
+    )
+    db.commit()
+    if result.rowcount == 0:
+        from fastapi import HTTPException
+        raise HTTPException(404, "Alert not found or already dismissed")
+    return {"dismissed": True, "id": alert_id}

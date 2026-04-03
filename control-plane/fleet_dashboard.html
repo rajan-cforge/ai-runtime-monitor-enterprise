@@ -77,6 +77,11 @@ tr:hover td { background:var(--surface2); }
 .alert-meta .alert-detail { font-size:12px; color:var(--text2); }
 .alert-meta .alert-snippet { font-size:12px; color:var(--text2); font-family:'SF Mono',Monaco,monospace; margin-top:4px; background:var(--bg); padding:4px 8px; border-radius:4px; }
 .alert-time { font-size:11px; color:var(--text2); white-space:nowrap; }
+.alert-actions { display:flex; flex-direction:column; gap:4px; align-items:flex-end; }
+.btn-dismiss { background:var(--surface2); border:1px solid var(--border); border-radius:4px; padding:3px 10px; color:var(--text2); font-size:11px; cursor:pointer; }
+.btn-dismiss:hover { border-color:var(--red); color:var(--red); }
+.alert-snippet { cursor:pointer; max-height:20px; overflow:hidden; transition:max-height 0.2s; }
+.alert-snippet.expanded { max-height:300px; overflow:auto; }
 
 .model-list { display:flex; flex-wrap:wrap; gap:8px; margin-top:16px; }
 .model-chip { background:var(--surface); border:1px solid var(--border); border-radius:6px; padding:8px 14px; font-size:12px; }
@@ -146,6 +151,16 @@ tr:hover td { background:var(--surface2); }
 
   <!-- Alerts -->
   <div class="panel" id="panel-alerts">
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px">
+      <select id="alertSeverityFilter" style="background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:6px 10px;color:var(--text);font-size:13px">
+        <option value="">All Severities</option>
+        <option value="critical">Critical</option>
+        <option value="high">High</option>
+        <option value="medium">Medium</option>
+        <option value="low">Low</option>
+      </select>
+      <span id="alertsCount" style="font-size:12px;color:var(--text2)"></span>
+    </div>
     <div id="alertsList"></div>
   </div>
 </div>
@@ -330,25 +345,49 @@ tr:hover td { background:var(--surface2); }
   }
 
   async function loadAlerts() {
-    const data = await apiFetch('/api/v1/fleet/alerts?limit=100');
+    const severity = document.getElementById('alertSeverityFilter').value;
+    const url = '/api/v1/fleet/alerts?limit=100' + (severity ? '&severity=' + severity : '');
+    const resp = await apiFetch(url);
     const container = document.getElementById('alertsList');
-    if (!data || !data.length) {
+    const countEl = document.getElementById('alertsCount');
+    if (!resp || !resp.alerts || !resp.alerts.length) {
       container.innerHTML = '<div class="empty-state">No active alerts</div>';
+      countEl.textContent = resp ? 'Showing 0 of ' + (resp.total || 0) + ' alerts' : '';
       return;
     }
-    container.innerHTML = data.map(a => {
-      const patterns = (a.patterns || []).join(', ');
-      return '<div class="alert-row">'
+    const alerts = resp.alerts;
+    countEl.textContent = 'Showing ' + alerts.length + ' of ' + resp.total + ' alerts';
+    container.innerHTML = alerts.map(a => {
+      const patterns = Array.isArray(a.patterns) ? a.patterns.join(', ') : (a.patterns || '');
+      return '<div class="alert-row" id="alert-' + a.id + '">'
         + '<div>' + severityBadge(a.severity) + '</div>'
         + '<div class="alert-meta">'
           + '<div class="alert-title"><span class="badge badge-endpoint">' + escHtml(a.hostname || '') + '</span> ' + escHtml(patterns) + '</div>'
           + '<div class="alert-detail">Context: ' + escHtml(a.context || '') + (a.validated ? ' (validated)' : '') + '</div>'
-          + (a.snippet ? '<div class="alert-snippet">' + escHtml(a.snippet) + '</div>' : '')
+          + (a.snippet ? '<div class="alert-snippet" onclick="this.classList.toggle(\'expanded\')">' + escHtml(a.snippet) + '</div>' : '')
         + '</div>'
-        + '<div class="alert-time">' + timeAgo(a.timestamp) + '</div>'
+        + '<div class="alert-actions">'
+          + '<div class="alert-time">' + timeAgo(a.timestamp) + '</div>'
+          + '<button class="btn-dismiss" onclick="dismissAlert(' + a.id + ')">Dismiss</button>'
+        + '</div>'
         + '</div>';
     }).join('');
   }
+
+  // Severity filter change handler
+  document.getElementById('alertSeverityFilter').addEventListener('change', loadAlerts);
+
+  // Dismiss alert
+  window.dismissAlert = async function(id) {
+    try {
+      const resp = await fetch('/api/v1/fleet/alerts/' + id + '/dismiss', {method:'POST', headers:getHeaders()});
+      if (resp.ok) {
+        const el = document.getElementById('alert-' + id);
+        if (el) { el.style.opacity = '0.3'; el.style.pointerEvents = 'none'; }
+        setTimeout(loadAlerts, 500);
+      }
+    } catch(e) {}
+  };
 
   function loadTabData(tab) {
     if (tab === 'overview') loadStats();
