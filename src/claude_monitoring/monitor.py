@@ -1838,7 +1838,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
         for s in sessions:
             s["source"] = "cli"
 
-        # Batch-fetch alert counts per session
+        # Batch-fetch alert counts + severity breakdown per session for risk scoring
         session_ids = [s["session_id"] for s in sessions]
         if session_ids:
             placeholders = ",".join("?" * len(session_ids))
@@ -1847,8 +1847,29 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     GROUP BY session_id"""  # nosec B608
             alert_rows = db.execute(alert_sql, session_ids).fetchall()
             alert_map = {r["session_id"]: r["cnt"] for r in alert_rows}
+
+            # Severity breakdown for risk scoring
+            sev_sql = f"""SELECT session_id,
+                        json_extract(data_json, '$.severity') as sev, COUNT(*) as cnt
+                    FROM events
+                    WHERE event_type='sensitive_data' AND session_id IN ({placeholders})
+                    GROUP BY session_id, sev"""  # nosec B608
+            sev_rows = db.execute(sev_sql, session_ids).fetchall()
+            sev_map = {}  # session_id -> {critical: N, high: N, ...}
+            for r in sev_rows:
+                sid = r["session_id"]
+                if sid not in sev_map:
+                    sev_map[sid] = {"critical": 0, "high": 0, "medium": 0, "low": 0}
+                sev_map[sid][r["sev"] or "medium"] = r["cnt"]
+
+            risk_weights = {"critical": 10, "high": 5, "medium": 2, "low": 0.5}
             for s in sessions:
                 s["alert_count"] = alert_map.get(s["session_id"], 0)
+                sevs = sev_map.get(s["session_id"], {"critical": 0, "high": 0, "medium": 0, "low": 0})
+                s["alert_counts"] = sevs
+                score = sum(sevs.get(k, 0) * v for k, v in risk_weights.items())
+                s["risk_score"] = round(score, 1)
+                s["risk_level"] = "critical" if score >= 20 else "high" if score >= 10 else "medium" if score >= 3 else "low"
 
         # Optionally include browser sessions
         include_browser = params.get("include_browser", ["false"])[0].lower() == "true"
