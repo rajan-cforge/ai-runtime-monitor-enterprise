@@ -23,7 +23,7 @@ dependencies = ["psutil>=5.9.0", "watchdog>=3.0"]
 watch = ["mitmproxy>=10.0"]
 plot = ["matplotlib>=3.5"]
 all = ["mitmproxy>=10.0", "matplotlib>=3.5"]
-dev = ["pytest>=7.0", "pytest-cov>=4.0", "ruff>=0.4.0"]
+dev = ["pytest>=7.0", "pytest-cov>=4.0", "ruff>=0.4.0", "bandit>=1.7", "pip-audit>=2.7"]
 
 [project.urls]
 Homepage = "https://github.com/rajan-cforge/ai-runtime-monitor"
@@ -54,3 +54,7 @@ ignore = ["E501"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-v --tb=short"
+
+[tool.bandit]
+exclude_dirs = ["tests"]
+skips = ["B101", "B404", "B603", "B607"]

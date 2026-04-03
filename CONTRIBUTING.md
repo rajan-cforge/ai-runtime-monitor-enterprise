@@ -83,6 +83,31 @@ src/claude_monitoring/
 - SQLite with WAL mode for concurrent read/write from scanner threads
 - Zero external runtime dependencies beyond `psutil` and `watchdog`
 
+## Security Rules
+
+All contributions must follow these security requirements:
+
+### Code Rules
+- **SQL:** Parameterized queries only (`?` placeholders). No f-strings in SQL statements.
+- **User input:** Validate type, length, and format before use.
+- **No dangerous functions:** No `eval()`, `exec()`, or `pickle.loads()` with untrusted data.
+- **File paths:** Use `pathlib.Path` and `Path.home()`. No hardcoded absolute paths.
+- **HTTP server:** Check Content-Type on POST requests. Validate JSON schema.
+- **External data:** Treat JSONL files, Chrome DB, and proxy traffic as untrusted input.
+- **Secrets:** Never log secret values. Never include in error responses. Always mask in output.
+- **Error handling:** Never expose stack traces or internal paths to API consumers.
+
+### PR Security Checklist
+Before submitting a PR, verify:
+- [ ] No hardcoded paths (grep for `/Users/`)
+- [ ] All SQL uses `?` parameterized placeholders
+- [ ] No `eval()`, `exec()`, `pickle.loads()` with external data
+- [ ] New API endpoints validate input and check Content-Type
+- [ ] Sensitive data is masked in any new log/output statements
+- [ ] Tests cover error/edge cases, not just happy paths
+- [ ] `make lint` passes
+- [ ] `make test` passes
+
 ## Pull Request Guidelines
 
 - Keep PRs focused — one feature or fix per PR
