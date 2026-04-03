@@ -215,7 +215,16 @@ def _setup_test_db(tmp_path):
     # Second session for insights testing
     conn.execute(
         "INSERT INTO sessions (session_id, start_time, cwd, model, total_turns, total_input_tokens, total_output_tokens, last_activity) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        ("test-sess-2", "2026-01-01T01:00:00Z", "/home/user/project-b", "claude-opus-4", 10, 5000, 2500, "2026-01-01T02:00:00Z"),
+        (
+            "test-sess-2",
+            "2026-01-01T01:00:00Z",
+            "/home/user/project-b",
+            "claude-opus-4",
+            10,
+            5000,
+            2500,
+            "2026-01-01T02:00:00Z",
+        ),
     )
     conn.execute(
         "INSERT INTO events (timestamp, session_id, event_type, source_layer, data_json) VALUES (?, ?, ?, ?, ?)",
@@ -233,7 +242,13 @@ def _setup_test_db(tmp_path):
     )
     conn.execute(
         "INSERT INTO events (timestamp, session_id, event_type, source_layer, data_json) VALUES (?, ?, ?, ?, ?)",
-        ("2026-01-01T01:01:00Z", "test-sess-2", "tool_use", "network", '{"name":"Read","input_preview":"/src/main.py"}'),
+        (
+            "2026-01-01T01:01:00Z",
+            "test-sess-2",
+            "tool_use",
+            "network",
+            '{"name":"Read","input_preview":"/src/main.py"}',
+        ),
     )
     conn.commit()
     conn.close()

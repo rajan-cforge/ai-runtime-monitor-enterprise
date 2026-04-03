@@ -14,13 +14,15 @@ from claude_monitoring.constants import (
 )
 
 
-def scan_sensitive(text, names_only=False):
+def scan_sensitive(text, names_only=False, validate=True):
     """Scan text for sensitive data patterns.
 
     Args:
         text: Text to scan. Truncated to 50K chars for performance.
         names_only: If True, return list of pattern name strings (watch.py compat).
                     If False, return list of dicts with name/severity/category.
+        validate: If True (default), run validators to reduce false positives.
+                  Only matches with confidence "high" or "medium" are returned.
 
     Returns:
         List of matches (dicts or strings depending on names_only).
@@ -28,21 +30,41 @@ def scan_sensitive(text, names_only=False):
     if not text:
         return []
     scan_text = text[:50000] if len(text) > 50000 else text
+
+    if validate:
+        from claude_monitoring.validators import VALIDATORS
+    else:
+        VALIDATORS = None
+
     found = []
     for name, info in SENSITIVE_PATTERNS.items():
         pattern = info["pattern"]
         try:
-            if re.search(pattern, scan_text):
-                if names_only:
-                    found.append(name)
-                else:
-                    found.append(
-                        {
-                            "name": name,
-                            "severity": info["severity"],
-                            "category": info["category"],
-                        }
-                    )
+            match = re.search(pattern, scan_text)
+            if not match:
+                continue
+
+            # Run validator if available and validation is enabled
+            if VALIDATORS and name in VALIDATORS:
+                validator = VALIDATORS[name]
+                match_text = match.group(0)
+                result = validator(match_text, scan_text)
+                if not result.get("valid", False):
+                    continue
+                if result.get("confidence") not in ("high", "medium"):
+                    continue
+
+            if names_only:
+                found.append(name)
+            else:
+                entry = {
+                    "name": name,
+                    "severity": info["severity"],
+                    "category": info["category"],
+                }
+                if VALIDATORS and name in VALIDATORS:
+                    entry["validated"] = True
+                found.append(entry)
         except re.error:
             continue
     return found

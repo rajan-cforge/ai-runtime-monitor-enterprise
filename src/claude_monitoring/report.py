@@ -131,63 +131,69 @@ def _render_markdown(stats: dict, period_days: int) -> str:
     ]
 
     if stats["models"]:
-        lines.extend([
-            "## Models",
-            "",
-            "| Model | Sessions | Input Tokens | Output Tokens |",
-            "|-------|----------|--------------|---------------|",
-        ])
+        lines.extend(
+            [
+                "## Models",
+                "",
+                "| Model | Sessions | Input Tokens | Output Tokens |",
+                "|-------|----------|--------------|---------------|",
+            ]
+        )
         for m in stats["models"]:
-            lines.append(
-                f"| {m['model']} | {m['sessions']} | {m['input_tokens']:,} | {m['output_tokens']:,} |"
-            )
+            lines.append(f"| {m['model']} | {m['sessions']} | {m['input_tokens']:,} | {m['output_tokens']:,} |")
         lines.append("")
 
     if stats["tools"]:
-        lines.extend([
-            "## Top Tools",
-            "",
-            "| Tool | Calls |",
-            "|------|-------|",
-        ])
+        lines.extend(
+            [
+                "## Top Tools",
+                "",
+                "| Tool | Calls |",
+                "|------|-------|",
+            ]
+        )
         for t in stats["tools"]:
             lines.append(f"| {t['tool']} | {t['cnt']} |")
         lines.append("")
 
     if stats["projects"]:
-        lines.extend([
-            "## Projects",
-            "",
-            "| Project | Sessions | Turns |",
-            "|---------|----------|-------|",
-        ])
+        lines.extend(
+            [
+                "## Projects",
+                "",
+                "| Project | Sessions | Turns |",
+                "|---------|----------|-------|",
+            ]
+        )
         for p in stats["projects"]:
             proj_name = Path(p["cwd"]).name if p["cwd"] else "unknown"
             lines.append(f"| {proj_name} | {p['sessions']} | {p['turns']} |")
         lines.append("")
 
     if stats["alerts"]:
-        lines.extend([
-            "## Alerts",
-            "",
-            "| Severity | Count |",
-            "|----------|-------|",
-        ])
+        lines.extend(
+            [
+                "## Alerts",
+                "",
+                "| Severity | Count |",
+                "|----------|-------|",
+            ]
+        )
         for a in stats["alerts"]:
             lines.append(f"| {a['severity']} | {a['cnt']} |")
         lines.append("")
 
     if stats["daily"]:
-        lines.extend([
-            "## Daily Breakdown",
-            "",
-            "| Day | Input Tokens | Output Tokens |",
-            "|-----|--------------|---------------|",
-        ])
+        lines.extend(
+            [
+                "## Daily Breakdown",
+                "",
+                "| Day | Input Tokens | Output Tokens |",
+                "|-----|--------------|---------------|",
+            ]
+        )
         for d in stats["daily"]:
-            lines.append(
-                f"| {d['day']} | {int(d['input_tokens'] or 0):,} | {int(d['output_tokens'] or 0):,} |"
-            )
+            lines.append(f"| {d['day']} | {int(d['input_tokens'] or 0):,} | {int(d['output_tokens'] or 0):,} |")
         lines.append("")
 
     return "\n".join(lines)
@@ -252,13 +258,13 @@ def _render_standalone_html(stats: dict, period_days: int) -> str:
 </head>
 <body>
 <h1>AI Runtime Monitor Report</h1>
-<p style="color:#8b949e">Period: {period_days} days | Generated: {stats['generated_at']}</p>
+<p style="color:#8b949e">Period: {period_days} days | Generated: {stats["generated_at"]}</p>
 
 <div class="stats">
-  <div class="stat"><div class="label">Sessions</div><div class="value blue">{s['count']}</div></div>
-  <div class="stat"><div class="label">Total Turns</div><div class="value">{s['turns']}</div></div>
-  <div class="stat"><div class="label">Input Tokens</div><div class="value">{s['input_tokens']:,}</div></div>
-  <div class="stat"><div class="label">Output Tokens</div><div class="value">{s['output_tokens']:,}</div></div>
+  <div class="stat"><div class="label">Sessions</div><div class="value blue">{s["count"]}</div></div>
+  <div class="stat"><div class="label">Total Turns</div><div class="value">{s["turns"]}</div></div>
+  <div class="stat"><div class="label">Input Tokens</div><div class="value">{s["input_tokens"]:,}</div></div>
+  <div class="stat"><div class="label">Output Tokens</div><div class="value">{s["output_tokens"]:,}</div></div>
   <div class="stat"><div class="label">Alerts</div><div class="value red">{total_alerts}</div></div>
 </div>
 
@@ -296,7 +302,7 @@ const colors = ['#58a6ff','#3fb950','#d29922','#f85149','#bc8cff','#39d2c0','#f0
 new Chart(document.getElementById('chart-tools'), {{
   type:'bar', data:{{
     labels:{tool_labels},
-    datasets:[{{label:'Calls',data:{tool_counts},backgroundColor:colors.slice(0,{len(stats['tools'][:10])})}}]
+    datasets:[{{label:'Calls',data:{tool_counts},backgroundColor:colors.slice(0,{len(stats["tools"][:10])})}}]
   }}, options:{{...chartOpts,indexAxis:'y'}}
 }});
 </script>

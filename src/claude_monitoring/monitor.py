@@ -76,6 +76,7 @@ from claude_monitoring.utils import _is_known_example, is_ai_process, now_iso, s
 # Module-level path aliases (for backward compat with tests that patch these)
 DASHBOARD_PORT = get_dashboard_port()
 CLAUDE_PROJECTS_DIR = Path.home() / ".claude" / "projects"
+OPENCLAW_SESSIONS_DIR = Path.home() / ".openclaw" / "agents" / "main" / "sessions"
 OUTPUT_DIR = get_output_dir()
 DB_PATH = get_db_path()
 SCRIPT_PATH = Path(__file__).resolve()
@@ -267,6 +268,7 @@ class JSONLSessionWatcher:
     def _ensure_session(self, session_id, jsonl_path, cwd=None, start_time=None):
         """Create or update session record."""
         try:
+            # Pass None instead of empty string so COALESCE preserves existing values
             self.db.execute(
                 """INSERT INTO sessions (session_id, start_time, cwd, jsonl_path, last_activity)
                    VALUES (?, ?, ?, ?, ?)
@@ -274,7 +276,7 @@ class JSONLSessionWatcher:
                      last_activity=excluded.last_activity,
                      cwd=COALESCE(excluded.cwd, sessions.cwd),
                      jsonl_path=COALESCE(excluded.jsonl_path, sessions.jsonl_path)""",
-                (session_id, start_time or now_iso(), cwd, str(jsonl_path), now_iso()),
+                (session_id, start_time or now_iso(), cwd or None, str(jsonl_path), now_iso()),
             )
             self.db.commit()
         except Exception:
@@ -396,6 +398,17 @@ class JSONLSessionWatcher:
             except Exception:
                 pass
 
+    def _session_id_from_path(self, jsonl_path):
+        """Extract session ID from JSONL filename (for OpenClaw files without sessionId)."""
+        try:
+            stem = Path(jsonl_path).stem
+            # OpenClaw filenames are UUIDs: 50a4dd45-d84b-4d63-a613-b7937e30874f.jsonl
+            if len(stem) == 36 and stem.count("-") == 4:
+                return stem
+        except Exception:
+            pass
+        return ""
+
     def _process_record(self, record, jsonl_path):
         """Process a single JSONL record."""
         try:
@@ -411,7 +424,27 @@ class JSONLSessionWatcher:
             timestamp = record.get("timestamp", now_iso())
             cwd = record.get("cwd", "")
 
+            # OpenClaw: type:"session" records store session ID in "id" field;
+            # type:"message" records also have "id" but it's a short *message* ID,
+            # not the session ID. For non-session records, derive from filename.
             if not session_id:
+                if rec_type == "session":
+                    session_id = record.get("id", "")
+                if not session_id:
+                    session_id = self._session_id_from_path(jsonl_path)
+            if not session_id:
+                return
+
+            # Handle OpenClaw type:"session" — initializes the session record
+            if rec_type == "session":
+                self._ensure_session(session_id, jsonl_path, cwd=cwd, start_time=timestamp)
+                return
+
+            # Handle OpenClaw type:"model_change" — sets the model on the session
+            if rec_type == "model_change":
+                model_id = record.get("modelId", "")
+                if model_id:
+                    self._update_session_stats(session_id, model=model_id)
                 return
 
             self._ensure_session(session_id, jsonl_path, cwd=cwd, start_time=timestamp)
@@ -420,6 +453,20 @@ class JSONLSessionWatcher:
             if cwd:
                 with active_cwds_lock:
                     active_session_cwds.add(cwd)
+
+            # OpenClaw uses type:"message" with a role field instead of type:"user"/"assistant"
+            if rec_type == "message":
+                role = record.get("role", record.get("message", {}).get("role", ""))
+                if role == "user":
+                    record = self._normalize_openclaw_record(record, "user")
+                    self._process_user_message(record, session_id, timestamp)
+                elif role == "assistant":
+                    record = self._normalize_openclaw_record(record, "assistant")
+                    self._process_assistant_message(record, session_id, timestamp)
+                elif role == "toolResult":
+                    record = self._normalize_openclaw_tool_result(record, session_id)
+                    self._process_user_message(record, session_id, timestamp)
+                return
 
             if rec_type == "user":
                 self._process_user_message(record, session_id, timestamp)
@@ -434,20 +481,135 @@ class JSONLSessionWatcher:
         except Exception:
             pass  # Never crash on a single malformed record
 
+    @staticmethod
+    def _normalize_openclaw_record(record, role):
+        """Normalize OpenClaw JSONL fields to Claude Code format.
+
+        Handles differences:
+        - toolCall → tool_use in content blocks
+        - toolResult → tool_result in content blocks
+        - stopReason → stop_reason
+        - usage.cacheRead → usage.cache_read_input_tokens
+        - usage.cacheWrite → usage.cache_creation_input_tokens
+        """
+        message = record.get("message", {})
+
+        # Normalize stop reason
+        if "stopReason" in message and "stop_reason" not in message:
+            message["stop_reason"] = message["stopReason"]
+
+        # Normalize usage fields
+        usage = message.get("usage", {})
+        if usage:
+            if "cacheRead" in usage and "cache_read_input_tokens" not in usage:
+                usage["cache_read_input_tokens"] = usage["cacheRead"]
+            if "cacheWrite" in usage and "cache_creation_input_tokens" not in usage:
+                usage["cache_creation_input_tokens"] = usage["cacheWrite"]
+            if "input" in usage and "input_tokens" not in usage:
+                usage["input_tokens"] = usage["input"]
+            if "output" in usage and "output_tokens" not in usage:
+                usage["output_tokens"] = usage["output"]
+
+        # Normalize content block types
+        content = message.get("content", [])
+        if isinstance(content, list):
+            for block in content:
+                if not isinstance(block, dict):
+                    continue
+                btype = block.get("type", "")
+                if btype == "toolCall":
+                    block["type"] = "tool_use"
+                    # OpenClaw uses "arguments" where Claude Code uses "input"
+                    if "arguments" in block and "input" not in block:
+                        block["input"] = block["arguments"]
+                elif btype == "toolResult":
+                    block["type"] = "tool_result"
+                    if "toolUseId" in block and "tool_use_id" not in block:
+                        block["tool_use_id"] = block["toolUseId"]
+
+        record["message"] = message
+        return record
+
+    @staticmethod
+    def _normalize_openclaw_tool_result(record, session_id):
+        """Normalize an OpenClaw toolResult record into a user message with tool_result content.
+
+        OpenClaw format:
+          {"type":"message","message":{"role":"toolResult","toolCallId":"toolu_01...","toolName":"search","content":"..."}}
+        Claude Code format (what _process_user_message expects):
+          {"message":{"content":[{"type":"tool_result","tool_use_id":"toolu_01...","content":"..."}]}}
+        """
+        msg = record.get("message", {})
+        tool_result_block = {
+            "type": "tool_result",
+            "tool_use_id": msg.get("toolCallId", msg.get("tool_use_id", "")),
+            "content": msg.get("content", ""),
+            "is_error": msg.get("isError", False),
+        }
+        return {"message": {"content": [tool_result_block]}}
+
+    @staticmethod
+    def _extract_openclaw_user_text(text):
+        """Strip OpenClaw metadata wrappers from user prompt text.
+
+        OpenClaw wraps prompts with Conversation/Sender metadata blocks:
+          Conversation info (untrusted metadata):
+          ```json
+          {"message_id": "4", "sender": "Aj K", ...}
+          ```
+          Sender (untrusted metadata):
+          ```json
+          {...}
+          ```
+
+          actual user message here
+
+        Returns (cleaned_text, source_hint) where source_hint is e.g. "Telegram".
+        """
+        source_hint = ""
+        if "untrusted metadata" not in text:
+            return text, source_hint
+
+        # Detect integration source from metadata
+        if "sender_id" in text and "message_id" in text:
+            source_hint = "Telegram"
+
+        # The actual user text follows the last ``` + blank line
+        # Split on the closing ``` markers and take the last segment
+        parts = text.split("```")
+        if len(parts) >= 5:  # At least 2 fenced blocks (open/close pairs) + trailing text
+            user_text = parts[-1].strip()
+            if user_text:
+                return user_text, source_hint
+
+        return text, source_hint
+
     def _set_session_title(self, session_id, text):
         """Set session title from first user message if not already set."""
         try:
             row = self.db.execute(
-                "SELECT title, total_turns FROM sessions WHERE session_id=?", (session_id,)
+                "SELECT title, total_turns, cwd FROM sessions WHERE session_id=?", (session_id,)
             ).fetchone()
             if row and not row[0] and (row[1] or 0) <= 1:
+                cwd = row[2] or ""
+                is_openclaw = ".openclaw" in cwd
+
+                if is_openclaw:
+                    clean_text, source_hint = self._extract_openclaw_user_text(text)
+                    if source_hint:
+                        title = f"OpenClaw \u00b7 {source_hint}: {clean_text}"
+                    else:
+                        title = f"OpenClaw: {clean_text}"
+                else:
+                    title = text
+
                 # Truncate at word boundary around 100 chars
-                title = text[:120]
-                if len(text) > 120:
-                    last_space = title.rfind(" ")
+                if len(title) > 120:
+                    truncated = title[:120]
+                    last_space = truncated.rfind(" ")
                     if last_space > 60:
-                        title = title[:last_space]
-                    title = title.rstrip() + "..."
+                        truncated = truncated[:last_space]
+                    title = truncated.rstrip() + "..."
                 self.db.execute("UPDATE sessions SET title=? WHERE session_id=?", (title, session_id))
                 self.db.commit()
         except Exception:
@@ -637,9 +799,7 @@ class JSONLSessionWatcher:
                     "stop_reason": stop_reason,
                 },
             )
-            self._update_session_stats(
-                session_id, model=model, input_tokens=input_tokens, output_tokens=output_tokens
-            )
+            self._update_session_stats(session_id, model=model, input_tokens=input_tokens, output_tokens=output_tokens)
 
     def _process_progress(self, record, session_id, timestamp):
         """Process a progress record."""
@@ -668,6 +828,18 @@ class JSONLSessionWatcher:
             return
         # Filter out known example secrets
         matches = [m for m in matches if not _is_known_example(m["name"], text)]
+        if not matches:
+            return
+        # Filter out phone_number false positives from OpenClaw Telegram metadata
+        # (sender_id is a Telegram user ID like "7465847486", not a phone number)
+        if "sender_id" in text or "message_id" in text:
+            matches = [m for m in matches if m["name"] != "phone_number"]
+        if not matches:
+            return
+        # Filter out credit_card false positives in API metadata
+        # (long numeric strings in token counts, request IDs, response IDs)
+        if any(kw in text for kw in ("input_tokens", "anthropic", "responseId", "cache_read")):
+            matches = [m for m in matches if m["name"] != "credit_card"]
         if not matches:
             return
         # Find highest severity
@@ -712,9 +884,18 @@ class JSONLSessionWatcher:
         elif context == "assistant_response":
             # Assistant discussing security findings or analyzing code
             analysis_indicators = [
-                "found", "detected", "contains", "appears to",
-                "security", "credential", "vulnerability", "leaked",
-                "should not", "remove", "rotate", "revoke",
+                "found",
+                "detected",
+                "contains",
+                "appears to",
+                "security",
+                "credential",
+                "vulnerability",
+                "leaked",
+                "should not",
+                "remove",
+                "rotate",
+                "revoke",
             ]
             if any(indicator in text_lower for indicator in analysis_indicators):
                 if severity in ("critical", "high"):
@@ -1328,8 +1509,13 @@ class DashboardHandler(BaseHTTPRequestHandler):
         if handler:
             try:
                 handler(params)
+            except BrokenPipeError:
+                pass  # Client disconnected, nothing to do
             except Exception as e:
-                self._send_json({"error": str(e)}, 500)
+                try:
+                    self._send_json({"error": str(e)}, 500)
+                except BrokenPipeError:
+                    pass
         else:
             self._send_json({"error": "not found", "path": path}, 404)
 
@@ -2341,7 +2527,6 @@ class DashboardHandler(BaseHTTPRequestHandler):
             }
         )
 
-
     # ── MCP endpoints ────────────────────────────────────────────
 
     def _api_mcp_stats(self, params):
@@ -2379,13 +2564,15 @@ class DashboardHandler(BaseHTTPRequestHandler):
             servers[server]["sessions"].add(r["session_id"])
 
             if len(recent_calls) < limit:
-                recent_calls.append({
-                    "timestamp": r["timestamp"],
-                    "session_id": r["session_id"],
-                    "server": server,
-                    "method": method,
-                    "input_preview": data.get("input_preview", ""),
-                })
+                recent_calls.append(
+                    {
+                        "timestamp": r["timestamp"],
+                        "session_id": r["session_id"],
+                        "server": server,
+                        "method": method,
+                        "input_preview": data.get("input_preview", ""),
+                    }
+                )
 
         # Also scan tool_use events for mcp__ prefix (for data captured before mcp_call was added)
         fallback_rows = db.execute(
@@ -2420,29 +2607,31 @@ class DashboardHandler(BaseHTTPRequestHandler):
         # Convert sets to lists for JSON
         server_list = []
         for s in sorted(servers.values(), key=lambda x: -x["call_count"]):
-            server_list.append({
-                "server": s["server"],
-                "call_count": s["call_count"],
-                "methods": sorted(s["methods"]),
-                "session_count": len(s["sessions"]),
-            })
+            server_list.append(
+                {
+                    "server": s["server"],
+                    "call_count": s["call_count"],
+                    "methods": sorted(s["methods"]),
+                    "session_count": len(s["sessions"]),
+                }
+            )
 
-        self._send_json({
-            "servers": server_list,
-            "total_calls": sum(s["call_count"] for s in server_list),
-            "total_servers": len(server_list),
-            "total_sessions": len(session_ids),
-            "recent_calls": recent_calls,
-        })
+        self._send_json(
+            {
+                "servers": server_list,
+                "total_calls": sum(s["call_count"] for s in server_list),
+                "total_servers": len(server_list),
+                "total_sessions": len(session_ids),
+                "recent_calls": recent_calls,
+            }
+        )
 
     def _api_mcp_servers(self, params):
         """List distinct MCP servers and their discovered methods."""
         db = get_thread_db()
 
         # From mcp_call events
-        rows = db.execute(
-            """SELECT data_json FROM events WHERE event_type = 'mcp_call'"""
-        ).fetchall()
+        rows = db.execute("""SELECT data_json FROM events WHERE event_type = 'mcp_call'""").fetchall()
 
         # Also from tool_use events with mcp__ prefix
         fallback_rows = db.execute(
@@ -2482,11 +2671,13 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
         result = []
         for s in sorted(servers.values(), key=lambda x: -x["call_count"]):
-            result.append({
-                "server": s["server"],
-                "methods": sorted(s["methods"]),
-                "call_count": s["call_count"],
-            })
+            result.append(
+                {
+                    "server": s["server"],
+                    "methods": sorted(s["methods"]),
+                    "call_count": s["call_count"],
+                }
+            )
 
         self._send_json({"servers": result, "total": len(result)})
 
@@ -2569,21 +2760,23 @@ class DashboardHandler(BaseHTTPRequestHandler):
             bind,
         ).fetchall()
 
-        self._send_json({
-            "period": period,
-            "days": days,
-            "total_sessions": total_sessions,
-            "efficiency": {
-                "avg_turns_per_session": round(avg_turns, 1),
-                "avg_tokens_per_turn": round(avg_tokens_per_turn, 0),
-            },
-            "top_tools": [{"tool": t["tool"], "count": t["cnt"]} for t in top_tools],
-            "top_files": [{"file": f["file_path"], "count": f["cnt"]} for f in top_files],
-            "projects": [dict(p) for p in projects],
-            "daily_trend": [dict(d) for d in daily_trend],
-            "models": [dict(m) for m in models],
-            "total_projects": len(projects),
-        })
+        self._send_json(
+            {
+                "period": period,
+                "days": days,
+                "total_sessions": total_sessions,
+                "efficiency": {
+                    "avg_turns_per_session": round(avg_turns, 1),
+                    "avg_tokens_per_turn": round(avg_tokens_per_turn, 0),
+                },
+                "top_tools": [{"tool": t["tool"], "count": t["cnt"]} for t in top_tools],
+                "top_files": [{"file": f["file_path"], "count": f["cnt"]} for f in top_files],
+                "projects": [dict(p) for p in projects],
+                "daily_trend": [dict(d) for d in daily_trend],
+                "models": [dict(m) for m in models],
+                "total_projects": len(projects),
+            }
+        )
 
     def _api_insights_projects(self, params):
         """Per-project drill-down with sessions list and daily breakdown."""
@@ -2615,12 +2808,14 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 session_ids,
             ).fetchall()
 
-        self._send_json({
-            "cwd": cwd,
-            "sessions": [dict(s) for s in sessions],
-            "total_sessions": len(sessions),
-            "daily": [dict(d) for d in daily],
-        })
+        self._send_json(
+            {
+                "cwd": cwd,
+                "sessions": [dict(s) for s in sessions],
+                "total_sessions": len(sessions),
+                "daily": [dict(d) for d in daily],
+            }
+        )
 
     def _api_insights_efficiency(self, params):
         """Session comparison table with computed efficiency columns."""
@@ -2645,10 +2840,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
         for s in sessions:
             turns = s["total_turns"] or 1
             total_tokens = (s["total_input_tokens"] or 0) + (s["total_output_tokens"] or 0)
-            result.append({
-                **dict(s),
-                "tokens_per_turn": round(total_tokens / turns, 0),
-            })
+            result.append(
+                {
+                    **dict(s),
+                    "tokens_per_turn": round(total_tokens / turns, 0),
+                }
+            )
 
         self._send_json({"sessions": result, "total": len(result), "period": period})
 
@@ -2725,16 +2922,16 @@ DASHBOARD_HTML = _load_dashboard_html()
 
 def backfill_existing_sessions(watcher):
     """Scan existing JSONL files and backfill the database."""
-    if not CLAUDE_PROJECTS_DIR.exists():
-        return 0
-
     count = 0
-    for jsonl_file in CLAUDE_PROJECTS_DIR.rglob("*.jsonl"):
-        try:
-            watcher.process_jsonl_file(str(jsonl_file))
-            count += 1
-        except Exception:
+    for sessions_dir in (CLAUDE_PROJECTS_DIR, OPENCLAW_SESSIONS_DIR):
+        if not sessions_dir.exists():
             continue
+        for jsonl_file in sessions_dir.rglob("*.jsonl"):
+            try:
+                watcher.process_jsonl_file(str(jsonl_file))
+                count += 1
+            except Exception:
+                continue
     return count
 
 
@@ -2786,6 +2983,12 @@ def start_monitoring():
     else:
         print(f"  WARNING: {CLAUDE_PROJECTS_DIR} not found — will retry on first activity")
 
+    if OPENCLAW_SESSIONS_DIR.exists():
+        jsonl_observer.schedule(jsonl_handler, str(OPENCLAW_SESSIONS_DIR), recursive=True)
+        print(f"  Watching JSONL: {OPENCLAW_SESSIONS_DIR}")
+    else:
+        print("  OpenClaw sessions dir not found — will watch if created")
+
     # Backfill existing sessions in background
     def _backfill():
         n = backfill_existing_sessions(jsonl_watcher)
@@ -2833,6 +3036,15 @@ def start_monitoring():
     # Web Dashboard
     class ReusableHTTPServer(HTTPServer):
         allow_reuse_address = True
+
+        def handle_error(self, request, client_address):
+            """Suppress BrokenPipeError tracebacks from disconnected clients."""
+            import sys
+
+            exc_type = sys.exc_info()[0]
+            if exc_type is BrokenPipeError:
+                return
+            super().handle_error(request, client_address)
 
     server = ReusableHTTPServer((get_bind_address(), DASHBOARD_PORT), DashboardHandler)
     server_thread = threading.Thread(target=server.serve_forever, daemon=True, name="Dashboard")
