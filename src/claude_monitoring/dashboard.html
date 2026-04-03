@@ -568,6 +568,13 @@ var AGENT_LABELS = {
   copilot:'Copilot', gemini:'Gemini', perplexity:'Perplexity',
   unknown:'Unknown'
 };
+var TOOL_RISK_COLORS = {critical:'var(--red)', high:'var(--orange)', medium:'var(--yellow)', low:'var(--green)'};
+function toolRiskColor(toolName) {
+  var riskMap = {Bash:'critical',exec:'critical',Write:'high',write:'high',Edit:'high',edit:'high',
+    Read:'medium',read:'medium',WebFetch:'medium',web_fetch:'medium',Agent:'high',sessions_spawn:'high',
+    WebSearch:'low',web_search:'low',Glob:'low',Grep:'low',memory_search:'low'};
+  return TOOL_RISK_COLORS[riskMap[toolName]] || 'var(--orange)';
+}
 function agentBadge(agentType) {
   if (!agentType || agentType === 'unknown') return '';
   var color = AGENT_COLORS[agentType] || AGENT_COLORS.unknown;
@@ -707,8 +714,11 @@ async function loadSessionDetail(id) {
       + (proj ? ' &middot; '+esc(proj) : '')
       + '</div></div>'
       + '<div style="display:flex;gap:12px;align-items:center">'
+      + agentBadge(s.agent_type)
+      + (d.channel ? '<span class="badge" style="background:var(--surface2);color:var(--cyan);margin:0 4px">'+esc(d.channel)+'</span>' : '')
       + '<span style="font-size:12px;color:var(--text2)">'
-      + s.total_turns+' turns &middot; '+fmtNum(s.total_input_tokens||0)+' tokens</span>'
+      + s.total_turns+' turns &middot; '+fmtNum(s.total_input_tokens||0)+' tokens'
+      + (d.total_cost > 0 ? ' &middot; $'+d.total_cost.toFixed(4) : '')+'</span>'
       + '<button onclick="openDeepDive(\'' + s.session_id + '\')" style="background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:4px 10px;color:var(--blue);font-size:12px;cursor:pointer;font-weight:600">&#x1f52c; Deep Dive</button>'
       + '</div></div>';
 
@@ -1434,7 +1444,7 @@ function renderContextPanel(turn) {
 
   if (turn.tools_used.length) {
     html += '<h4>Tools Used</h4>'
-      + turn.tools_used.map(function(t) { return '<span class="badge" style="background:var(--surface2);color:var(--orange);margin:2px">' + esc(t) + '</span>'; }).join('');
+      + turn.tools_used.map(function(t) { return '<span class="badge" style="background:var(--surface2);color:' + toolRiskColor(t) + ';margin:2px">' + esc(t) + '</span>'; }).join('');
   }
 
   if (turn.has_alert) {

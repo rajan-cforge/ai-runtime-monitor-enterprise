@@ -2249,3 +2249,46 @@ class TestAgentTypeDetection:
         row = db.execute("SELECT agent_type FROM sessions WHERE session_id = 'cc-agent-test'").fetchone()
         assert row is not None
         assert row[0] == "claude_code"
+
+
+# ---------------------------------------------------------------------------
+# OpenClaw Session Details (Item 4)
+# ---------------------------------------------------------------------------
+
+
+class TestOpenClawSessionDetails:
+    def test_detect_openclaw_channel_telegram(self, watcher):
+        """Telegram metadata in user prompt -> channel 'Telegram'."""
+        text = 'Conversation info (untrusted metadata):\n```json\n{"message_id": "4", "sender_id": "123"}\n```\n\nhello'
+        assert watcher._detect_openclaw_channel(text) == "Telegram"
+
+    def test_detect_openclaw_channel_none(self, watcher):
+        """Plain text with no metadata -> channel None."""
+        assert watcher._detect_openclaw_channel("hello world") is None
+
+    def test_tool_risk_mapping(self):
+        """TOOL_RISK_MAP returns correct risk levels."""
+        from claude_monitoring.constants import TOOL_RISK_MAP
+
+        assert TOOL_RISK_MAP["Bash"] == ("critical", "Shell command execution")
+        assert TOOL_RISK_MAP["Write"] == ("high", "File creation/overwrite")
+        assert TOOL_RISK_MAP["Read"] == ("medium", "File read access")
+        assert TOOL_RISK_MAP["WebSearch"] == ("low", "Search query")
+        assert TOOL_RISK_MAP["Agent"] == ("high", "Sub-agent spawning")
+
+    def test_openclaw_session_cost_accumulation(self, watcher, db, tmp_path):
+        """Processing multiple OpenClaw assistant messages accumulates cost."""
+        import sqlite3
+
+        db.row_factory = sqlite3.Row
+        path = str(tmp_path / f"{OPENCLAW_SESSION_ID}.jsonl")
+        watcher._process_record(OPENCLAW_JSONL_LINES[0], path)  # session
+        watcher._process_record(OPENCLAW_JSONL_LINES[3], path)  # assistant 1
+        watcher._process_record(OPENCLAW_JSONL_LINES[5], path)  # assistant 2
+
+        rows = db.execute(
+            "SELECT SUM(estimated_cost_usd) as total_cost FROM api_calls WHERE session_id = ?",
+            (OPENCLAW_SESSION_ID,),
+        ).fetchone()
+        assert rows["total_cost"] > 0
+        db.row_factory = None

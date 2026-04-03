@@ -67,6 +67,7 @@ from claude_monitoring.constants import (
     PLAN_LIMITS,
     SERVICE_CLASSIFICATION,
     SEVERITY_ORDER,
+    TOOL_RISK_MAP,
 )
 from claude_monitoring.db import get_thread_db, init_db
 from claude_monitoring.utils import _is_known_example, is_ai_process, now_iso, scan_sensitive
@@ -596,6 +597,22 @@ class JSONLSessionWatcher:
                 return user_text, source_hint
 
         return text, source_hint
+
+    @staticmethod
+    def _detect_openclaw_channel(text):
+        """Detect the OpenClaw messaging channel from user prompt metadata.
+
+        Returns: "Telegram", "Discord", "Slack", or None.
+        """
+        if not text or "untrusted metadata" not in text:
+            return None
+        if "sender_id" in text and "message_id" in text:
+            return "Telegram"
+        if "discord" in text.lower():
+            return "Discord"
+        if "slack" in text.lower():
+            return "Slack"
+        return None
 
     def _set_session_title(self, session_id, text):
         """Set session title from first user message if not already set."""
@@ -1800,12 +1817,58 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 }
             )
 
+        # Enrich with tool risk annotations
+        for ev in event_list:
+            if ev["event_type"] == "tool_use":
+                tool_name = ev["data"].get("name", "")
+                risk_info = TOOL_RISK_MAP.get(tool_name)
+                if risk_info:
+                    ev["data"]["risk_level"] = risk_info[0]
+                    ev["data"]["risk_description"] = risk_info[1]
+
+        # Enrichments for OpenClaw sessions
+        session_dict = dict(session)
+        enrichments = {}
+        if session_dict.get("agent_type") == "openclaw":
+            # Detect channel from first user_prompt event
+            for ev in event_list:
+                if ev["event_type"] == "user_prompt":
+                    text = ev["data"].get("text", "")
+                    channel = self._watcher_detect_channel(text)
+                    if channel:
+                        enrichments["channel"] = channel
+                        break
+
+            # Aggregate cost from api_calls
+            cost_row = db.execute(
+                "SELECT SUM(estimated_cost_usd) as total_cost, COUNT(*) as api_call_count "
+                "FROM api_calls WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()
+            if cost_row:
+                enrichments["total_cost"] = cost_row["total_cost"] or 0
+                enrichments["api_call_count"] = cost_row["api_call_count"] or 0
+
         self._send_json(
             {
-                "session": dict(session),
+                "session": session_dict,
                 "events": event_list,
+                **enrichments,
             }
         )
+
+    @staticmethod
+    def _watcher_detect_channel(text):
+        """Detect OpenClaw channel from user prompt text."""
+        if not text or "untrusted metadata" not in text:
+            return None
+        if "sender_id" in text and "message_id" in text:
+            return "Telegram"
+        if "discord" in text.lower():
+            return "Discord"
+        if "slack" in text.lower():
+            return "Slack"
+        return None
 
     def _api_session_turns(self, params):
         session_id = params.get("id", [""])[0]
