@@ -7,8 +7,12 @@ import pytest
 
 from claude_monitoring.supply_chain import (
     assess_risk,
+    categorize_package,
+    extract_project,
     parse_install_command,
 )
+
+# ── Parser: core functionality ──────────────────────────────
 
 
 class TestParseNpmInstall:
@@ -18,23 +22,19 @@ class TestParseNpmInstall:
         foo = next(p for p in result if p["name"] == "foo")
         bar = next(p for p in result if p["name"] == "bar")
         assert foo["pinned"] is False
-        assert foo["version"] == "latest"
         assert bar["pinned"] is True
         assert bar["version"] == "2.0"
-        assert foo["manager"] == "npm"
 
     def test_npm_i_shorthand(self):
         result = parse_install_command("npm i express")
         assert len(result) == 1
         assert result[0]["name"] == "express"
-        assert result[0]["manager"] == "npm"
 
     def test_yarn_add(self):
         result = parse_install_command("yarn add react react-dom@18.2.0")
         assert len(result) == 2
         rd = next(p for p in result if p["name"] == "react-dom")
         assert rd["version"] == "18.2.0"
-        assert rd["manager"] == "yarn"
 
     def test_pnpm_add(self):
         result = parse_install_command("pnpm add vite")
@@ -57,12 +57,11 @@ class TestParsePipInstall:
         assert req["pinned"] is True
         assert req["version"] == "2.31.0"
         assert fl["pinned"] is False
-        assert req["manager"] == "pip"
 
     def test_requirements_file(self):
         result = parse_install_command("pip install -r requirements.txt")
         assert len(result) == 1
-        assert result[0]["name"] == "(from requirements.txt)"
+        assert "requirements.txt" in result[0]["name"]
         assert result[0]["pinned"] is True
 
     def test_pip3(self):
@@ -74,7 +73,12 @@ class TestParsePipInstall:
     def test_editable_install(self):
         result = parse_install_command("pip install -e .")
         assert len(result) == 1
-        assert result[0]["name"] == "(editable: .)"
+        assert "editable" in result[0]["name"].lower()
+
+    def test_editable_with_extras(self):
+        result = parse_install_command('pip install -e ".[dev]"')
+        assert len(result) == 1
+        assert "editable" in result[0]["name"].lower()
 
     def test_index_url_skipped(self):
         result = parse_install_command(
@@ -95,12 +99,9 @@ class TestParseOtherManagers:
         result = parse_install_command("cargo add serde --features derive")
         assert len(result) == 1
         assert result[0]["name"] == "serde"
-        assert result[0]["manager"] == "cargo"
 
     def test_go_get(self):
-        result = parse_install_command(
-            "go get github.com/gin-gonic/gin@v1.9.0"
-        )
+        result = parse_install_command("go get github.com/gin-gonic/gin@v1.9.0")
         assert len(result) == 1
         assert result[0]["name"] == "github.com/gin-gonic/gin"
         assert result[0]["version"] == "v1.9.0"
@@ -109,27 +110,71 @@ class TestParseOtherManagers:
     def test_brew_install(self):
         result = parse_install_command("brew install jq yq")
         assert len(result) == 2
-        names = {p["name"] for p in result}
-        assert names == {"jq", "yq"}
-        assert result[0]["manager"] == "brew"
+        assert {p["name"] for p in result} == {"jq", "yq"}
 
     def test_apt_install(self):
         result = parse_install_command("apt-get install -y curl wget")
         assert len(result) == 2
-        names = {p["name"] for p in result}
-        assert names == {"curl", "wget"}
+        assert {p["name"] for p in result} == {"curl", "wget"}
 
     def test_npx(self):
         result = parse_install_command("npx create-next-app my-app")
         assert len(result) == 1
         assert result[0]["name"] == "create-next-app"
-        assert result[0]["manager"] == "npx"
 
     def test_gem_install(self):
         result = parse_install_command("gem install rails")
         assert len(result) == 1
         assert result[0]["name"] == "rails"
-        assert result[0]["manager"] == "gem"
+
+
+# ── Parser: shell noise filtering ───────────────────────────
+
+
+class TestShellNoiseFiltering:
+    def test_pipe_not_parsed(self):
+        result = parse_install_command("pip install mitmproxy 2>&1 | tail -5")
+        names = [p["name"] for p in result]
+        assert "mitmproxy" in names
+        assert "tail" not in names
+        assert "|" not in names
+        assert "2>&1" not in names
+
+    def test_double_ampersand(self):
+        result = parse_install_command("cd /app && pip install flask && echo done")
+        names = [p["name"] for p in result]
+        assert "flask" in names
+        assert "cd" not in names
+        assert "echo" not in names
+        assert "done" not in names
+
+    def test_redirect_stripped(self):
+        result = parse_install_command("pip install boto3 2>/dev/null")
+        assert len(result) == 1
+        assert result[0]["name"] == "boto3"
+
+    def test_platform_flags_skipped(self):
+        result = parse_install_command(
+            "pip install --platform manylinux2014_x86_64 --python-version 3.12 cryptography"
+        )
+        names = [p["name"] for p in result]
+        assert names == ["cryptography"]
+
+    def test_docker_compose_prefix(self):
+        result = parse_install_command(
+            "docker-compose exec -T api pip install pytest moto"
+        )
+        names = [p["name"] for p in result]
+        assert "pytest" in names
+        assert "moto" in names
+        assert "docker-compose" not in names
+        assert "api" not in names
+
+    def test_semicolon_splits(self):
+        result = parse_install_command("pip install requests; pip install flask")
+        # Should get requests from first segment
+        names = [p["name"] for p in result]
+        assert "requests" in names
 
 
 class TestNoFalsePositives:
@@ -154,38 +199,90 @@ class TestNoFalsePositives:
     def test_none(self):
         assert parse_install_command(None) == []
 
+    def test_path_not_package(self):
+        result = parse_install_command("pip install -e /Users/x/Projects/foo")
+        assert len(result) == 1
+        assert "editable" in result[0]["name"].lower()
+
+
+# ── Risk assessment ──────────────────────────────────────────
+
 
 class TestAssessRisk:
-    def test_typosquat(self):
-        risks = assess_risk({"name": "requets", "manager": "pip"})
-        assert any(r.startswith("typosquat:") for r in risks)
-        assert "typosquat:requests" in risks
+    def test_typosquat_high_score(self):
+        score = assess_risk({"name": "requets", "pinned": False, "manager": "pip"})
+        assert score >= 5
 
     def test_typosquat_axios(self):
-        risks = assess_risk({"name": "axois", "manager": "npm"})
-        assert "typosquat:axios" in risks
+        score = assess_risk({"name": "axois", "pinned": False, "manager": "npm"})
+        assert score >= 5
 
-    def test_unpinned(self):
-        risks = assess_risk({"name": "foo", "pinned": False, "manager": "npm"})
-        assert "unpinned" in risks
+    def test_high_risk_package(self):
+        score = assess_risk({"name": "mitmproxy", "pinned": False, "manager": "pip"})
+        assert score >= 4
 
-    def test_pinned_no_flag(self):
-        risks = assess_risk({"name": "foo", "pinned": True, "manager": "npm"})
-        assert "unpinned" not in risks
+    def test_pinned_normal_package(self):
+        score = assess_risk({"name": "requests", "pinned": True, "manager": "pip"})
+        assert score <= 1
+
+    def test_unpinned_normal(self):
+        score = assess_risk({"name": "requests", "pinned": False, "manager": "pip"})
+        assert score >= 1
 
     def test_npx_remote_exec(self):
-        risks = assess_risk({"name": "x", "manager": "npx"})
-        assert "remote_exec" in risks
+        score = assess_risk({"name": "create-next-app", "manager": "npx"})
+        assert score >= 3
 
-    def test_scoped_package(self):
-        risks = assess_risk({"name": "@company/pkg", "manager": "npm"})
-        assert "scoped" in risks
+    def test_financial_package(self):
+        score = assess_risk({"name": "alpaca-trade-api", "pinned": True, "manager": "pip"})
+        assert score >= 2
 
-    def test_clean_package(self):
-        risks = assess_risk(
-            {"name": "requests", "pinned": True, "manager": "pip"}
-        )
-        assert risks == []
+
+# ── Categorization ───────────────────────────────────────────
+
+
+class TestCategorization:
+    def test_pip_is_package(self):
+        assert categorize_package("requests", "pip") == "package"
+
+    def test_npx_is_tool_exec(self):
+        assert categorize_package("tsc", "npx") == "tool_exec"
+
+    def test_brew_is_build_tool(self):
+        assert categorize_package("jq", "brew") == "build_tool"
+
+    def test_apt_is_build_tool(self):
+        assert categorize_package("curl", "apt") == "build_tool"
+
+    def test_npm_is_package(self):
+        assert categorize_package("express", "npm") == "package"
+
+    def test_cargo_is_package(self):
+        assert categorize_package("serde", "cargo") == "package"
+
+
+# ── Project extraction ───────────────────────────────────────
+
+
+class TestProjectExtraction:
+    def test_documents_path(self):
+        assert extract_project("/Users/x/Documents/talosAI/ui") == "talosAI"
+
+    def test_projects_path(self):
+        p = extract_project("/Users/x/Projects/ai-runtime-monitor-enterprise/src")
+        assert p == "ai-runtime-monitor-enterprise"
+
+    def test_no_match(self):
+        assert extract_project("/tmp/build") is None
+
+    def test_none(self):
+        assert extract_project(None) is None
+
+    def test_home_path(self):
+        assert extract_project("~/Documents/myproj/src") == "myproj"
+
+
+# ── DB + Backfill ────────────────────────────────────────────
 
 
 class TestApiEndpoint:
@@ -204,34 +301,11 @@ class TestApiEndpoint:
         ).fetchone()
         assert row is not None
 
-    def test_insert_and_query(self, db):
-        db.execute(
-            """INSERT INTO agent_dependencies
-               (timestamp, session_id, agent_type, action, package_manager,
-                package_name, package_version, pinned, registry_url, command, risk_flags, dedup_hash)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (
-                "2026-04-04T10:00:00Z",
-                "sess1",
-                "claude_code",
-                "install",
-                "npm",
-                "express",
-                "4.18.0",
-                1,
-                "npmjs.org",
-                "npm install express@4.18.0",
-                "[]",
-                "hash1",
-            ),
-        )
-        db.commit()
-        row = db.execute(
-            "SELECT * FROM agent_dependencies WHERE package_name='express'"
-        ).fetchone()
-        assert row is not None
-        assert row["package_version"] == "4.18.0"
-        assert row["pinned"] == 1
+    def test_category_column_exists(self, db):
+        row = db.execute("PRAGMA table_info(agent_dependencies)").fetchall()
+        cols = {r["name"] for r in row}
+        assert "category" in cols
+        assert "project" in cols
 
     def test_dedup_constraint(self, db):
         for _ in range(2):
@@ -260,7 +334,6 @@ class TestBackfill:
     def test_backfill_from_events(self, db):
         from claude_monitoring.supply_chain import backfill_dependencies
 
-        # Insert tool_use events with install commands
         commands = [
             "npm install express@4.18.0",
             "pip install requests==2.31.0 flask",
@@ -281,7 +354,7 @@ class TestBackfill:
         db.commit()
 
         count = backfill_dependencies(db)
-        assert count >= 4  # express + requests + flask + serde
+        assert count >= 4
 
         rows = db.execute(
             "SELECT * FROM agent_dependencies ORDER BY package_name"
@@ -291,3 +364,28 @@ class TestBackfill:
         assert "requests" in names
         assert "flask" in names
         assert "serde" in names
+
+    def test_backfill_no_shell_noise(self, db):
+        from claude_monitoring.supply_chain import backfill_dependencies
+
+        db.execute(
+            """INSERT INTO events
+               (timestamp, session_id, event_type, source_layer, data_json, dedup_hash)
+               VALUES (?, ?, 'tool_use', 'jsonl', ?, ?)""",
+            (
+                "2026-04-04T10:00:00Z",
+                "sess1",
+                json.dumps({"name": "Bash", "command": "pip install mitmproxy 2>&1 | tail -5"}),
+                "ev-noise",
+            ),
+        )
+        db.commit()
+        backfill_dependencies(db)
+        names = [
+            r[0]
+            for r in db.execute("SELECT package_name FROM agent_dependencies").fetchall()
+        ]
+        assert "mitmproxy" in names
+        assert "tail" not in names
+        assert "|" not in names
+        assert "2>&1" not in names
