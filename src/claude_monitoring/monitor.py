@@ -1762,9 +1762,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 db.execute(
                     """INSERT INTO browser_sessions
                        (service, url, title, conversation_id,
-                        visit_time, duration_seconds, source)
-                       VALUES (?, ?, ?, ?, ?, 0, 'extension')""",
-                    (service, url, title, conv_id, timestamp),
+                        visit_time, duration_seconds, source, event_type, content_text)
+                       VALUES (?, ?, ?, ?, ?, 0, 'extension', ?, ?)""",
+                    (service, url, title, conv_id, timestamp, ev_type, text[:5000] if text else None),
                 )
                 stored += 1
             except Exception:
@@ -2421,7 +2421,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
         db = get_thread_db()
         rows = db.execute(
             """SELECT id, service, url, title, conversation_id, visit_time,
-                      duration_seconds, foreground_seconds
+                      duration_seconds, foreground_seconds, source, event_type, content_text
                FROM browser_sessions
                WHERE conversation_id = ?
                ORDER BY visit_time ASC""",

@@ -1247,8 +1247,30 @@ async function loadBrowserSessionDetail(conversationId) {
       + ' &middot; ' + fmtDate(d.first_visit) + ' - ' + fmtDate(d.last_visit)
       + '</div></div></div>';
 
-    html += '<h4 style="margin:16px 0 8px;font-size:13px;color:var(--text2)">Visit Timeline</h4>';
-    for (var v of d.visits) {
+    // Separate content captures (extension) from history-only visits
+    var contentCaptures = d.visits.filter(function(v) { return v.content_text && v.event_type; });
+    var historyVisits = d.visits.filter(function(v) { return !v.content_text; });
+
+    // Show captured conversation content first
+    if (contentCaptures.length > 0) {
+      html += '<h4 style="margin:16px 0 8px;font-size:13px;color:var(--text2)">Captured Conversation (' + contentCaptures.length + ' messages)</h4>';
+      for (var c of contentCaptures) {
+        var isUser = c.event_type === 'user_prompt';
+        var borderColor = isUser ? 'var(--blue)' : 'var(--green)';
+        var bgColor = isUser ? '#1a2332' : '#1a2e1a';
+        var label = isUser ? 'USER PROMPT' : 'ASSISTANT RESPONSE';
+        html += '<div class="event-block" style="border-left:3px solid ' + borderColor + '">'
+          + '<div class="event-header" style="background:' + bgColor + ';color:' + borderColor + '" onclick="this.parentElement.classList.toggle(\'collapsed\')">'
+          + '<span>' + label + '</span>'
+          + '<span style="font-size:11px;color:var(--text2)">' + fmtTime(c.visit_time) + '</span></div>'
+          + '<div class="event-body" style="white-space:pre-wrap;word-break:break-word;font-size:13px;max-height:300px;overflow-y:auto">'
+          + esc(c.content_text)
+          + '</div></div>';
+      }
+    }
+
+    html += '<h4 style="margin:16px 0 8px;font-size:13px;color:var(--text2)">Visit Timeline (' + historyVisits.length + ' visits)</h4>';
+    for (var v of historyVisits) {
       var dur = v.duration_seconds ? fmtDuration(v.duration_seconds) : '';
       var barWidth = Math.min(300, Math.max(2, (v.duration_seconds || 0)));
       html += '<div class="event-block" style="border-left:3px solid var(--purple)">'
