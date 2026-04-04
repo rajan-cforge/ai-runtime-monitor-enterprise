@@ -889,10 +889,12 @@ async function pollFeed() {
 // Charts
 function updateCharts(stats) {
   const chartOpts = {responsive:true,plugins:{legend:{labels:{color:'#e6edf3'}},tooltip:{callbacks:{label:(ctx)=>ctx.dataset.label+': '+fmtNum(ctx.raw)+' tokens'}}}};
-  // Token timeline
-  const tl = stats.token_timeline || [];
+  // Token timeline — sort by actual datetime
+  const tl = (stats.token_timeline || []).slice().sort(function(a,b) {
+    return new Date(a.hour).getTime() - new Date(b.hour).getTime();
+  });
   const labels = tl.map(t => {
-    try { return new Date(t.hour).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}); }
+    try { return new Date(t.hour).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit',hour12:false}); }
     catch(e) { return t.hour; }
   });
 
@@ -988,22 +990,54 @@ function updateCharts(stats) {
   }
 }
 
-// System tab
+// System tab — grouped by application
+var _procAppMap = {'claude':'Claude Code','cursor':'Cursor','chatgpt':'ChatGPT','openclaw':'OpenClaw','codex':'Codex','copilot':'Copilot','windsurf':'Windsurf'};
+function classifyProcess(name) {
+  var n = (name||'').toLowerCase();
+  // Version-string names like "2.1.81" are Cursor
+  if (/^\d+\.\d+\.\d+$/.test(n)) return 'Cursor';
+  if (n === 'disclaimer') return null;
+  for (var k in _procAppMap) { if (n.indexOf(k) >= 0) return _procAppMap[k]; }
+  return name || 'Unknown';
+}
 async function loadProcesses() {
   try {
     const r = await fetch(API + '/api/processes');
     const d = await r.json();
     const tbody = document.getElementById('proc-tbody');
-    tbody.innerHTML = d.processes.map(p => {
-      const srcClass = (p.source_type||'CLI').toLowerCase().replace(' ','');
-      return '<tr>'
-        + '<td>'+p.pid+'</td><td><a style="color:var(--purple);cursor:pointer;text-decoration:none" onclick="loadProcessDetail('+p.pid+')">'+esc(p.name)+'</a></td>'
-        + '<td><span class="badge '+srcClass+'">'+(p.source_type||'CLI')+'</span></td>'
-        + '<td>'+p.cpu_percent+'%</td><td>'+p.memory_percent+'%</td>'
-        + '<td>'+esc(p.uptime)+'</td>'
-        + '<td><span class="badge running">'+esc(p.status)+'</span></td>'
-        + '<td style="max-width:250px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+esc(p.cmdline)+'">'+esc(p.cmdline)+'</td></tr>';
-    }).join('') || '<tr><td colspan="8" style="text-align:center;color:var(--text2)">No AI processes detected</td></tr>';
+    if (!d.processes.length) {
+      tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--text2)">No AI processes detected</td></tr>';
+      return;
+    }
+    // Group by application
+    var groups = {};
+    d.processes.forEach(function(p) {
+      var app = classifyProcess(p.name);
+      if (!app) return;
+      if (!groups[app]) groups[app] = {procs:[], totalCpu:0, totalMem:0};
+      groups[app].procs.push(p);
+      groups[app].totalCpu += (p.cpu_percent||0);
+      groups[app].totalMem += (p.memory_percent||0);
+    });
+    var html = '';
+    Object.keys(groups).sort().forEach(function(app) {
+      var g = groups[app];
+      var gid = 'proc-group-' + app.replace(/\s/g,'_');
+      html += '<tr style="cursor:pointer;background:var(--surface2)" onclick="document.querySelectorAll(\'.' + gid + '\').forEach(function(r){r.style.display=r.style.display===\'none\'?\'table-row\':\'none\'})">'
+        + '<td colspan="3" style="font-weight:600"><span style="color:var(--purple)">' + esc(app) + '</span> <span style="color:var(--text2);font-weight:normal">(' + g.procs.length + ' process' + (g.procs.length > 1 ? 'es' : '') + ')</span></td>'
+        + '<td>' + g.totalCpu.toFixed(1) + '%</td><td>' + g.totalMem.toFixed(1) + '%</td>'
+        + '<td colspan="3" style="color:var(--text2);font-size:11px">Click to expand</td></tr>';
+      g.procs.forEach(function(p) {
+        html += '<tr class="' + gid + '" style="display:none">'
+          + '<td>'+p.pid+'</td><td><a style="color:var(--purple);cursor:pointer;text-decoration:none" onclick="event.stopPropagation();loadProcessDetail('+p.pid+')">'+esc(p.name)+'</a></td>'
+          + '<td><span class="badge">'+(p.source_type||'CLI')+'</span></td>'
+          + '<td>'+p.cpu_percent+'%</td><td>'+p.memory_percent+'%</td>'
+          + '<td>'+esc(p.uptime)+'</td>'
+          + '<td><span class="badge running">'+esc(p.status)+'</span></td>'
+          + '<td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+esc(p.cmdline)+'">'+esc(p.cmdline)+'</td></tr>';
+      });
+    });
+    tbody.innerHTML = html;
   } catch(e) {}
 }
 
@@ -1386,7 +1420,7 @@ function renderTurnRail() {
       + '<div><span class="turn-num">T' + t.turn_number + '</span>'
       + ' <span style="color:var(--text2);font-size:11px">' + fmtTime(t.timestamp) + '</span>'
       + (t.has_alert ? ' <span style="color:var(--red)">&#x26a0;</span>' : '') + '</div>'
-      + '<div class="turn-preview">' + esc(t.prompt_preview) + '</div>'
+      + '<div class="turn-preview">' + esc(cleanTitle(t.prompt_preview)) + '</div>'
       + (tools ? '<div class="turn-tools">' + tools + '</div>' : '')
       + '</div>';
   }).join('');
