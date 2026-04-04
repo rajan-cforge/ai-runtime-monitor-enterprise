@@ -969,36 +969,45 @@ class JSONLSessionWatcher:
     def _check_supply_chain(self, command, session_id, timestamp):
         """Detect package installs in Bash commands and store in agent_dependencies."""
         try:
-            from claude_monitoring.supply_chain import parse_install_command, store_dependency
+            from claude_monitoring.supply_chain import (
+                KNOWN_TYPOSQUATS,
+                parse_install_command,
+                risk_level,
+                store_dependency,
+            )
 
             packages = parse_install_command(command)
             if not packages:
                 return
             agent_type = None
+            cwd = None
             try:
                 row = self.db.execute(
-                    "SELECT agent_type FROM sessions WHERE session_id=?", (session_id,)
+                    "SELECT agent_type, cwd FROM sessions WHERE session_id=?", (session_id,)
                 ).fetchone()
                 if row:
                     agent_type = row[0]
+                    cwd = row[1]
             except Exception:
                 pass
             for pkg in packages:
-                risk_flags = store_dependency(self.db, timestamp, session_id, agent_type, pkg, command)
+                score = store_dependency(self.db, timestamp, session_id, agent_type, pkg, command, cwd)
+                level = risk_level(score)
                 # Critical alert for typosquats
-                typo_match = [r.split(":", 1)[1] for r in risk_flags if r.startswith("typosquat:")]
-                if typo_match:
+                name_lower = pkg["name"].lower()
+                if name_lower in KNOWN_TYPOSQUATS:
+                    real_pkg = KNOWN_TYPOSQUATS[name_lower]
                     self._store_event(timestamp, session_id, "sensitive_data", "supply_chain", {
                         "severity": "critical", "patterns": ["typosquat"],
                         "categories": ["supply_chain"], "context": "tool:Bash",
-                        "snippet": f"Agent installed '{pkg['name']}' — known typosquat of '{typo_match[0]}'. Command: {command[:200]}",
+                        "snippet": f"Agent installed '{pkg['name']}' — known typosquat of '{real_pkg}'. Command: {command[:200]}",
                     })
-                # High alert for unpinned npx
-                if "remote_exec" in risk_flags and "unpinned" in risk_flags:
+                # High alert for high-risk packages
+                elif level in ("high", "critical"):
                     self._store_event(timestamp, session_id, "sensitive_data", "supply_chain", {
-                        "severity": "high", "patterns": ["remote_exec_unpinned"],
+                        "severity": level, "patterns": ["supply_chain_risk"],
                         "categories": ["supply_chain"], "context": "tool:Bash",
-                        "snippet": f"Agent ran unpinned npx command: {command[:200]}",
+                        "snippet": f"Agent installed '{pkg['name']}' (risk score: {score}). Command: {command[:200]}",
                     })
             self.db.commit()
         except Exception:
@@ -3237,65 +3246,69 @@ class DashboardHandler(BaseHTTPRequestHandler):
     # ── Report endpoint ────────────────────────────────────────
 
     def _api_supply_chain(self, params):
-        """Supply chain dependency data."""
+        """Supply chain dependency data with category filter and grouped view."""
         db = get_thread_db()
         manager = params.get("manager", [""])[0]
-        agent = params.get("agent", [""])[0]
-        risk = params.get("risk", [""])[0]
+        category = params.get("category", ["package"])[0]
         search = params.get("search", [""])[0]
+        view = params.get("view", ["grouped"])[0]
         limit = int(params.get("limit", ["200"])[0])
 
-        # Stats
-        total = db.execute("SELECT COUNT(*) FROM agent_dependencies").fetchone()[0]
-        unique = db.execute("SELECT COUNT(DISTINCT package_name) FROM agent_dependencies").fetchone()[0]
-        unpinned = db.execute("SELECT COUNT(*) FROM agent_dependencies WHERE pinned=0").fetchone()[0]
-        risk_flagged = db.execute("SELECT COUNT(*) FROM agent_dependencies WHERE risk_flags != '[]'").fetchone()[0]
-        by_manager = {r[0]: r[1] for r in db.execute(
-            "SELECT package_manager, COUNT(*) FROM agent_dependencies GROUP BY package_manager"
-        ).fetchall()}
-        by_agent = {r[0] or "unknown": r[1] for r in db.execute(
-            "SELECT agent_type, COUNT(*) FROM agent_dependencies GROUP BY agent_type"
-        ).fetchall()}
-
-        # Filtered list
+        # Base filter
         conditions = ["1=1"]
         bind = []
+        if category and category != "all":
+            conditions.append("d.category = ?")
+            bind.append(category)
         if manager:
             conditions.append("d.package_manager = ?")
             bind.append(manager)
-        if agent:
-            conditions.append("d.agent_type = ?")
-            bind.append(agent)
-        if risk:
-            conditions.append("d.risk_flags LIKE ?")
-            bind.append(f"%{risk}%")
         if search:
             conditions.append("(d.package_name LIKE ? OR d.command LIKE ?)")
             bind.extend([f"%{search}%", f"%{search}%"])
 
         where = " AND ".join(conditions)
-        sql = f"""SELECT d.*, s.title as session_title
-                  FROM agent_dependencies d
-                  LEFT JOIN sessions s ON d.session_id = s.session_id
-                  WHERE {where} ORDER BY d.id DESC LIMIT ?"""  # nosec B608
-        bind.append(limit)
-        rows = db.execute(sql, bind).fetchall()
-        installs = []
-        for r in rows:
-            rd = dict(r)
-            try:
-                rd["risk_flags"] = json.loads(rd.get("risk_flags") or "[]")
-            except (json.JSONDecodeError, TypeError):
-                rd["risk_flags"] = []
-            installs.append(rd)
+
+        # Stats for current filter
+        stats_sql = f"""SELECT COUNT(*) as total,
+                    COUNT(DISTINCT package_name) as uniq,
+                    SUM(CASE WHEN pinned=0 THEN 1 ELSE 0 END) as unpinned,
+                    SUM(CASE WHEN risk_score >= 4 THEN 1 ELSE 0 END) as risk_flagged
+                FROM agent_dependencies d WHERE {where}"""  # nosec B608
+        st = db.execute(stats_sql, bind).fetchone()
+        by_manager = {r[0]: r[1] for r in db.execute(
+            f"SELECT package_manager, COUNT(*) FROM agent_dependencies d WHERE {where} GROUP BY package_manager",  # nosec B608
+            bind).fetchall()}
+
+        if view == "grouped":
+            sql = f"""SELECT package_name, package_manager, category, registry_url,
+                          COUNT(*) as install_count,
+                          MIN(timestamp) as first_seen, MAX(timestamp) as last_seen,
+                          MAX(risk_score) as risk_score,
+                          GROUP_CONCAT(DISTINCT agent_type) as agents,
+                          GROUP_CONCAT(DISTINCT project) as projects,
+                          MAX(pinned) as pinned
+                      FROM agent_dependencies d WHERE {where}
+                      GROUP BY package_name, package_manager
+                      ORDER BY MAX(risk_score) DESC, COUNT(*) DESC LIMIT ?"""  # nosec B608
+            rows = db.execute(sql, bind + [limit]).fetchall()
+            installs = [dict(r) for r in rows]
+        else:
+            sql = f"""SELECT d.*, s.title as session_title
+                      FROM agent_dependencies d
+                      LEFT JOIN sessions s ON d.session_id = s.session_id
+                      WHERE {where} ORDER BY d.id DESC LIMIT ?"""  # nosec B608
+            rows = db.execute(sql, bind + [limit]).fetchall()
+            installs = [dict(r) for r in rows]
 
         self._send_json({
             "stats": {
-                "total_installs": total, "unique_packages": unique,
-                "unpinned_count": unpinned, "risk_flagged_count": risk_flagged,
-                "by_manager": by_manager, "by_agent": by_agent,
+                "total_installs": st[0] or 0, "unique_packages": st[1] or 0,
+                "unpinned_count": st[2] or 0, "risk_flagged_count": st[3] or 0,
+                "by_manager": by_manager,
             },
             "installs": installs,
+            "view": view,
         })
 
     def _api_report(self, params):

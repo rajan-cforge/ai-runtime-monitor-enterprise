@@ -187,8 +187,18 @@ def init_db(db_path=None):
         lockfile_path TEXT,
         command TEXT,
         risk_flags TEXT DEFAULT '[]',
+        risk_score INTEGER DEFAULT 0,
+        category TEXT DEFAULT 'package',
+        project TEXT,
         dedup_hash TEXT UNIQUE
     )""")
+
+    # Migrations for supply chain columns
+    for col, default in [("risk_score", "0"), ("category", "'package'"), ("project", "NULL")]:
+        try:
+            c.execute(f"ALTER TABLE agent_dependencies ADD COLUMN {col} TEXT DEFAULT {default}")  # nosec B608
+        except sqlite3.OperationalError:
+            pass
 
     # Add dedup_hash column to events if missing (migration for dedup fix)
     try:

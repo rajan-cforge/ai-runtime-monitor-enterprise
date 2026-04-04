@@ -443,21 +443,22 @@ body { background:var(--bg); color:var(--text); font-family:-apple-system,BlinkM
   <div class="panel" id="panel-supply-chain">
     <div class="system-section">
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px" id="sc-stats"></div>
-      <div style="display:flex;gap:8px;margin-bottom:12px">
+      <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
+        <div style="display:flex;gap:2px;background:var(--surface2);border:1px solid var(--border);border-radius:4px;overflow:hidden" id="sc-category-toggle">
+          <button class="active" data-cat="package" onclick="scSetCategory(this)" style="padding:4px 10px;font-size:12px;border:none;cursor:pointer;color:var(--text);background:transparent">Packages</button>
+          <button data-cat="tool_exec" onclick="scSetCategory(this)" style="padding:4px 10px;font-size:12px;border:none;cursor:pointer;color:var(--text2);background:transparent">Tool Executions</button>
+          <button data-cat="build_tool" onclick="scSetCategory(this)" style="padding:4px 10px;font-size:12px;border:none;cursor:pointer;color:var(--text2);background:transparent">System Tools</button>
+          <button data-cat="all" onclick="scSetCategory(this)" style="padding:4px 10px;font-size:12px;border:none;cursor:pointer;color:var(--text2);background:transparent">All</button>
+        </div>
         <select id="sc-manager" onchange="loadSupplyChain()" style="background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:4px 8px;color:var(--text);font-size:12px">
           <option value="">All Managers</option>
           <option value="npm">npm</option><option value="pip">pip</option><option value="cargo">cargo</option>
           <option value="brew">brew</option><option value="apt">apt</option><option value="go">go</option>
           <option value="yarn">yarn</option><option value="npx">npx</option><option value="gem">gem</option>
         </select>
-        <select id="sc-risk" onchange="loadSupplyChain()" style="background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:4px 8px;color:var(--text);font-size:12px">
-          <option value="">All Risk</option>
-          <option value="typosquat">Typosquat</option><option value="unpinned">Unpinned</option>
-          <option value="remote_exec">Remote Exec</option>
-        </select>
         <input id="sc-search" placeholder="Search package..." onkeyup="loadSupplyChain()" style="background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:4px 8px;color:var(--text);font-size:12px;flex:1;max-width:250px">
       </div>
-      <table><thead><tr><th>Time</th><th>Agent</th><th>Package</th><th>Version</th><th>Manager</th><th>Pinned</th><th>Risk</th><th>Command</th></tr></thead>
+      <table><thead><tr id="sc-thead"></tr></thead>
         <tbody id="sc-tbody"></tbody>
       </table>
     </div>
@@ -1118,20 +1119,35 @@ async function loadFiles() {
 }
 
 // Supply Chain tab
+var _scCategory = 'package';
+function scSetCategory(btn) {
+  _scCategory = btn.dataset.cat;
+  document.querySelectorAll('#sc-category-toggle button').forEach(function(b) {
+    b.classList.remove('active');
+    b.style.background = 'transparent';
+    b.style.color = 'var(--text2)';
+  });
+  btn.classList.add('active');
+  btn.style.background = 'var(--blue)';
+  btn.style.color = 'white';
+  loadSupplyChain();
+}
+function scRiskBadge(score) {
+  if (score >= 7) return '<span class="badge" style="background:#5c1a1a;color:var(--red);font-size:10px">CRITICAL (' + score + ')</span>';
+  if (score >= 4) return '<span class="badge" style="background:#3d2e1a;color:var(--orange);font-size:10px">HIGH (' + score + ')</span>';
+  if (score >= 2) return '<span class="badge" style="background:#3d2e1a;color:var(--orange);font-size:10px">MED (' + score + ')</span>';
+  return '<span class="badge" style="background:var(--surface2);color:var(--text2);font-size:10px">LOW</span>';
+}
 async function loadSupplyChain() {
   try {
     var mgr = document.getElementById('sc-manager').value;
-    var risk = document.getElementById('sc-risk').value;
     var search = document.getElementById('sc-search').value;
-    var url = API + '/api/supply-chain?limit=200';
+    var url = API + '/api/supply-chain?view=grouped&category=' + _scCategory;
     if (mgr) url += '&manager=' + mgr;
-    if (risk) url += '&risk=' + risk;
     if (search) url += '&search=' + encodeURIComponent(search);
     var r = await fetch(url);
     var d = await r.json();
     var s = d.stats || {};
-    // Stats row
-    var riskColors = {typosquat:'var(--red)',remote_exec:'var(--orange)',unpinned:'var(--orange)'};
     document.getElementById('sc-stats').innerHTML =
       '<span class="badge" style="background:var(--surface2);color:var(--text);border:1px solid var(--border)">Installs: <strong>' + (s.total_installs||0) + '</strong></span>'
       + '<span class="badge" style="background:var(--surface2);color:var(--blue);border:1px solid var(--border)">Unique: <strong>' + (s.unique_packages||0) + '</strong></span>'
@@ -1140,45 +1156,34 @@ async function loadSupplyChain() {
       + Object.entries(s.by_manager||{}).map(function(e) {
         return '<span class="badge" style="background:var(--surface2);color:var(--text2);border:1px solid var(--border)">' + esc(e[0]) + ': ' + e[1] + '</span>';
       }).join('');
-    // Table
+    var thead = document.getElementById('sc-thead');
     var tbody = document.getElementById('sc-tbody');
+    thead.innerHTML = '<th>Package</th><th>Manager</th><th>Installs</th><th>First Seen</th><th>Last Seen</th><th>Agents</th><th>Projects</th><th>Risk</th>';
     if (!d.installs || !d.installs.length) {
-      tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--text2);padding:32px">No dependencies tracked yet. AI agents that run install commands will appear here.</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--text2);padding:32px">No dependencies in this category.</td></tr>';
       return;
     }
-    tbody.innerHTML = d.installs.map(function(p, idx) {
-      var risks = p.risk_flags || [];
-      var borderColor = risks.some(function(r){return r.startsWith('typosquat')}) ? 'var(--red)'
-        : risks.includes('remote_exec') ? 'var(--orange)'
-        : risks.includes('unpinned') ? 'var(--orange)'
-        : p.pinned ? 'var(--green)' : 'var(--text2)';
-      var riskBadges = risks.map(function(r) {
-        var label = r.startsWith('typosquat') ? 'TYPOSQUAT' : r === 'remote_exec' ? 'REMOTE EXEC' : r === 'unpinned' ? 'UNPINNED' : r === 'scoped' ? 'SCOPED' : r;
-        var bg = r.startsWith('typosquat') ? '#5c1a1a' : r === 'remote_exec' ? '#3d2e1a' : r === 'unpinned' ? '#3d2e1a' : '#1a2e1a';
-        var fg = r.startsWith('typosquat') ? 'var(--red)' : r === 'remote_exec' ? 'var(--orange)' : r === 'unpinned' ? 'var(--orange)' : 'var(--green)';
-        return '<span class="badge" style="background:'+bg+';color:'+fg+';font-size:10px">'+label+'</span>';
-      }).join(' ') || '<span style="color:var(--text2)">-</span>';
-      var cmdPreview = esc((p.command||'').substring(0,60));
-      var sessionLink = p.session_id ? '<a style="color:var(--cyan);cursor:pointer;text-decoration:none;font-size:11px" onclick="openDeepDive(\''+p.session_id+'\')">' + esc(p.session_title || p.session_id.substring(0,8)) + '</a>' : '';
-      var main = '<tr class="expandable" style="border-left:3px solid '+borderColor+'" onclick="var d=document.getElementById(\'sc-detail-'+idx+'\');d.style.display=d.style.display===\'none\'?\'table-row\':\'none\'">'
-        + '<td>' + fmtTimestamp(p.timestamp) + '</td>'
-        + '<td>' + esc(p.agent_type || '-') + '</td>'
+    tbody.innerHTML = d.installs.map(function(p) {
+      var score = p.risk_score || 0;
+      var borderColor = score >= 7 ? 'var(--red)' : score >= 4 ? 'var(--orange)' : score >= 2 ? 'var(--orange)' : p.pinned ? 'var(--green)' : 'var(--text2)';
+      var agents = (p.agents||'').split(',').filter(Boolean).join(', ') || '-';
+      var projects = (p.projects||'').split(',').filter(function(x){return x && x!='None'}).join(', ') || '-';
+      return '<tr style="border-left:3px solid ' + borderColor + '">'
         + '<td><strong>' + esc(p.package_name) + '</strong></td>'
-        + '<td>' + esc(p.package_version || '-') + '</td>'
         + '<td>' + esc(p.package_manager) + '</td>'
-        + '<td>' + (p.pinned ? '<span style="color:var(--green)">Yes</span>' : '<span style="color:var(--orange)">No</span>') + '</td>'
-        + '<td>' + riskBadges + '</td>'
-        + '<td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+esc(p.command||'')+'">' + cmdPreview + '</td>'
+        + '<td>' + (p.install_count||1) + '</td>'
+        + '<td>' + fmtTimestamp(p.first_seen||p.timestamp) + '</td>'
+        + '<td>' + fmtTimestamp(p.last_seen||p.timestamp) + '</td>'
+        + '<td>' + esc(agents) + '</td>'
+        + '<td>' + esc(projects) + '</td>'
+        + '<td>' + scRiskBadge(score) + '</td>'
         + '</tr>';
-      var detail = '<tr id="sc-detail-'+idx+'" style="display:none"><td colspan="8" style="background:var(--surface2);padding:12px;font-size:12px">'
-        + '<div><strong>Full command:</strong> <code style="word-break:break-all">' + esc(p.command||'') + '</code></div>'
-        + (sessionLink ? '<div style="margin-top:4px"><strong>Session:</strong> ' + sessionLink + '</div>' : '')
-        + '<div style="margin-top:4px"><strong>Registry:</strong> ' + esc(p.registry_url||'-') + '</div>'
-        + '</td></tr>';
-      return main + detail;
     }).join('');
   } catch(e) { console.error('Supply chain load error:', e); }
 }
+// Init category button style
+document.querySelector('#sc-category-toggle button.active').style.background = 'var(--blue)';
+document.querySelector('#sc-category-toggle button.active').style.color = 'white';
 
 // Alerts panel
 let alertOffset = 0;
