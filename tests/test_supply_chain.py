@@ -160,6 +160,19 @@ class TestShellNoiseFiltering:
         names = [p["name"] for p in result]
         assert names == ["cryptography"]
 
+    def test_garbage_tokens_filtered(self):
+        """Tokens like 'to', 'for', 'bi', ')"},', 'python-' must not appear."""
+        result = parse_install_command("pip install to for and bi load gate quality")
+        assert len(result) == 0
+
+    def test_punctuation_tokens_filtered(self):
+        result = parse_install_command('pip install quality)"}, )"}, test" npm"')
+        assert len(result) == 0
+
+    def test_truncated_fragment_filtered(self):
+        result = parse_install_command("pip install python- user-local")
+        assert len(result) == 0
+
     def test_docker_compose_prefix(self):
         result = parse_install_command(
             "docker-compose exec -T api pip install pytest moto"
@@ -210,32 +223,37 @@ class TestNoFalsePositives:
 
 class TestAssessRisk:
     def test_typosquat_high_score(self):
-        score = assess_risk({"name": "requets", "pinned": False, "manager": "pip"})
+        score, reasons = assess_risk({"name": "requets", "pinned": False, "manager": "pip"})
         assert score >= 5
+        assert any("typosquat" in r for r in reasons)
 
     def test_typosquat_axios(self):
-        score = assess_risk({"name": "axois", "pinned": False, "manager": "npm"})
+        score, reasons = assess_risk({"name": "axois", "pinned": False, "manager": "npm"})
         assert score >= 5
 
     def test_high_risk_package(self):
-        score = assess_risk({"name": "mitmproxy", "pinned": False, "manager": "pip"})
+        score, reasons = assess_risk({"name": "mitmproxy", "pinned": False, "manager": "pip"})
         assert score >= 4
+        assert len(reasons) >= 2  # high_risk + unpinned at minimum
 
     def test_pinned_normal_package(self):
-        score = assess_risk({"name": "requests", "pinned": True, "manager": "pip"})
+        score, reasons = assess_risk({"name": "requests", "pinned": True, "manager": "pip"})
         assert score <= 1
+        assert len(reasons) == 0
 
     def test_unpinned_normal(self):
-        score = assess_risk({"name": "requests", "pinned": False, "manager": "pip"})
+        score, reasons = assess_risk({"name": "requests", "pinned": False, "manager": "pip"})
         assert score >= 1
+        assert any("unpinned" in r for r in reasons)
 
     def test_npx_remote_exec(self):
-        score = assess_risk({"name": "create-next-app", "manager": "npx"})
+        score, reasons = assess_risk({"name": "create-next-app", "manager": "npx"})
         assert score >= 3
 
     def test_financial_package(self):
-        score = assess_risk({"name": "alpaca-trade-api", "pinned": True, "manager": "pip"})
+        score, reasons = assess_risk({"name": "alpaca-trade-api", "pinned": True, "manager": "pip"})
         assert score >= 2
+        assert any("financial" in r for r in reasons)
 
 
 # ── Categorization ───────────────────────────────────────────

@@ -1158,28 +1158,54 @@ async function loadSupplyChain() {
       }).join('');
     var thead = document.getElementById('sc-thead');
     var tbody = document.getElementById('sc-tbody');
-    thead.innerHTML = '<th>Package</th><th>Manager</th><th>Installs</th><th>First Seen</th><th>Last Seen</th><th>Agents</th><th>Projects</th><th>Risk</th>';
+    thead.innerHTML = '<th>Package</th><th>Version</th><th>Manager</th><th>Pinned</th><th>Installs</th><th>Agents</th><th>Projects</th><th>Risk</th>';
     if (!d.installs || !d.installs.length) {
       tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--text2);padding:32px">No dependencies in this category.</td></tr>';
       return;
     }
-    tbody.innerHTML = d.installs.map(function(p) {
+    tbody.innerHTML = d.installs.map(function(p, idx) {
       var score = p.risk_score || 0;
       var borderColor = score >= 7 ? 'var(--red)' : score >= 4 ? 'var(--orange)' : score >= 2 ? 'var(--orange)' : p.pinned ? 'var(--green)' : 'var(--text2)';
       var agents = (p.agents||'').split(',').filter(Boolean).join(', ') || '-';
       var projects = (p.projects||'').split(',').filter(function(x){return x && x!='None'}).join(', ') || '-';
-      return '<tr style="border-left:3px solid ' + borderColor + '">'
+      var ver = p.latest_version || p.package_version || 'latest';
+      var pinnedHtml = p.pinned ? '<span style="color:var(--green)">Yes</span>' : '<span style="color:var(--orange)">No</span>';
+      var rf = p.risk_flags || {};
+      var reasonsHtml = (rf.reasons||[]).length ? '<div style="font-size:11px;color:var(--text2);margin-top:2px">' + esc((rf.reasons||[]).join(', ')) + '</div>' : '';
+      return '<tr style="border-left:3px solid ' + borderColor + ';cursor:pointer" onclick="scExpandRow(\'' + esc(p.package_name) + '\',\'' + esc(p.package_manager) + '\',' + idx + ')">'
         + '<td><strong>' + esc(p.package_name) + '</strong></td>'
+        + '<td>' + esc(ver) + '</td>'
         + '<td>' + esc(p.package_manager) + '</td>'
+        + '<td>' + pinnedHtml + '</td>'
         + '<td>' + (p.install_count||1) + '</td>'
-        + '<td>' + fmtTimestamp(p.first_seen||p.timestamp) + '</td>'
-        + '<td>' + fmtTimestamp(p.last_seen||p.timestamp) + '</td>'
         + '<td>' + esc(agents) + '</td>'
         + '<td>' + esc(projects) + '</td>'
-        + '<td>' + scRiskBadge(score) + '</td>'
-        + '</tr>';
+        + '<td>' + scRiskBadge(score) + reasonsHtml + '</td>'
+        + '</tr>'
+        + '<tr id="sc-expand-' + idx + '" style="display:none"><td colspan="8" style="background:var(--surface2);padding:12px;font-size:12px">Loading...</td></tr>';
     }).join('');
   } catch(e) { console.error('Supply chain load error:', e); }
+}
+async function scExpandRow(pkg, mgr, idx) {
+  var row = document.getElementById('sc-expand-' + idx);
+  if (row.style.display !== 'none') { row.style.display = 'none'; return; }
+  row.style.display = 'table-row';
+  try {
+    var r = await fetch(API + '/api/supply-chain/detail?package=' + encodeURIComponent(pkg) + '&manager=' + encodeURIComponent(mgr));
+    var d = await r.json();
+    if (!d.installs || !d.installs.length) { row.querySelector('td').innerHTML = 'No detail found'; return; }
+    var html = '<table style="width:100%;font-size:12px;border:none"><thead><tr><th>Time</th><th>Version</th><th>Pinned</th><th>Session</th><th>Command</th></tr></thead><tbody>';
+    d.installs.forEach(function(i) {
+      var sessLink = i.session_id ? '<a style="color:var(--cyan);cursor:pointer" onclick="event.stopPropagation();openDeepDive(\'' + i.session_id + '\')">' + esc(i.session_title || i.session_id.substring(0,8)) + '</a>' : '-';
+      html += '<tr><td>' + fmtTimestamp(i.timestamp) + '</td>'
+        + '<td>' + esc(i.package_version||'latest') + '</td>'
+        + '<td>' + (i.pinned ? '<span style="color:var(--green)">Yes</span>' : '<span style="color:var(--orange)">No</span>') + '</td>'
+        + '<td>' + sessLink + '</td>'
+        + '<td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc(i.command||'') + '">' + esc((i.command||'').substring(0,80)) + '</td></tr>';
+    });
+    html += '</tbody></table>';
+    row.querySelector('td').innerHTML = html;
+  } catch(e) { row.querySelector('td').innerHTML = 'Error loading detail'; }
 }
 // Init category button style
 document.querySelector('#sc-category-toggle button.active').style.background = 'var(--blue)';
