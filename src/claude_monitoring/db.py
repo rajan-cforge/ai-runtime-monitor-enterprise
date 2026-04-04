@@ -172,6 +172,24 @@ def init_db(db_path=None):
         last_read TEXT
     )""")
 
+    # Supply chain dependency tracking
+    c.execute("""CREATE TABLE IF NOT EXISTS agent_dependencies (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        timestamp TEXT NOT NULL,
+        session_id TEXT,
+        agent_type TEXT,
+        action TEXT NOT NULL,
+        package_manager TEXT NOT NULL,
+        package_name TEXT NOT NULL,
+        package_version TEXT,
+        pinned BOOLEAN DEFAULT 0,
+        registry_url TEXT,
+        lockfile_path TEXT,
+        command TEXT,
+        risk_flags TEXT DEFAULT '[]',
+        dedup_hash TEXT UNIQUE
+    )""")
+
     # Add dedup_hash column to events if missing (migration for dedup fix)
     try:
         c.execute("ALTER TABLE events ADD COLUMN dedup_hash TEXT")
@@ -193,6 +211,9 @@ def init_db(db_path=None):
     c.execute("CREATE INDEX IF NOT EXISTS idx_api_calls_ts ON api_calls(timestamp)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_api_calls_session ON api_calls(session_id)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_api_calls_service ON api_calls(destination_service)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_deps_ts ON agent_dependencies(timestamp)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_deps_pkg ON agent_dependencies(package_name)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_deps_risk ON agent_dependencies(risk_flags)")
 
     conn.commit()
     return conn

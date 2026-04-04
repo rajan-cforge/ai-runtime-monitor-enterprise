@@ -849,6 +849,10 @@ class JSONLSessionWatcher:
                 )
                 self._check_sensitive(json.dumps(tool_input, default=str), session_id, timestamp, f"tool:{tool_name}")
 
+                # Supply chain: detect package installs from Bash commands
+                if tool_name in ("Bash", "bash") and input_preview:
+                    self._check_supply_chain(input_preview, session_id, timestamp)
+
                 # MCP server detection: tool names like mcp__<server>__<method>
                 if tool_name.startswith("mcp__"):
                     parts = tool_name.split("__", 2)
@@ -961,6 +965,44 @@ class JSONLSessionWatcher:
                         "elapsed": data.get("elapsedTimeSeconds", 0),
                     },
                 )
+
+    def _check_supply_chain(self, command, session_id, timestamp):
+        """Detect package installs in Bash commands and store in agent_dependencies."""
+        try:
+            from claude_monitoring.supply_chain import parse_install_command, store_dependency
+
+            packages = parse_install_command(command)
+            if not packages:
+                return
+            agent_type = None
+            try:
+                row = self.db.execute(
+                    "SELECT agent_type FROM sessions WHERE session_id=?", (session_id,)
+                ).fetchone()
+                if row:
+                    agent_type = row[0]
+            except Exception:
+                pass
+            for pkg in packages:
+                risk_flags = store_dependency(self.db, timestamp, session_id, agent_type, pkg, command)
+                # Critical alert for typosquats
+                typo_match = [r.split(":", 1)[1] for r in risk_flags if r.startswith("typosquat:")]
+                if typo_match:
+                    self._store_event(timestamp, session_id, "sensitive_data", "supply_chain", {
+                        "severity": "critical", "patterns": ["typosquat"],
+                        "categories": ["supply_chain"], "context": "tool:Bash",
+                        "snippet": f"Agent installed '{pkg['name']}' — known typosquat of '{typo_match[0]}'. Command: {command[:200]}",
+                    })
+                # High alert for unpinned npx
+                if "remote_exec" in risk_flags and "unpinned" in risk_flags:
+                    self._store_event(timestamp, session_id, "sensitive_data", "supply_chain", {
+                        "severity": "high", "patterns": ["remote_exec_unpinned"],
+                        "categories": ["supply_chain"], "context": "tool:Bash",
+                        "snippet": f"Agent ran unpinned npx command: {command[:200]}",
+                    })
+            self.db.commit()
+        except Exception:
+            pass
 
     def _check_sensitive(self, text, session_id, timestamp, context):
         """Scan text for sensitive patterns and store alerts."""
@@ -1627,6 +1669,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             "/api/insights/projects": self._api_insights_projects,
             "/api/insights/efficiency": self._api_insights_efficiency,
             "/api/report": self._api_report,
+            "/api/supply-chain": self._api_supply_chain,
         }
 
         # Match path prefixes for dynamic routes
@@ -3192,6 +3235,68 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self._send_json({"sessions": result, "total": len(result), "period": period})
 
     # ── Report endpoint ────────────────────────────────────────
+
+    def _api_supply_chain(self, params):
+        """Supply chain dependency data."""
+        db = get_thread_db()
+        manager = params.get("manager", [""])[0]
+        agent = params.get("agent", [""])[0]
+        risk = params.get("risk", [""])[0]
+        search = params.get("search", [""])[0]
+        limit = int(params.get("limit", ["200"])[0])
+
+        # Stats
+        total = db.execute("SELECT COUNT(*) FROM agent_dependencies").fetchone()[0]
+        unique = db.execute("SELECT COUNT(DISTINCT package_name) FROM agent_dependencies").fetchone()[0]
+        unpinned = db.execute("SELECT COUNT(*) FROM agent_dependencies WHERE pinned=0").fetchone()[0]
+        risk_flagged = db.execute("SELECT COUNT(*) FROM agent_dependencies WHERE risk_flags != '[]'").fetchone()[0]
+        by_manager = {r[0]: r[1] for r in db.execute(
+            "SELECT package_manager, COUNT(*) FROM agent_dependencies GROUP BY package_manager"
+        ).fetchall()}
+        by_agent = {r[0] or "unknown": r[1] for r in db.execute(
+            "SELECT agent_type, COUNT(*) FROM agent_dependencies GROUP BY agent_type"
+        ).fetchall()}
+
+        # Filtered list
+        conditions = ["1=1"]
+        bind = []
+        if manager:
+            conditions.append("d.package_manager = ?")
+            bind.append(manager)
+        if agent:
+            conditions.append("d.agent_type = ?")
+            bind.append(agent)
+        if risk:
+            conditions.append("d.risk_flags LIKE ?")
+            bind.append(f"%{risk}%")
+        if search:
+            conditions.append("(d.package_name LIKE ? OR d.command LIKE ?)")
+            bind.extend([f"%{search}%", f"%{search}%"])
+
+        where = " AND ".join(conditions)
+        sql = f"""SELECT d.*, s.title as session_title
+                  FROM agent_dependencies d
+                  LEFT JOIN sessions s ON d.session_id = s.session_id
+                  WHERE {where} ORDER BY d.id DESC LIMIT ?"""  # nosec B608
+        bind.append(limit)
+        rows = db.execute(sql, bind).fetchall()
+        installs = []
+        for r in rows:
+            rd = dict(r)
+            try:
+                rd["risk_flags"] = json.loads(rd.get("risk_flags") or "[]")
+            except (json.JSONDecodeError, TypeError):
+                rd["risk_flags"] = []
+            installs.append(rd)
+
+        self._send_json({
+            "stats": {
+                "total_installs": total, "unique_packages": unique,
+                "unpinned_count": unpinned, "risk_flagged_count": risk_flagged,
+                "by_manager": by_manager, "by_agent": by_agent,
+            },
+            "installs": installs,
+        })
 
     def _api_report(self, params):
         """Generate a summary report in various formats."""
