@@ -611,6 +611,27 @@ function esc(s) {
   if (!s) return '';
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
+function maskSecrets(s) {
+  if (!s) return '';
+  // AWS keys: AKIA followed by 16 chars
+  s = s.replace(/\b(AKIA[A-Z0-9]{4})[A-Z0-9]{8}([A-Z0-9]{4})\b/g, '$1...$2');
+  // GitHub tokens: ghp_, gho_, ghs_, ghr_, github_pat_
+  s = s.replace(/\b(gh[posr]_[A-Za-z0-9]{4})[A-Za-z0-9]+([A-Za-z0-9]{4})\b/g, '$1...$2');
+  s = s.replace(/\b(github_pat_[A-Za-z0-9]{4})[A-Za-z0-9]+([A-Za-z0-9]{4})\b/g, '$1...$2');
+  // Anthropic keys: sk-ant-
+  s = s.replace(/\b(sk-ant-[A-Za-z0-9]{4})[A-Za-z0-9-]+([A-Za-z0-9]{4})\b/g, '$1...$2');
+  // Stripe keys: sk_live_, sk_test_, pk_live_, pk_test_
+  s = s.replace(/\b([spr]k_(?:live|test)_[A-Za-z0-9]{4})[A-Za-z0-9]+([A-Za-z0-9]{4})\b/g, '$1...$2');
+  // Slack webhooks/tokens: xoxb-, xoxp-, xoxs-
+  s = s.replace(/\b(xox[bpsa]-[A-Za-z0-9]{4})[A-Za-z0-9-]+([A-Za-z0-9]{4})\b/g, '$1...$2');
+  // Generic long hex/base64 secrets (32+ chars of alphanumeric)
+  s = s.replace(/\b([A-Za-z0-9+/]{8})[A-Za-z0-9+/]{24,}([A-Za-z0-9+/]{4})\b/g, function(m, p1, p2) {
+    // Only mask if it looks like a secret (mixed case or long enough)
+    if (m.length >= 40) return p1 + '...' + p2;
+    return m;
+  });
+  return s;
+}
 function cleanTitle(s) {
   if (!s) return '';
   var t = s.replace(/<[^>]+>/g, '');
@@ -1153,9 +1174,13 @@ async function loadAlerts(customOffset) {
         + '<div class="alert-context">Context: ' + esc(a.context)
         + (a.categories ? ' &middot; ' + (a.categories||[]).join(', ') : '') + '</div>'
         + (a.session_id ? '<div class="alert-session" onclick="openDeepDive(\''+a.session_id+'\', '+(a.turn_number||1)+')">' + esc(a.session_title) + turnLabel + '</div>' : '')
-        + '<div class="alert-snippet">' + esc(a.snippet) + '</div>'
+        + '<div class="alert-snippet" data-masked="' + esc(maskSecrets(a.snippet)) + '">' + esc(maskSecrets(a.snippet)) + '</div>'
+        + '<button class="dismiss-btn" style="font-size:10px;margin-top:4px" onclick="event.stopPropagation();toggleReveal(this,' + a.id + ')">Reveal</button>'
         + '</div>';
     }).join('');
+    // Store full snippets for reveal
+    window._alertSnippets = window._alertSnippets || {};
+    filtered.forEach(function(a) { window._alertSnippets[a.id] = a.snippet || ''; });
 
     if (alertOffset === 0) {
       container.innerHTML = summaryHtml + alertsHtml;
@@ -1172,6 +1197,16 @@ async function loadAlerts(customOffset) {
         + '<button onclick="loadAlerts('+(alertOffset+200)+')" style="background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:8px 24px;color:var(--text);font-size:13px;cursor:pointer">Load More</button></div>';
     }
   } catch(e) { console.error('loadAlerts error:', e); }
+}
+function toggleReveal(btn, alertId) {
+  var snippet = btn.previousSibling;
+  if (btn.textContent === 'Reveal') {
+    snippet.textContent = (window._alertSnippets || {})[alertId] || '';
+    btn.textContent = 'Hide';
+  } else {
+    snippet.textContent = snippet.dataset.masked;
+    btn.textContent = 'Reveal';
+  }
 }
 function filterAlertsByPattern(p) {
   alertPatternFilter = p;
