@@ -52,6 +52,7 @@ SHELL_NOISE = {
     "pip", "pip3", "install", "docker-compose", "docker", "exec",
     "-T", "source", "activate", "cd", "mkdir", "rm", "cp", "mv",
     "chmod", "chown", "sudo", "sh", "-c", "bash", "done",
+    "user-local", "user", "local", "global", "system",
 }
 
 KNOWN_TYPOSQUATS = {
@@ -86,6 +87,46 @@ HIGH_RISK_PACKAGES = {
     "selenium": "Browser automation",
     "playwright": "Browser automation",
 }
+
+SKIP_WORDS = {
+    "to", "for", "and", "or", "the", "in", "on", "at", "by", "up",
+    "is", "it", "no", "do", "if", "of", "as", "so", "we", "an",
+    "be", "he", "me", "my", "load", "gate", "quality", "scripts",
+    "tests", "build", "install", "run", "test", "check", "set", "get",
+    "all", "new", "use", "add", "api", "app", "bin", "lib", "src",
+    "out", "log", "env", "dev", "opt", "var", "tmp", "not", "but",
+    "bi", "py", "go", "sh", "ok", "os", "re", "id",
+}
+
+# Valid package name pattern: starts with letter/@ then alphanumeric/dash/dot/underscore/slash(scoped)
+_VALID_PKG_RE = re.compile(r'^[a-zA-Z@][a-zA-Z0-9._/:-]*[a-zA-Z0-9]$|^[a-zA-Z][a-zA-Z0-9]$')
+
+
+def _is_valid_package_name(name):
+    """Check if a token looks like a real package name."""
+    if not name or len(name) < 2:
+        return False
+    # Special entries we generate ourselves
+    if name.startswith("("):
+        return True
+    # 1-char tokens are never packages; 2-char checked against SKIP_WORDS above
+    if len(name) < 2:
+        return False
+    if name.lower() in SKIP_WORDS or name.lower() in SHELL_NOISE:
+        return False
+    # No trailing punctuation
+    if name[-1] in (')', '}', '"', "'", ',', ';', '\\'):
+        return False
+    if name.endswith("-"):
+        return False
+    # Scoped npm (@scope/pkg) and Go modules (github.com/x/y) allow /
+    if name.startswith("@") or name.startswith("github.com/"):
+        return _VALID_PKG_RE.match(name) is not None
+    # Regular packages: no / allowed (would be a path)
+    if "/" in name:
+        return False
+    return _VALID_PKG_RE.match(name) is not None
+
 
 LOCKFILES = {
     "package-lock.json": "npm", "yarn.lock": "yarn", "pnpm-lock.yaml": "pnpm",
@@ -148,7 +189,7 @@ def parse_install_command(command):
     # npx: only first non-flag token
     if matched_manager == "npx":
         for t in tokens:
-            if not t.startswith("-") and t not in SHELL_NOISE:
+            if not t.startswith("-") and t not in SHELL_NOISE and _is_valid_package_name(t):
                 return [{"name": t, "version": "latest", "pinned": False,
                          "manager": "npx", "registry": registry}]
         return []
@@ -182,7 +223,7 @@ def parse_install_command(command):
                 })
             continue
 
-        if token in SKIP_FLAGS or token in SHELL_NOISE:
+        if token in SKIP_FLAGS or token in SHELL_NOISE or token.lower() in SKIP_WORDS:
             continue
 
         # Skip tokens that look like paths, variables, or noise
@@ -194,7 +235,7 @@ def parse_install_command(command):
             continue
 
         name, version, pinned = _parse_package_token(token, matched_manager)
-        if name and len(name) > 1 and name not in SHELL_NOISE:
+        if name and _is_valid_package_name(name):
             packages.append({
                 "name": name, "version": version, "pinned": pinned,
                 "manager": matched_manager, "registry": registry,
@@ -236,25 +277,30 @@ def _parse_package_token(token, manager):
 def assess_risk(package):
     """Return numeric risk score (0-10) for a package."""
     score = 0
+    reasons = []
     name = (package.get("name") or "").lower()
 
     if name in KNOWN_TYPOSQUATS:
         score += 5
+        reasons.append(f"typosquat of '{KNOWN_TYPOSQUATS[name]}' (+5)")
 
     if not package.get("pinned", False):
         score += 1
+        reasons.append("unpinned (+1)")
 
     if package.get("manager") == "npx":
         score += 3
+        reasons.append("remote execution via npx (+3)")
 
     if name in HIGH_RISK_PACKAGES:
         score += 3
+        reasons.append(f"{HIGH_RISK_PACKAGES[name]} (+3)")
 
-    # Financial/trading APIs
     if any(kw in name for kw in ("trade", "finance", "stripe", "plaid")):
         score += 2
+        reasons.append("financial API (+2)")
 
-    return score
+    return score, reasons
 
 
 def risk_level(score):
@@ -293,7 +339,7 @@ def extract_project(path):
 
 def store_dependency(db, timestamp, session_id, agent_type, package, command, cwd=None):
     """Store a parsed dependency in agent_dependencies with dedup."""
-    score = assess_risk(package)
+    score, reasons = assess_risk(package)
     level = risk_level(score)
     category = categorize_package(package["name"], package["manager"])
     project = extract_project(cwd) if cwd else extract_project(command)
@@ -313,7 +359,7 @@ def store_dependency(db, timestamp, session_id, agent_type, package, command, cw
                 1 if package.get("pinned") else 0,
                 package.get("registry", ""),
                 command[:500],
-                json.dumps({"score": score, "level": level}),
+                json.dumps({"score": score, "level": level, "reasons": reasons}),
                 score, category, project,
                 dedup_hash,
             ),

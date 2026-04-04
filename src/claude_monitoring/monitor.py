@@ -1679,6 +1679,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             "/api/insights/efficiency": self._api_insights_efficiency,
             "/api/report": self._api_report,
             "/api/supply-chain": self._api_supply_chain,
+            "/api/supply-chain/detail": self._api_supply_chain_detail,
         }
 
         # Match path prefixes for dynamic routes
@@ -3284,15 +3285,25 @@ class DashboardHandler(BaseHTTPRequestHandler):
             sql = f"""SELECT package_name, package_manager, category, registry_url,
                           COUNT(*) as install_count,
                           MIN(timestamp) as first_seen, MAX(timestamp) as last_seen,
-                          MAX(risk_score) as risk_score,
+                          MAX(risk_score) as risk_score, MAX(risk_flags) as risk_flags,
                           GROUP_CONCAT(DISTINCT agent_type) as agents,
                           GROUP_CONCAT(DISTINCT project) as projects,
-                          MAX(pinned) as pinned
+                          MAX(pinned) as pinned,
+                          (SELECT package_version FROM agent_dependencies
+                           WHERE package_name=d.package_name AND package_manager=d.package_manager
+                           ORDER BY id DESC LIMIT 1) as latest_version
                       FROM agent_dependencies d WHERE {where}
                       GROUP BY package_name, package_manager
                       ORDER BY MAX(risk_score) DESC, COUNT(*) DESC LIMIT ?"""  # nosec B608
             rows = db.execute(sql, bind + [limit]).fetchall()
-            installs = [dict(r) for r in rows]
+            installs = []
+            for r in rows:
+                rd = dict(r)
+                try:
+                    rd["risk_flags"] = json.loads(rd.get("risk_flags") or "{}")
+                except (json.JSONDecodeError, TypeError):
+                    rd["risk_flags"] = {}
+                installs.append(rd)
         else:
             sql = f"""SELECT d.*, s.title as session_title
                       FROM agent_dependencies d
@@ -3310,6 +3321,27 @@ class DashboardHandler(BaseHTTPRequestHandler):
             "installs": installs,
             "view": view,
         })
+
+    def _api_supply_chain_detail(self, params):
+        """Individual install events for a specific package (click-to-expand)."""
+        db = get_thread_db()
+        pkg = params.get("package", [""])[0]
+        mgr = params.get("manager", [""])[0]
+        if not pkg:
+            self._send_json({"error": "missing package"}, 400)
+            return
+        conditions = ["d.package_name = ?"]
+        bind = [pkg]
+        if mgr:
+            conditions.append("d.package_manager = ?")
+            bind.append(mgr)
+        where = " AND ".join(conditions)
+        sql = f"""SELECT d.*, s.title as session_title
+                  FROM agent_dependencies d
+                  LEFT JOIN sessions s ON d.session_id = s.session_id
+                  WHERE {where} ORDER BY d.timestamp DESC LIMIT 50"""  # nosec B608
+        rows = db.execute(sql, bind).fetchall()
+        self._send_json({"installs": [dict(r) for r in rows]})
 
     def _api_report(self, params):
         """Generate a summary report in various formats."""
