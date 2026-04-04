@@ -314,6 +314,7 @@ body { background:var(--bg); color:var(--text); font-family:-apple-system,BlinkM
   <div class="panel" id="panel-feed">
     <div class="feed-controls">
       <label><input type="checkbox" id="feed-auto-scroll" checked> Auto-scroll</label>
+      <label><input type="checkbox" id="feed-sessions-only" checked> Sessions only</label>
       <label><input type="checkbox" id="feed-show-tokens"> Show token events</label>
     </div>
     <div class="feed" id="feed-container"></div>
@@ -870,9 +871,12 @@ async function pollFeed() {
     const d = await r.json();
     const container = document.getElementById('feed-container');
     const showTokens = document.getElementById('feed-show-tokens').checked;
+    const sessionsOnly = document.getElementById('feed-sessions-only').checked;
+    const sessionEventTypes = new Set(['user_prompt','assistant_response','thinking','tool_use','tool_result','token_usage','sensitive_data','mcp_call','bash_progress','system_event']);
 
     for (const ev of d.events) {
       if (!showTokens && ev.event_type === 'token_usage') continue;
+      if (sessionsOnly && !sessionEventTypes.has(ev.event_type)) continue;
       // Client-side dedup
       var feedKey = (ev.timestamp||'') + '|' + (ev.event_type||'') + '|' + (ev.summary||'').substring(0,60);
       if (_feedSeen[feedKey]) continue;
@@ -1475,7 +1479,7 @@ function renderTurnRail() {
     return '<div class="turn-rail-item' + (t.has_alert ? ' has-alert' : '') + '"'
       + ' data-turn="' + t.turn_number + '" onclick="selectTurn(' + t.turn_number + ')">'
       + '<div><span class="turn-num">T' + t.turn_number + '</span>'
-      + ' <span style="color:var(--text2);font-size:11px">' + fmtTime(t.timestamp) + '</span>'
+      + ' <span style="color:var(--text2);font-size:11px">' + fmtTimestamp(t.timestamp) + '</span>'
       + (t.has_alert ? ' <span style="color:var(--red)">&#x26a0;</span>' : '') + '</div>'
       + '<div class="turn-preview">' + esc(cleanTitle(t.prompt_preview)) + '</div>'
       + (tools ? '<div class="turn-tools">' + tools + '</div>' : '')
@@ -1500,7 +1504,7 @@ function selectTurn(num) {
 function renderInspector(turn) {
   var panel = document.getElementById('dd-inspector');
   var html = '<div class="turn-header">Turn ' + turn.turn_number
-    + ' <span style="color:var(--text2);font-weight:normal;font-size:12px">' + fmtTime(turn.timestamp)
+    + ' <span style="color:var(--text2);font-weight:normal;font-size:12px">' + fmtTimestamp(turn.timestamp)
     + ' &middot; &#x2191;' + fmtNum(turn.token_delta.input) + ' in &#x2193;' + fmtNum(turn.token_delta.output) + ' out</span></div>';
 
   turn.events.forEach(function(ev) {
