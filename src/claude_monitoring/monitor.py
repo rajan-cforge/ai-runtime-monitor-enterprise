@@ -2055,7 +2055,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 current_turn = {
                     "turn_number": turn_num,
                     "timestamp": e["timestamp"],
-                    "prompt_preview": (data.get("text", "") or "")[:120],
+                    "prompt_preview": JSONLSessionWatcher._clean_title(data.get("text", "") or "")[:80],
                     "events": [evt],
                     "tools_used": [],
                     "has_alert": False,
