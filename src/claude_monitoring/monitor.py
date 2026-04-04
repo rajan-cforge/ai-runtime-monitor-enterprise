@@ -3267,6 +3267,13 @@ class DashboardHandler(BaseHTTPRequestHandler):
         if search:
             conditions.append("(d.package_name LIKE ? OR d.command LIKE ?)")
             bind.extend([f"%{search}%", f"%{search}%"])
+        min_risk = params.get("min_risk", [""])[0]
+        if min_risk:
+            conditions.append("d.risk_score >= ?")
+            bind.append(int(min_risk))
+        unpinned = params.get("unpinned", [""])[0]
+        if unpinned == "1":
+            conditions.append("d.pinned = 0")
 
         where = " AND ".join(conditions)
 
