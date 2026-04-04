@@ -1120,6 +1120,9 @@ async function loadFiles() {
 
 // Supply Chain tab
 var _scCategory = 'package';
+var _scManagerFilter = '';
+var _scRiskOnly = false;
+var _scUnpinnedOnly = false;
 function scSetCategory(btn) {
   _scCategory = btn.dataset.cat;
   document.querySelectorAll('#sc-category-toggle button').forEach(function(b) {
@@ -1140,21 +1143,27 @@ function scRiskBadge(score) {
 }
 async function loadSupplyChain() {
   try {
-    var mgr = document.getElementById('sc-manager').value;
+    var mgr = _scManagerFilter || document.getElementById('sc-manager').value;
     var search = document.getElementById('sc-search').value;
     var url = API + '/api/supply-chain?view=grouped&category=' + _scCategory;
     if (mgr) url += '&manager=' + mgr;
     if (search) url += '&search=' + encodeURIComponent(search);
+    if (_scRiskOnly) url += '&min_risk=4';
+    if (_scUnpinnedOnly) url += '&unpinned=1';
     var r = await fetch(url);
     var d = await r.json();
     var s = d.stats || {};
+    var unpinnedActive = _scUnpinnedOnly ? ';border-color:var(--orange);background:#3d2e1a' : '';
+    var riskActive = _scRiskOnly ? ';border-color:var(--red);background:#3d1a1a' : '';
     document.getElementById('sc-stats').innerHTML =
       '<span class="badge" style="background:var(--surface2);color:var(--text);border:1px solid var(--border)">Installs: <strong>' + (s.total_installs||0) + '</strong></span>'
       + '<span class="badge" style="background:var(--surface2);color:var(--blue);border:1px solid var(--border)">Unique: <strong>' + (s.unique_packages||0) + '</strong></span>'
-      + '<span class="badge" style="background:var(--surface2);color:var(--orange);border:1px solid var(--border)">Unpinned: <strong>' + (s.unpinned_count||0) + '</strong></span>'
-      + '<span class="badge" style="background:var(--surface2);color:var(--red);border:1px solid var(--border)">Risk Flagged: <strong>' + (s.risk_flagged_count||0) + '</strong></span>'
+      + '<span class="badge" style="cursor:pointer;background:var(--surface2);color:var(--orange);border:1px solid var(--border)' + unpinnedActive + '" onclick="_scUnpinnedOnly=!_scUnpinnedOnly;loadSupplyChain()">Unpinned: <strong>' + (s.unpinned_count||0) + '</strong></span>'
+      + '<span class="badge" style="cursor:pointer;background:var(--surface2);color:var(--red);border:1px solid var(--border)' + riskActive + '" onclick="_scRiskOnly=!_scRiskOnly;loadSupplyChain()">Risk Flagged: <strong>' + (s.risk_flagged_count||0) + '</strong></span>'
       + Object.entries(s.by_manager||{}).map(function(e) {
-        return '<span class="badge" style="background:var(--surface2);color:var(--text2);border:1px solid var(--border)">' + esc(e[0]) + ': ' + e[1] + '</span>';
+        var isActive = _scManagerFilter === e[0];
+        var style = isActive ? 'cursor:pointer;background:var(--blue);color:white;border:1px solid var(--blue)' : 'cursor:pointer;background:var(--surface2);color:var(--text2);border:1px solid var(--border)';
+        return '<span class="badge" style="' + style + '" onclick="_scManagerFilter=_scManagerFilter===\'' + esc(e[0]) + '\'?\'\':\''+esc(e[0])+'\';document.getElementById(\'sc-manager\').value=_scManagerFilter;loadSupplyChain()">' + esc(e[0]) + ': ' + e[1] + '</span>';
       }).join('');
     var thead = document.getElementById('sc-thead');
     var tbody = document.getElementById('sc-tbody');
@@ -1588,6 +1597,19 @@ function closeDeepDive() {
   document.getElementById('deepdive-overlay').classList.remove('open');
 }
 
+var _installPatterns = ['npm install','npm i ','yarn add','pnpm add','pip install','pip3 install','cargo add','go get','gem install','brew install','apt install','apt-get install','npx '];
+function turnHasInstall(turn) {
+  for (var i = 0; i < turn.events.length; i++) {
+    var ev = turn.events[i];
+    if (ev.event_type === 'tool_use') {
+      var cmd = (ev.data && (ev.data.command || ev.data.input_preview)) || '';
+      for (var j = 0; j < _installPatterns.length; j++) {
+        if (cmd.indexOf(_installPatterns[j]) >= 0) return true;
+      }
+    }
+  }
+  return false;
+}
 function renderTurnRail() {
   const rail = document.getElementById('dd-turn-rail');
   const reversedTurns = ddTurns.slice().reverse();
@@ -1595,11 +1617,14 @@ function renderTurnRail() {
     const tools = t.tools_used.slice(0, 3).map(function(name) {
       return '<span class="tool-chip">' + esc(name) + '</span>';
     }).join('');
+    var hasInstall = turnHasInstall(t);
+    var installBadge = hasInstall ? ' <span title="Package install" style="font-size:11px">&#x1f4e6;</span>' : '';
     return '<div class="turn-rail-item' + (t.has_alert ? ' has-alert' : '') + '"'
       + ' data-turn="' + t.turn_number + '" onclick="selectTurn(' + t.turn_number + ')">'
       + '<div><span class="turn-num">T' + t.turn_number + '</span>'
       + ' <span style="color:var(--text2);font-size:11px">' + fmtTimestamp(t.timestamp) + '</span>'
-      + (t.has_alert ? ' <span style="color:var(--red)">&#x26a0;</span>' : '') + '</div>'
+      + (t.has_alert ? ' <span style="color:var(--red)">&#x26a0;</span>' : '')
+      + installBadge + '</div>'
       + '<div class="turn-preview">' + esc(cleanTitle(t.prompt_preview)) + '</div>'
       + (tools ? '<div class="turn-tools">' + tools + '</div>' : '')
       + '</div>';
