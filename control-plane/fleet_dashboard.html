@@ -323,12 +323,20 @@ tr.clickable:hover td { background:var(--surface2); cursor:pointer; }
       document.getElementById('alertTrendLabel').textContent = 'Alert trend (' + (nDays === 1 ? 'today' : 'last ' + nDays + ' days') + ')';
       const ctx = document.getElementById('alertTrendChart');
       if (window._alertChart) window._alertChart.destroy();
+      // Compute stable Y-axis max from stacked totals
+      const stackedTotals = trend.days.map((_, i) =>
+        (trend.critical[i]||0) + (trend.high[i]||0) + (trend.medium[i]||0) + (trend.low[i]||0));
+      const yMax = Math.ceil(Math.max(...stackedTotals, 10) / 50) * 50;
+      // Mark today's bar with dashed border
+      const todayStr = new Date().toISOString().slice(0,10);
+      const borderDash = trend.days.map(d => d === todayStr ? [4,4] : []);
+      const borderWidth = trend.days.map(d => d === todayStr ? 2 : 0);
       window._alertChart = new Chart(ctx, {
         type: 'bar',
         data: {
-          labels: trend.days.map(d => d.slice(5)),
+          labels: trend.days.map((d, i) => d.slice(5) + (d === todayStr ? ' (live)' : '')),
           datasets: [
-            {label:'Critical', data:trend.critical, backgroundColor:'#f85149'},
+            {label:'Critical', data:trend.critical, backgroundColor:'#f85149', borderColor:'#fff', borderWidth, borderDash},
             {label:'High', data:trend.high, backgroundColor:'#d29922'},
             {label:'Medium', data:trend.medium, backgroundColor:'#58a6ff'},
             {label:'Low', data:trend.low, backgroundColor:'#484f58'},
@@ -336,10 +344,11 @@ tr.clickable:hover td { background:var(--surface2); cursor:pointer; }
         },
         options: {
           responsive:true, maintainAspectRatio:false,
+          animation:false,
           plugins:{legend:{labels:{color:'#8b949e',font:{size:11}}}},
           scales:{
             x:{stacked:true, ticks:{color:'#8b949e'}, grid:{color:'#21262d'}},
-            y:{stacked:true, ticks:{color:'#8b949e'}, grid:{color:'#21262d'}}
+            y:{stacked:true, suggestedMax:yMax, ticks:{color:'#8b949e'}, grid:{color:'#21262d'}}
           }
         }
       });
