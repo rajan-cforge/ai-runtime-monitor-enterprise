@@ -35,7 +35,7 @@ body { background:var(--bg); color:var(--text); font-family:-apple-system,BlinkM
 
 .stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:12px; margin-bottom:20px; }
 .stat-card { background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:16px; transition:border-color 0.2s; }
-.stat-card:hover { border-color:var(--blue); }
+/* stat-card: no hover — not clickable */
 .stat-card .label { font-size:11px; color:var(--text2); text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px; }
 .stat-card .value { font-size:24px; font-weight:700; }
 .stat-card .value.blue { color:var(--blue); }
@@ -48,7 +48,7 @@ table { width:100%; border-collapse:collapse; background:var(--surface); border:
 th { text-align:left; padding:10px 14px; font-size:11px; color:var(--text2); text-transform:uppercase; letter-spacing:0.5px; background:var(--surface2); border-bottom:1px solid var(--border); }
 td { padding:10px 14px; border-bottom:1px solid var(--border); font-size:13px; }
 tr:last-child td { border-bottom:none; }
-tr:hover td { background:var(--surface2); }
+tr.clickable:hover td { background:var(--surface2); cursor:pointer; }
 
 .status-dot { width:8px; height:8px; border-radius:50%; display:inline-block; margin-right:6px; }
 .status-dot.active { background:var(--green); }
@@ -81,15 +81,22 @@ tr:hover td { background:var(--surface2); }
 .alert-actions { display:flex; flex-direction:column; gap:4px; align-items:flex-end; }
 .btn-dismiss { background:var(--surface2); border:1px solid var(--border); border-radius:4px; padding:3px 10px; color:var(--text2); font-size:11px; cursor:pointer; }
 .btn-dismiss:hover { border-color:var(--red); color:var(--red); }
-.alert-snippet { cursor:pointer; max-height:20px; overflow:hidden; transition:max-height 0.2s; }
-.alert-snippet.expanded { max-height:300px; overflow:auto; }
+.alert-snippet { max-height:20px; overflow:hidden; transition:max-height 0.3s ease; }
+.alert-row.expanded .alert-snippet { max-height:500px; overflow:auto; }
+.alert-row { cursor:pointer; transition:background 0.15s; }
+.alert-row.expanded { background:var(--surface2); }
+.alert-expand-detail { display:none; margin-top:8px; font-size:12px; color:var(--text2); }
+.alert-row.expanded .alert-expand-detail { display:block; }
+.btn-load-more { display:block; margin:16px auto; background:var(--surface2); border:1px solid var(--border); border-radius:6px; padding:10px 32px; color:var(--text); font-size:13px; cursor:pointer; }
+.btn-load-more:hover { border-color:var(--blue); color:var(--blue); }
+.filter-select { background:var(--surface2); border:1px solid var(--border); border-radius:4px; padding:6px 10px; color:var(--text); font-size:13px; }
 
 .model-list { display:flex; flex-wrap:wrap; gap:8px; margin-top:16px; }
 .model-chip { background:var(--surface); border:1px solid var(--border); border-radius:6px; padding:8px 14px; font-size:12px; }
 .model-chip .count { color:var(--blue); font-weight:600; margin-left:6px; }
 
-.health-card { background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:12px 16px; display:flex; align-items:center; gap:10px; min-width:280px; flex:1; }
-.health-card:hover { border-color:var(--blue); }
+.health-card { background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:12px 16px; display:flex; align-items:center; gap:10px; min-width:280px; flex:1; cursor:pointer; }
+.health-card:hover { border-color:var(--blue); background:var(--surface2); }
 .health-card .hc-dot { width:10px; height:10px; border-radius:50%; flex-shrink:0; }
 .health-card .hc-dot.green { background:var(--green); }
 .health-card .hc-dot.yellow { background:var(--orange); }
@@ -132,7 +139,7 @@ tr:hover td { background:var(--surface2); }
     <div class="stats" id="severityRow"></div>
     <div style="display:flex;gap:20px;margin:20px 0;flex-wrap:wrap">
       <div style="flex:2;min-width:300px;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:16px">
-        <h3 style="margin-bottom:12px;font-size:14px;color:var(--text2)">Alert Trend (7 Days)</h3>
+        <h3 style="margin-bottom:12px;font-size:14px;color:var(--text2)" id="alertTrendLabel">Alert trend</h3>
         <canvas id="alertTrendChart" height="200"></canvas>
       </div>
       <div style="flex:1;min-width:200px">
@@ -152,6 +159,15 @@ tr:hover td { background:var(--surface2); }
 
   <!-- Sessions -->
   <div class="panel" id="panel-sessions">
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px">
+      <select id="sessionsEndpointFilter" class="filter-select"><option value="">All Endpoints</option></select>
+      <select id="sessionsSortFilter" class="filter-select">
+        <option value="recent">Most recent</option>
+        <option value="turns">Most turns</option>
+        <option value="tokens">Most tokens</option>
+      </select>
+      <span id="sessionsCount" style="font-size:12px;color:var(--text2)"></span>
+    </div>
     <table>
       <thead><tr><th>Endpoint</th><th>Agent</th><th>Title</th><th>Model</th><th>Tokens</th><th>Turns</th><th>Last Activity</th></tr></thead>
       <tbody id="sessionsBody"></tbody>
@@ -161,13 +177,14 @@ tr:hover td { background:var(--surface2); }
   <!-- Alerts -->
   <div class="panel" id="panel-alerts">
     <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px">
-      <select id="alertSeverityFilter" style="background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:6px 10px;color:var(--text);font-size:13px">
+      <select id="alertSeverityFilter" class="filter-select">
         <option value="">All Severities</option>
         <option value="critical">Critical</option>
         <option value="high">High</option>
         <option value="medium">Medium</option>
         <option value="low">Low</option>
       </select>
+      <select id="alertEndpointFilter" class="filter-select"><option value="">All Endpoints</option></select>
       <span id="alertsCount" style="font-size:12px;color:var(--text2)"></span>
     </div>
     <div id="alertsList"></div>
@@ -268,15 +285,17 @@ tr:hover td { background:var(--surface2); }
     document.getElementById('stat-cost').textContent = formatCost(data.total_cost);
     document.getElementById('stat-alerts').textContent = data.total_alerts || 0;
 
-    // Endpoint health cards
+    // Endpoint health cards (FIX 3: clickable → filtered alerts)
     const epData = await apiFetch('/api/v1/fleet/endpoints');
+    window._endpointsList = epData || [];
+    populateEndpointDropdowns(epData);
     const hcContainer = document.getElementById('endpointHealthCards');
     if (epData && epData.length) {
       hcContainer.innerHTML = epData.map(ep => {
         const hb = ep.last_heartbeat;
         const sec = hb ? Math.floor((Date.now() - new Date(hb).getTime()) / 1000) : 9999;
         const dotColor = sec < 60 ? 'green' : sec < 300 ? 'yellow' : 'red';
-        return '<div class="health-card">'
+        return '<div class="health-card" onclick="showEndpointAlerts(\'' + escHtml(ep.endpoint_id) + '\')">'
           + '<div class="hc-dot ' + dotColor + '"></div>'
           + '<div class="hc-info">'
           + '<div class="hc-name">' + escHtml(ep.hostname) + '</div>'
@@ -297,9 +316,11 @@ tr:hover td { background:var(--surface2); }
       '<div class="stat-card"><div class="label">' + s.toUpperCase() + '</div><div class="value ' + (sevColors[s] || '') + '">' + (sevData[s] || 0) + '</div></div>'
     ).join('');
 
-    // Alert trend chart
+    // Alert trend chart (FIX 1: dynamic label)
     const trend = await apiFetch('/api/v1/fleet/stats/alert_trend');
     if (trend && trend.days && trend.days.length) {
+      const nDays = trend.days.length;
+      document.getElementById('alertTrendLabel').textContent = 'Alert trend (' + (nDays === 1 ? 'today' : 'last ' + nDays + ' days') + ')';
       const ctx = document.getElementById('alertTrendChart');
       if (window._alertChart) window._alertChart.destroy();
       window._alertChart = new Chart(ctx, {
@@ -346,7 +367,7 @@ tr:hover td { background:var(--surface2); }
     tbody.innerHTML = data.map(ep => {
       const hb = ep.last_heartbeat;
       const st = endpointStatus(hb);
-      return '<tr>'
+      return '<tr class="clickable" onclick="showEndpointAlerts(\'' + escHtml(ep.endpoint_id) + '\')">'
         + '<td><span class="status-dot ' + st + '"></span>' + st + '</td>'
         + '<td><strong>' + escHtml(ep.hostname) + '</strong></td>'
         + '<td>' + escHtml(ep.ip_address || '') + '</td>'
@@ -360,12 +381,20 @@ tr:hover td { background:var(--surface2); }
   }
 
   async function loadSessions() {
-    const data = await apiFetch('/api/v1/fleet/sessions?limit=100');
+    const epFilter = document.getElementById('sessionsEndpointFilter').value;
+    const sortVal = document.getElementById('sessionsSortFilter').value;
+    let url = '/api/v1/fleet/sessions?limit=200&sort=' + sortVal;
+    if (epFilter) url += '&endpoint_id=' + epFilter;
+    const data = await apiFetch(url);
     const tbody = document.getElementById('sessionsBody');
+    const countEl = document.getElementById('sessionsCount');
     if (!data || !data.length) {
       tbody.innerHTML = '<tr><td colspan="7" class="empty-state">No sessions yet</td></tr>';
+      countEl.textContent = '0 sessions';
       return;
     }
+    const epName = epFilter ? (window._endpointsList || []).find(e => e.endpoint_id === epFilter) : null;
+    countEl.textContent = data.length + ' sessions' + (epName ? ' from ' + epName.hostname : '');
     tbody.innerHTML = data.map(s => {
       const tokens = (s.total_input_tokens || 0) + (s.total_output_tokens || 0);
       return '<tr>'
@@ -380,38 +409,86 @@ tr:hover td { background:var(--surface2); }
     }).join('');
   }
 
-  async function loadAlerts() {
+  // Alert state
+  let alertOffset = 0;
+  let alertsLoaded = [];
+
+  async function loadAlerts(append) {
+    if (!append) { alertOffset = 0; alertsLoaded = []; }
     const severity = document.getElementById('alertSeverityFilter').value;
-    const url = '/api/v1/fleet/alerts?limit=100' + (severity ? '&severity=' + severity : '');
+    const epFilter = document.getElementById('alertEndpointFilter').value;
+    let url = '/api/v1/fleet/alerts?limit=50&offset=' + alertOffset;
+    if (severity) url += '&severity=' + severity;
+    if (epFilter) url += '&endpoint_id=' + epFilter;
     const resp = await apiFetch(url);
     const container = document.getElementById('alertsList');
     const countEl = document.getElementById('alertsCount');
-    if (!resp || !resp.alerts || !resp.alerts.length) {
+    if (!resp) { container.innerHTML = '<div class="empty-state">Error loading alerts</div>'; return; }
+    if (!append) alertsLoaded = [];
+    alertsLoaded = alertsLoaded.concat(resp.alerts || []);
+    countEl.textContent = 'Showing ' + alertsLoaded.length + ' of ' + resp.total + ' alerts';
+    if (!alertsLoaded.length) {
       container.innerHTML = '<div class="empty-state">No active alerts</div>';
-      countEl.textContent = resp ? 'Showing 0 of ' + (resp.total || 0) + ' alerts' : '';
       return;
     }
-    const alerts = resp.alerts;
-    countEl.textContent = 'Showing ' + alerts.length + ' of ' + resp.total + ' alerts';
-    container.innerHTML = alerts.map(a => {
+    container.innerHTML = alertsLoaded.map(a => {
       const patterns = Array.isArray(a.patterns) ? a.patterns.join(', ') : (a.patterns || '');
-      return '<div class="alert-row" id="alert-' + a.id + '">'
+      return '<div class="alert-row" id="alert-' + a.id + '" onclick="toggleAlertExpand(this)">'
         + '<div>' + severityBadge(a.severity) + '</div>'
         + '<div class="alert-meta">'
           + '<div class="alert-title"><span class="badge badge-endpoint">' + escHtml(a.hostname || '') + '</span> ' + escHtml(patterns) + '</div>'
           + '<div class="alert-detail">Context: ' + escHtml(a.context || '') + (a.validated ? ' (validated)' : '') + '</div>'
-          + (a.snippet ? '<div class="alert-snippet" onclick="this.classList.toggle(\'expanded\')">' + escHtml(a.snippet) + '</div>' : '')
+          + (a.snippet ? '<div class="alert-snippet">' + escHtml(a.snippet) + '</div>' : '')
+          + '<div class="alert-expand-detail">'
+            + '<div style="margin-top:4px"><strong>Full snippet:</strong></div>'
+            + '<pre style="white-space:pre-wrap;word-break:break-all;background:var(--bg);padding:8px;border-radius:4px;margin:4px 0;font-size:12px;max-height:200px;overflow-y:auto">' + escHtml(a.snippet || '') + '</pre>'
+            + '<div style="font-size:11px;color:var(--text2)">Session: ' + escHtml(a.session_id || '') + ' &middot; ' + (a.timestamp || '') + '</div>'
+          + '</div>'
         + '</div>'
         + '<div class="alert-actions">'
           + '<div class="alert-time">' + timeAgo(a.timestamp) + '</div>'
-          + '<button class="btn-dismiss" onclick="dismissAlert(' + a.id + ')">Dismiss</button>'
+          + '<button class="btn-dismiss" onclick="event.stopPropagation();dismissAlert(' + a.id + ')">Dismiss</button>'
         + '</div>'
         + '</div>';
     }).join('');
+    // Load More button
+    if (resp.has_more) {
+      container.innerHTML += '<button class="btn-load-more" onclick="alertOffset+=' + alertsLoaded.length + ';loadAlerts(true)">Load ' + Math.min(50, resp.total - alertsLoaded.length) + ' more</button>';
+    }
   }
 
-  // Severity filter change handler
-  document.getElementById('alertSeverityFilter').addEventListener('change', loadAlerts);
+  window.toggleAlertExpand = function(el) { el.classList.toggle('expanded'); };
+
+  // Filter change handlers
+  document.getElementById('alertSeverityFilter').addEventListener('change', function() { loadAlerts(); });
+  document.getElementById('alertEndpointFilter').addEventListener('change', function() { loadAlerts(); });
+  document.getElementById('sessionsEndpointFilter').addEventListener('change', function() { loadSessions(); });
+  document.getElementById('sessionsSortFilter').addEventListener('change', function() { loadSessions(); });
+
+  // Populate endpoint dropdowns from endpoints data
+  function populateEndpointDropdowns(eps) {
+    if (!eps) return;
+    ['alertEndpointFilter', 'sessionsEndpointFilter'].forEach(function(id) {
+      const sel = document.getElementById(id);
+      if (!sel) return;
+      const current = sel.value;
+      sel.innerHTML = '<option value="">All Endpoints</option>';
+      eps.forEach(function(ep) {
+        sel.innerHTML += '<option value="' + escHtml(ep.endpoint_id) + '">' + escHtml(ep.hostname) + '</option>';
+      });
+      sel.value = current;
+    });
+  }
+
+  // Click health card or endpoint row → switch to Alerts tab filtered
+  window.showEndpointAlerts = function(endpointId) {
+    document.getElementById('alertEndpointFilter').value = endpointId;
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+    document.querySelector('.tab[data-tab="alerts"]').classList.add('active');
+    document.getElementById('panel-alerts').classList.add('active');
+    loadAlerts();
+  };
 
   // Dismiss alert
   window.dismissAlert = async function(id) {
@@ -420,7 +497,7 @@ tr:hover td { background:var(--surface2); }
       if (resp.ok) {
         const el = document.getElementById('alert-' + id);
         if (el) { el.style.opacity = '0.3'; el.style.pointerEvents = 'none'; }
-        setTimeout(loadAlerts, 500);
+        setTimeout(function() { loadAlerts(); }, 500);
       }
     } catch(e) {}
   };

@@ -91,7 +91,9 @@ async def fleet_sessions(
     db=Depends(get_db),
     limit: int = 100,
     endpoint_id: str = None,
+    hostname: str = None,
     agent_type: str = None,
+    sort: str = "recent",
 ):
     """Fleet sessions with endpoint info."""
     query = """SELECT fs.*, e.hostname, e.ip_address
@@ -102,10 +104,18 @@ async def fleet_sessions(
     if endpoint_id:
         query += " AND fs.endpoint_id = :eid"
         params["eid"] = endpoint_id
+    if hostname:
+        query += " AND e.hostname = :hname"
+        params["hname"] = hostname
     if agent_type:
         query += " AND fs.agent_type = :atype"
         params["atype"] = agent_type
-    query += " ORDER BY fs.last_activity DESC NULLS LAST LIMIT :limit"
+    sort_map = {
+        "recent": "fs.last_activity DESC NULLS LAST",
+        "turns": "fs.total_turns DESC",
+        "tokens": "(fs.total_input_tokens + fs.total_output_tokens) DESC",
+    }
+    query += " ORDER BY " + sort_map.get(sort, sort_map["recent"]) + " LIMIT :limit"
     params["limit"] = limit
 
     rows = db.execute(text(query), params).fetchall()
@@ -154,12 +164,13 @@ async def fleet_endpoints(db=Depends(get_db)):
 @router.get("/api/v1/fleet/alerts")
 async def fleet_alerts(
     db=Depends(get_db),
-    limit: int = 100,
+    limit: int = 50,
+    offset: int = 0,
     severity: str = None,
+    endpoint_id: str = None,
     include_dismissed: bool = False,
 ):
-    """Fleet alerts across all endpoints."""
-    # Base filter for both count and data queries
+    """Fleet alerts across all endpoints with pagination."""
     where = " WHERE 1=1"
     params: dict = {}
     if not include_dismissed:
@@ -167,19 +178,22 @@ async def fleet_alerts(
     if severity:
         where += " AND fa.severity = :sev"
         params["sev"] = severity
+    if endpoint_id:
+        where += " AND fa.endpoint_id = :eid"
+        params["eid"] = endpoint_id
 
-    # Total count (for "Showing X of Y")
     count_row = db.execute(
         text("SELECT COUNT(*) FROM fleet_alerts fa" + where), params
     ).fetchone()
     total = count_row[0]
 
     query = "SELECT fa.*, e.hostname FROM fleet_alerts fa JOIN endpoints e ON fa.endpoint_id = e.endpoint_id" + where
-    query += " ORDER BY fa.timestamp DESC LIMIT :limit"
+    query += " ORDER BY fa.timestamp DESC LIMIT :limit OFFSET :offset"
     params["limit"] = limit
+    params["offset"] = offset
 
     rows = db.execute(text(query), params).fetchall()
-    return {"total": total, "alerts": [dict(r._mapping) for r in rows]}
+    return {"total": total, "alerts": [dict(r._mapping) for r in rows], "has_more": (offset + limit) < total}
 
 
 @router.get("/api/v1/fleet/stats/alert_trend")
