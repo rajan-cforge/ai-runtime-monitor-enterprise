@@ -657,28 +657,34 @@ class JSONLSessionWatcher:
             return "Slack"
         return None
 
+    # Patterns that should never be session titles
+    _TITLE_SKIP_PREFIXES = (
+        "Conversation info", "Sender (untrusted", "Sender (", "untrusted metadata",
+        "Caveat:", "Caveat: The messages", "[Request interrupted",
+        "Start with this:", "Then paste this", "Your task is to create a detailed summary",
+        "de619ec2", "{ \"label\"",
+    )
+
     @staticmethod
     def _clean_title(text):
         """Strip markdown, HTML tags, and metadata from title text."""
-        # Remove <system-reminder>...</system-reminder> and similar tags
         t = re.sub(r"<[^>]+>", "", text)
-        # Remove code fences and their content markers
         t = re.sub(r"```[\s\S]*?```", "", t)
         t = re.sub(r"```\w*", "", t)
-        # Remove markdown heading markers
         t = re.sub(r"^#+\s*", "", t, flags=re.MULTILINE)
-        # Remove bold/italic markers
         t = t.replace("**", "").replace("__", "")
-        # Remove metadata prefixes
-        if t.startswith("Conversation info"):
-            # Skip to actual content after metadata blocks
-            parts = t.split("\n\n")
-            for part in parts:
-                stripped = part.strip()
-                if stripped and not stripped.startswith("Conversation info") and not stripped.startswith("Sender ") and "untrusted metadata" not in stripped:
-                    t = stripped
-                    break
-        # Collapse whitespace
+        # Skip metadata/system prefixes — try to find real content
+        for _prefix in JSONLSessionWatcher._TITLE_SKIP_PREFIXES:
+            if t.strip().startswith(_prefix):
+                parts = t.split("\n\n")
+                for part in parts:
+                    stripped = part.strip()
+                    if stripped and not any(stripped.startswith(p) for p in JSONLSessionWatcher._TITLE_SKIP_PREFIXES):
+                        t = stripped
+                        break
+                else:
+                    return ""  # No real content found
+                break
         t = re.sub(r"\s+", " ", t).strip()
         return t
 
@@ -1076,24 +1082,9 @@ class JSONLSessionWatcher:
                 return "low"
 
         elif context == "assistant_response":
-            # Assistant discussing security findings or analyzing code
-            analysis_indicators = [
-                "found",
-                "detected",
-                "contains",
-                "appears to",
-                "security",
-                "credential",
-                "vulnerability",
-                "leaked",
-                "should not",
-                "remove",
-                "rotate",
-                "revoke",
-            ]
-            if any(indicator in text_lower for indicator in analysis_indicators):
-                if severity in ("critical", "high"):
-                    return "medium"
+            # Assistants quote/discuss credentials — never introduce new ones
+            if severity in ("critical", "high"):
+                return "medium"
 
         elif context and context.startswith("tool:"):
             # Tool writes to test files
@@ -3265,8 +3256,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
             conditions.append("d.package_manager = ?")
             bind.append(manager)
         if search:
-            conditions.append("(d.package_name LIKE ? OR d.command LIKE ?)")
-            bind.extend([f"%{search}%", f"%{search}%"])
+            conditions.append("d.package_name LIKE ?")
+            bind.append(f"%{search}%")
         min_risk = params.get("min_risk", [""])[0]
         if min_risk:
             conditions.append("d.risk_score >= ?")
