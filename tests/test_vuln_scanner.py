@@ -87,7 +87,8 @@ class TestOSVQuery:
                     "id": "GHSA-xxxx",
                     "summary": "XSS vulnerability",
                     "aliases": ["CVE-2024-99999"],
-                    "severity": [{"type": "CVSS_V3", "score": "7.5/AV:N"}],
+                    "severity": [{"type": "CVSS_V3", "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N"}],
+                    "database_specific": {"severity": "HIGH"},
                     "affected": [{"ranges": [{"events": [{"fixed": "2.0.1"}]}]}],
                 }
             ]

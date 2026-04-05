@@ -2399,10 +2399,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
                WHERE e.event_type='sensitive_data'
                ORDER BY e.id DESC LIMIT 1000"""
         ).fetchall()
-        alerts = []
+        # First pass: apply all filters, count everything
+        filtered_rows = []
         severity_counts = {"critical": 0, "high": 0, "medium": 0, "low": 0}
         category_counts = {}
-        skipped = 0
         for r in rows:
             try:
                 data = json.loads(r["data_json"])
@@ -2411,28 +2411,28 @@ class DashboardHandler(BaseHTTPRequestHandler):
             sev = data.get("severity", "medium")
             cats = data.get("categories", ["credential"])
             dismissed = r["dismissal_id"] is not None
-            severity_counts[sev] = severity_counts.get(sev, 0) + 1
-            for cat in cats:
-                category_counts[cat] = category_counts.get(cat, 0) + 1
+            conf = data.get("confidence", "medium")
 
-            # Filter out dismissed alerts unless requested
             if dismissed and not include_dismissed:
                 continue
-
-            # Apply filters
             if severity_filter and sev != severity_filter:
                 continue
             if category_filter and category_filter not in cats:
                 continue
-            conf = data.get("confidence", "medium")
             if confidence_filter == "high" and conf != "high":
                 continue
             if confidence_filter == "medium+" and conf == "low":
                 continue
 
-            # Apply offset for pagination
-            if skipped < offset:
-                skipped += 1
+            severity_counts[sev] = severity_counts.get(sev, 0) + 1
+            for cat in cats:
+                category_counts[cat] = category_counts.get(cat, 0) + 1
+            filtered_rows.append((r, data, sev, cats, dismissed, conf))
+
+        # Second pass: paginate
+        alerts = []
+        for idx, (r, data, sev, cats, dismissed, _conf) in enumerate(filtered_rows):
+            if idx < offset:
                 continue
             if len(alerts) >= limit:
                 continue
@@ -2452,7 +2452,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     "id": r["id"],
                     "timestamp": r["timestamp"],
                     "session_id": r["session_id"],
-                    "session_title": r["title"] or (r["session_id"] or "")[:8],
+                    "session_title": JSONLSessionWatcher._clean_title(r["title"]) if r["title"] else (r["session_id"] or "")[:8],
                     "cwd": r["cwd"],
                     "patterns": data.get("patterns", []),
                     "severity": sev,

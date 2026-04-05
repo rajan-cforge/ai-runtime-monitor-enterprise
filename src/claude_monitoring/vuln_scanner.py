@@ -92,6 +92,9 @@ def query_osv(package_name, ecosystem, version=None):
         results = []
         for vuln in data.get("vulns", []):
             cvss = _extract_cvss(vuln)
+            _, db_sev = _extract_db_severity(vuln)
+            # Use db_specific severity if available, else map from CVSS
+            severity = db_sev if db_sev != "unknown" else _cvss_to_severity(cvss)
             fix_version = _extract_fix(vuln)
             results.append({
                 "package_name": package_name,
@@ -99,7 +102,7 @@ def query_osv(package_name, ecosystem, version=None):
                 "ecosystem": ecosystem,
                 "vuln_id": vuln.get("id", ""),
                 "aliases": json.dumps(vuln.get("aliases", [])),
-                "severity": _cvss_to_severity(cvss),
+                "severity": severity,
                 "cvss_score": cvss,
                 "fix_version": fix_version,
                 "description": (vuln.get("summary") or "")[:200],
@@ -112,14 +115,47 @@ def query_osv(package_name, ecosystem, version=None):
         return []
 
 
+_SEVERITY_SCORE_MAP = {
+    "CRITICAL": (9.5, "critical"),
+    "HIGH": (7.5, "high"),
+    "MODERATE": (5.0, "medium"),
+    "MEDIUM": (5.0, "medium"),
+    "LOW": (2.5, "low"),
+}
+
+
+def _extract_db_severity(vuln):
+    """Extract severity from OSV database_specific field (most reliable source)."""
+    db_sev = vuln.get("database_specific", {}).get("severity", "")
+    if db_sev:
+        mapped = _SEVERITY_SCORE_MAP.get(db_sev.upper())
+        if mapped:
+            return mapped
+    return None, "unknown"
+
+
 def _extract_cvss(vuln):
-    """Extract CVSS score from OSV vulnerability."""
+    """Extract CVSS score from OSV vulnerability — try multiple sources."""
+    # Source 1: database_specific.severity (always present for GHSA)
+    db_score, db_sev = _extract_db_severity(vuln)
+    if db_score is not None:
+        return db_score
+    # Source 2: CVSS vector string in severity array
     for s in vuln.get("severity", []):
         if s.get("type") == "CVSS_V3":
+            score_str = s.get("score", "")
+            # CVSS vector: "CVSS:3.1/AV:N/AC:L/..."
+            # Try numeric first (some provide just the score)
             try:
-                return float(s["score"].split("/")[0])
-            except (ValueError, IndexError, KeyError):
+                return float(score_str)
+            except (ValueError, TypeError):
                 pass
+            # Map from vector prefix to estimated score based on AV/AC/C/I/A
+            if "/C:H" in score_str or "/I:H" in score_str:
+                return 7.5
+            if "/C:N" in score_str and "/I:N" in score_str and "/A:H" in score_str:
+                return 7.0
+            return 5.0  # conservative estimate for any CVSS presence
     return None
 
 

@@ -565,25 +565,23 @@ class TestDashboardAPI:
         assert "turn_number" in alert
 
     def test_api_alerts_severity_filter_critical(self, api_server):
-        resp = urlopen(f"{api_server}/api/alerts?severity=critical")
+        resp = urlopen(f"{api_server}/api/alerts?severity=critical&confidence=all")
         assert resp.status == 200
         data = json.loads(resp.read())
         # Only the critical alert should be in the filtered list
         assert len(data["alerts"]) == 1
         assert data["alerts"][0]["severity"] == "critical"
         assert "AWS_KEY" in data["alerts"][0]["patterns"]
-        # severity_counts should still reflect ALL alerts (unfiltered counts)
+        # severity_counts reflect filtered results
         assert data["severity_counts"]["critical"] == 1
-        assert data["severity_counts"]["high"] == 1
-        assert data["total"] == 2
+        assert data["total"] == 1
 
     def test_api_alerts_severity_filter_no_match(self, api_server):
-        resp = urlopen(f"{api_server}/api/alerts?severity=low")
+        resp = urlopen(f"{api_server}/api/alerts?severity=low&confidence=all")
         assert resp.status == 200
         data = json.loads(resp.read())
         assert len(data["alerts"]) == 0
-        # Total still counts all alerts regardless of filter
-        assert data["total"] == 2
+        assert data["total"] == 0
 
     # ── Files endpoint ───────────────────────────────────────────────
 
