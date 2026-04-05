@@ -191,9 +191,9 @@ def run_full_scan(db):
     ).fetchall()
 
     for pkg in packages:
-        name = pkg[0] if isinstance(pkg, (list, tuple)) else pkg["package_name"]
-        manager = pkg[1] if isinstance(pkg, (list, tuple)) else pkg["package_manager"]
-        version = pkg[2] if isinstance(pkg, (list, tuple)) else pkg.get("package_version")
+        name = pkg["package_name"] if hasattr(pkg, "keys") else pkg[0]
+        manager = pkg["package_manager"] if hasattr(pkg, "keys") else pkg[1]
+        version = pkg["package_version"] if hasattr(pkg, "keys") else pkg[2]
         ecosystem = ECOSYSTEM_MAP.get(manager)
         if not ecosystem:
             continue
@@ -207,7 +207,7 @@ def run_full_scan(db):
         ).fetchone()
         if cached:
             try:
-                cache_ts = cached[0] if isinstance(cached, (list, tuple)) else cached["scan_timestamp"]
+                cache_ts = cached["scan_timestamp"] if hasattr(cached, "keys") else cached[0]
                 age = time.time() - datetime.fromisoformat(cache_ts.replace("Z", "+00:00")).timestamp()
                 if age < 21600:
                     continue
