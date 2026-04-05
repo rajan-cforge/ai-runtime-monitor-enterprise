@@ -1251,27 +1251,63 @@ async function loadSupplyChain() {
         + '</tr>'
         + '<tr id="sc-expand-' + idx + '" style="display:none"><td colspan="9" style="background:var(--surface2);padding:12px;font-size:12px">Loading...</td></tr>';
     }).join('');
+    // Store vuln data for expand
+    window._scVulnData = {};
+    d.installs.forEach(function(p, idx) { window._scVulnData[idx] = p.vulnerabilities || {}; });
   } catch(e) { console.error('Supply chain load error:', e); }
+}
+function renderCVEPanel(vulns) {
+  if (!vulns || !vulns.vulns || !vulns.vulns.length) {
+    if (vulns && vulns.scanned) return '<div style="color:var(--green);margin-bottom:10px">No known vulnerabilities</div>';
+    return '<div style="color:var(--text2);margin-bottom:10px">Not yet scanned</div>';
+  }
+  var sevColors = {critical:'var(--red)',high:'var(--orange)',medium:'var(--blue)',low:'var(--text2)',unknown:'var(--text2)'};
+  var html = '<div style="margin-bottom:12px"><strong style="color:var(--red)">Known vulnerabilities (' + vulns.vulns.length + ')</strong></div>';
+  html += '<table style="width:100%;font-size:12px;border:none;margin-bottom:12px"><thead><tr><th>ID</th><th>Severity</th><th>CVSS</th><th>Fix</th><th>Description</th></tr></thead><tbody>';
+  vulns.vulns.forEach(function(v) {
+    var color = sevColors[v.severity] || 'var(--text2)';
+    html += '<tr>'
+      + '<td><a href="https://osv.dev/vulnerability/' + esc(v.vuln_id) + '" target="_blank" style="color:var(--cyan);font-family:monospace;font-size:11px">' + esc(v.vuln_id) + '</a></td>'
+      + '<td><span style="color:' + color + ';font-weight:600;text-transform:uppercase">' + esc(v.severity||'unknown') + '</span></td>'
+      + '<td>' + (v.cvss_score ? v.cvss_score.toFixed(1) : '-') + '</td>'
+      + '<td>' + (v.fix_version ? '<span style="color:var(--green)">' + esc(v.fix_version) + '</span>' : '<span style="color:var(--text2)">none</span>') + '</td>'
+      + '<td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(v.description||'') + '</td>'
+      + '</tr>';
+  });
+  html += '</tbody></table>';
+  // Remediation
+  if (vulns.vulns.some(function(v){return v.fix_version})) {
+    var latest = vulns.vulns.filter(function(v){return v.fix_version}).sort(function(a,b){return (b.cvss_score||0)-(a.cvss_score||0)})[0];
+    if (latest) html += '<div style="font-size:12px;margin-bottom:8px">Remediation: <code style="background:var(--surface2);padding:2px 6px;border-radius:3px">pip install ' + esc(vulns.vulns[0].package_name || '') + '>=' + esc(latest.fix_version) + '</code></div>';
+  }
+  return html;
 }
 async function scExpandRow(pkg, mgr, idx) {
   var row = document.getElementById('sc-expand-' + idx);
   if (row.style.display !== 'none') { row.style.display = 'none'; return; }
   row.style.display = 'table-row';
   try {
+    // Render CVE panel from stored data
+    var vulnData = (window._scVulnData || {})[idx] || {};
+    var cveHtml = renderCVEPanel(vulnData);
+
     var r = await fetch(API + '/api/supply-chain/detail?package=' + encodeURIComponent(pkg) + '&manager=' + encodeURIComponent(mgr));
     var d = await r.json();
-    if (!d.installs || !d.installs.length) { row.querySelector('td').innerHTML = 'No detail found'; return; }
-    var html = '<table style="width:100%;font-size:12px;border:none"><thead><tr><th>Time</th><th>Version</th><th>Pinned</th><th>Session</th><th>Command</th></tr></thead><tbody>';
-    d.installs.forEach(function(i) {
-      var sessLink = i.session_id ? '<a style="color:var(--cyan);cursor:pointer" onclick="event.stopPropagation();scOpenSession(\'' + i.session_id + '\',\'' + esc(i.timestamp||'') + '\')">' + esc(i.session_title || i.session_id.substring(0,8)) + '</a>' : '-';
-      html += '<tr><td>' + fmtTimestamp(i.timestamp) + '</td>'
-        + '<td>' + esc(i.package_version||'latest') + '</td>'
-        + '<td>' + (i.pinned ? '<span style="color:var(--green)">Yes</span>' : '<span style="color:var(--orange)">No</span>') + '</td>'
-        + '<td>' + sessLink + '</td>'
-        + '<td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc(i.command||'') + '">' + esc((i.command||'').substring(0,80)) + '</td></tr>';
-    });
-    html += '</tbody></table>';
-    row.querySelector('td').innerHTML = html;
+    var installHtml = '';
+    if (d.installs && d.installs.length) {
+      installHtml = '<div style="margin-top:8px"><strong>Install history (' + d.installs.length + ')</strong></div>';
+      installHtml += '<table style="width:100%;font-size:12px;border:none"><thead><tr><th>Time</th><th>Version</th><th>Pinned</th><th>Session</th><th>Command</th></tr></thead><tbody>';
+      d.installs.forEach(function(i) {
+        var sessLink = i.session_id ? '<a style="color:var(--cyan);cursor:pointer" onclick="event.stopPropagation();scOpenSession(\'' + i.session_id + '\',\'' + esc(i.timestamp||'') + '\')">' + esc(i.session_title || i.session_id.substring(0,8)) + '</a>' : '-';
+        installHtml += '<tr><td>' + fmtTimestamp(i.timestamp) + '</td>'
+          + '<td>' + esc(i.package_version||'latest') + '</td>'
+          + '<td>' + (i.pinned ? '<span style="color:var(--green)">Yes</span>' : '<span style="color:var(--orange)">No</span>') + '</td>'
+          + '<td>' + sessLink + '</td>'
+          + '<td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc(i.command||'') + '">' + esc((i.command||'').substring(0,80)) + '</td></tr>';
+      });
+      installHtml += '</tbody></table>';
+    }
+    row.querySelector('td').innerHTML = cveHtml + installHtml;
   } catch(e) { row.querySelector('td').innerHTML = 'Error loading detail'; }
 }
 async function triggerScan() {
