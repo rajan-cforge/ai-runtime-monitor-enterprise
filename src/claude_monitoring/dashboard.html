@@ -316,7 +316,14 @@ body { background:var(--bg); color:var(--text); font-family:-apple-system,BlinkM
     <div class="feed-controls">
       <label><input type="checkbox" id="feed-auto-scroll" checked> Auto-scroll</label>
       <label><input type="checkbox" id="feed-sessions-only" checked> Sessions only</label>
-      <label><input type="checkbox" id="feed-show-tokens"> Show token events</label>
+      <label><input type="checkbox" id="feed-show-tokens"> Show tokens</label>
+      <select id="feed-type-filter" style="background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:3px 6px;color:var(--text);font-size:12px">
+        <option value="">All Types</option>
+        <option value="sensitive_data">Alerts Only</option>
+        <option value="tool_use">Tool Use</option>
+        <option value="user_prompt">User Prompts</option>
+        <option value="assistant_response">Responses</option>
+      </select>
     </div>
     <div class="feed" id="feed-container"></div>
   </div>
@@ -742,7 +749,14 @@ async function loadSessions() {
     // Build title map for feed
     d.sessions.forEach(s => { if (s.title) sessionTitleMap[s.session_id] = s.title; });
 
-    container.innerHTML = d.sessions.map(s => {
+    // Partition into active and recent
+    var activeSessions = d.sessions.filter(function(s) { return s.last_activity && (Date.now() - new Date(s.last_activity).getTime()) < 300000; });
+    var recentSessions = d.sessions.filter(function(s) { return !s.last_activity || (Date.now() - new Date(s.last_activity).getTime()) >= 300000; });
+    var html = '';
+    if (activeSessions.length > 0) {
+      html += '<div style="padding:6px 12px;font-size:11px;font-weight:600;color:var(--green);text-transform:uppercase;letter-spacing:0.5px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:6px"><span class="active-dot"></span> ' + activeSessions.length + ' Live Session' + (activeSessions.length > 1 ? 's' : '') + '</div>';
+    }
+    function renderCard(s) {
       const isBrowser = s.source === 'browser';
       const title = cleanTitle(s.title) || (isBrowser ? (s.service || 'Browser') : s.session_id.substring(0,8));
       const proj = isBrowser ? '' : projectName(s.cwd);
@@ -775,7 +789,13 @@ async function loadSessions() {
         + (isBrowser ? (s.total_duration > 0 ? '<span>' + fmtDuration(s.total_duration) + '</span>' : '') : '<span>' + fmtNum(s.total_input_tokens||0) + ' tokens</span>')
         + (!isBrowser && s.alert_count > 0 ? '<span style="color:var(--red);font-size:11px">&#x26a0; '+s.alert_count+'</span>' : '')
         + '</div></div>';
-    }).join('');
+    }
+    activeSessions.forEach(function(s) { html += renderCard(s); });
+    if (activeSessions.length > 0 && recentSessions.length > 0) {
+      html += '<div style="padding:6px 12px;font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:0.5px;border-bottom:1px solid var(--border)">Recent Sessions</div>';
+    }
+    recentSessions.forEach(function(s) { html += renderCard(s); });
+    container.innerHTML = html;
   } catch(e) {}
 }
 
@@ -904,11 +924,13 @@ async function pollFeed() {
     const container = document.getElementById('feed-container');
     const showTokens = document.getElementById('feed-show-tokens').checked;
     const sessionsOnly = document.getElementById('feed-sessions-only').checked;
+    const typeFilter = document.getElementById('feed-type-filter').value;
     const sessionEventTypes = new Set(['user_prompt','assistant_response','thinking','tool_use','tool_result','token_usage','sensitive_data','mcp_call','bash_progress','system_event']);
 
     for (const ev of d.events) {
       if (!showTokens && ev.event_type === 'token_usage') continue;
-      if (sessionsOnly && !sessionEventTypes.has(ev.event_type)) continue;
+      if (typeFilter && ev.event_type !== typeFilter) continue;
+      if (!typeFilter && sessionsOnly && !sessionEventTypes.has(ev.event_type)) continue;
       // Client-side dedup
       var feedKey = (ev.timestamp||'') + '|' + (ev.event_type||'') + '|' + (ev.summary||'').substring(0,60);
       if (_feedSeen[feedKey]) continue;
@@ -1215,7 +1237,7 @@ async function scExpandRow(pkg, mgr, idx) {
     if (!d.installs || !d.installs.length) { row.querySelector('td').innerHTML = 'No detail found'; return; }
     var html = '<table style="width:100%;font-size:12px;border:none"><thead><tr><th>Time</th><th>Version</th><th>Pinned</th><th>Session</th><th>Command</th></tr></thead><tbody>';
     d.installs.forEach(function(i) {
-      var sessLink = i.session_id ? '<a style="color:var(--cyan);cursor:pointer" onclick="event.stopPropagation();openDeepDive(\'' + i.session_id + '\')">' + esc(i.session_title || i.session_id.substring(0,8)) + '</a>' : '-';
+      var sessLink = i.session_id ? '<a style="color:var(--cyan);cursor:pointer" onclick="event.stopPropagation();scOpenSession(\'' + i.session_id + '\',\'' + esc(i.timestamp||'') + '\')">' + esc(i.session_title || i.session_id.substring(0,8)) + '</a>' : '-';
       html += '<tr><td>' + fmtTimestamp(i.timestamp) + '</td>'
         + '<td>' + esc(i.package_version||'latest') + '</td>'
         + '<td>' + (i.pinned ? '<span style="color:var(--green)">Yes</span>' : '<span style="color:var(--orange)">No</span>') + '</td>'
@@ -1225,6 +1247,19 @@ async function scExpandRow(pkg, mgr, idx) {
     html += '</tbody></table>';
     row.querySelector('td').innerHTML = html;
   } catch(e) { row.querySelector('td').innerHTML = 'Error loading detail'; }
+}
+async function scOpenSession(sessionId, installTs) {
+  // Open Deep Dive and try to jump to the turn containing the install timestamp
+  await openDeepDive(sessionId);
+  if (installTs && ddTurns && ddTurns.length) {
+    // Find closest turn by timestamp
+    var best = ddTurns[ddTurns.length - 1].turn_number;
+    for (var i = 0; i < ddTurns.length; i++) {
+      if (ddTurns[i].timestamp <= installTs) best = ddTurns[i].turn_number;
+      else break;
+    }
+    selectTurn(best);
+  }
 }
 // Init category button style
 document.querySelector('#sc-category-toggle button.active').style.background = 'var(--blue)';
@@ -1668,20 +1703,20 @@ function renderInspector(turn) {
         html += '<div class="event-block user">'
           + '<div class="event-header" onclick="this.parentElement.classList.toggle(\'collapsed\')">'
           + '<span>&#x1f464; USER (' + fmtTime(ev.timestamp) + ')</span></div>'
-          + '<div class="event-body"><pre>' + esc(data.text) + '</pre></div></div>';
+          + '<div class="event-body"><pre>' + esc(maskSecrets(data.text)) + '</pre></div></div>';
         break;
       case 'thinking':
         html += '<div class="event-block thinking collapsed">'
           + '<div class="event-header" onclick="this.parentElement.classList.toggle(\'collapsed\')">'
           + '<span>&#x1f9e0; THINKING (' + (data.length||0) + ' chars)</span>'
           + '<span style="font-size:11px">click to expand</span></div>'
-          + '<div class="event-body"><pre>' + esc(data.text) + '</pre></div></div>';
+          + '<div class="event-body"><pre>' + esc(maskSecrets(data.text)) + '</pre></div></div>';
         break;
       case 'assistant_response':
         html += '<div class="event-block assistant">'
           + '<div class="event-header" onclick="this.parentElement.classList.toggle(\'collapsed\')">'
           + '<span>&#x1f916; CLAUDE (' + fmtTime(ev.timestamp) + ')</span></div>'
-          + '<div class="event-body"><pre>' + esc(data.text) + '</pre></div></div>';
+          + '<div class="event-body"><pre>' + esc(maskSecrets(data.text)) + '</pre></div></div>';
         break;
       case 'tool_use':
         var inputStr = typeof data.input === 'object' ? JSON.stringify(data.input, null, 2) : String(data.input||'');
@@ -1689,14 +1724,14 @@ function renderInspector(turn) {
           + '<div class="event-header" onclick="this.parentElement.classList.toggle(\'collapsed\')">'
           + '<span>&#x1f527; TOOL: ' + esc(data.name) + '</span>'
           + '<span style="font-size:11px;color:var(--text2)">' + esc((data.input_preview||'').substring(0,60)) + '</span></div>'
-          + '<div class="event-body"><pre>' + esc(inputStr) + '</pre></div></div>';
+          + '<div class="event-body"><pre>' + esc(maskSecrets(inputStr)) + '</pre></div></div>';
         break;
       case 'tool_result':
         html += '<div class="event-block tool_result collapsed">'
           + '<div class="event-header" onclick="this.parentElement.classList.toggle(\'collapsed\')">'
           + '<span>&#x1f4c4; RESULT (' + (data.length||0) + ' chars)' + (data.is_error ? ' &#x274c; ERROR' : '') + '</span>'
           + '<span style="font-size:11px">click to expand</span></div>'
-          + '<div class="event-body"><pre>' + esc(data.content) + '</pre></div></div>';
+          + '<div class="event-body"><pre>' + esc(maskSecrets(data.content)) + '</pre></div></div>';
         break;
       case 'token_usage':
         html += '<div class="event-block token_usage collapsed">'
@@ -1711,7 +1746,7 @@ function renderInspector(turn) {
           + '<span>&#x26a0;&#xfe0f; ALERT: ' + esc((data.patterns||[]).join(', ')) + '</span></div>'
           + '<div class="event-body"><pre>Context: ' + esc(data.context)
           + '\nPatterns: ' + esc((data.patterns||[]).join(', '))
-          + '\nSnippet: ' + esc(data.snippet) + '</pre></div></div>';
+          + '\nSnippet: ' + esc(maskSecrets(data.snippet)) + '</pre></div></div>';
         break;
     }
   });
