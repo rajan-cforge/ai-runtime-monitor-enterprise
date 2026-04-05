@@ -2381,10 +2381,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
     def _api_alerts(self, params):
         db = get_thread_db()
-        limit = int(params.get("limit", ["200"])[0])
+        limit = int(params.get("limit", ["50"])[0])
         offset = int(params.get("offset", ["0"])[0])
         severity_filter = params.get("severity", [""])[0]
         category_filter = params.get("category", [""])[0]
+        confidence_filter = params.get("confidence", ["medium+"])[0]
         include_dismissed = params.get("include_dismissed", ["false"])[0].lower() == "true"
         rows = db.execute(
             """SELECT e.id, e.timestamp, e.session_id, e.data_json,
@@ -2421,6 +2422,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 continue
             if category_filter and category_filter not in cats:
                 continue
+            conf = data.get("confidence", "medium")
+            if confidence_filter == "high" and conf != "high":
+                continue
+            if confidence_filter == "medium+" and conf == "low":
+                continue
 
             # Apply offset for pagination
             if skipped < offset:
@@ -2451,6 +2457,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     "categories": cats,
                     "context": data.get("context", ""),
                     "snippet": data.get("snippet", ""),
+                    "matched_value": data.get("matched_value", ""),
+                    "confidence": data.get("confidence", "medium"),
+                    "likely_false_positive": data.get("likely_false_positive", False),
+                    "repeat_count": data.get("repeat_count", 1),
                     "turn_number": turn_count,
                     "dismissed": dismissed,
                 }

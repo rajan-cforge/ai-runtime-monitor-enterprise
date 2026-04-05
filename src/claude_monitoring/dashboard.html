@@ -489,6 +489,11 @@ body { background:var(--bg); color:var(--text); font-family:-apple-system,BlinkM
             <option value="pii">PII</option>
             <option value="policy">Policy</option>
           </select>
+          <select id="alert-confidence-filter" onchange="loadAlerts()" style="background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:4px 8px;color:var(--text);font-size:12px">
+            <option value="medium+" selected>Medium+ confidence</option>
+            <option value="high">High confidence only</option>
+            <option value="all">All (incl. false positives)</option>
+          </select>
           <label style="display:flex;align-items:center;gap:4px;font-size:12px;color:var(--text2);cursor:pointer">
             <input type="checkbox" id="alert-show-dismissed" onchange="loadAlerts()"> Show dismissed
           </label>
@@ -1275,7 +1280,8 @@ async function loadAlerts(customOffset) {
     const sevFilter = document.getElementById('alert-severity-filter').value;
     const catFilter = document.getElementById('alert-category-filter').value;
     const showDismissed = document.getElementById('alert-show-dismissed').checked;
-    let url = API + '/api/alerts?limit=50&offset=' + alertOffset;
+    const confFilter = document.getElementById('alert-confidence-filter').value;
+    let url = API + '/api/alerts?limit=50&offset=' + alertOffset + '&confidence=' + confFilter;
     if (sevFilter) url += '&severity=' + sevFilter;
     if (catFilter) url += '&category=' + catFilter;
     if (showDismissed) url += '&include_dismissed=true';
@@ -1336,26 +1342,30 @@ async function loadAlerts(customOffset) {
       const borderColor = sevBorders[sev] || 'var(--red)';
       const turnLabel = a.turn_number > 0 ? ' &rarr; Turn ' + a.turn_number : '';
       const dismissedClass = a.dismissed ? ' dismissed' : '';
-      const dismissBtn = a.dismissed
+      const fpTag = a.likely_false_positive ? '<span style="font-size:11px;color:var(--text2);font-style:italic;margin-left:6px">Likely false positive</span>' : '';
+      const repeatTag = (a.repeat_count || 1) > 1 ? '<div style="font-size:11px;color:var(--text2);margin-top:2px">Detected ' + a.repeat_count + ' times in this session</div>' : '';
+      const dismissBtns = a.dismissed
         ? '<span style="font-size:11px;color:var(--text2)">Dismissed</span>'
-        : '<button class="dismiss-btn" onclick="event.stopPropagation();dismissAlert('+a.id+',this)">Dismiss</button>';
+        : '<span style="display:flex;gap:4px">'
+          + '<button class="dismiss-btn" onclick="event.stopPropagation();dismissAlert('+a.id+',this,\'false_positive\')">False positive</button>'
+          + '<button class="dismiss-btn" onclick="event.stopPropagation();dismissAlert('+a.id+',this,\'investigated\')">Investigated</button>'
+          + '<button class="dismiss-btn" onclick="event.stopPropagation();dismissAlert('+a.id+',this,\'accepted_risk\')">Accept risk</button>'
+          + '</span>';
+      const matchedHtml = a.matched_value ? '<div style="font-size:12px;margin-top:4px">Matched: <code style="background:var(--surface2);padding:2px 4px;border-radius:3px">' + esc(maskSecrets(a.matched_value)) + '</code> <button class="dismiss-btn" style="font-size:10px" onclick="event.stopPropagation();toggleReveal(this,' + a.id + ')">Reveal</button></div>' : '';
       return '<div class="alert-item'+dismissedClass+'" style="border-left-color:'+borderColor+'" data-alert-id="'+a.id+'">'
         + '<div class="alert-header">'
         + '<span class="alert-patterns"><span class="badge" style="background:' + (sevColors[sev]||'#8b949e') + '22;color:'+(sevColors[sev]||'#8b949e')+';margin-right:6px">'
-        + sev.toUpperCase() + '</span>' + patternChips + '</span>'
-        + '<span style="display:flex;align-items:center;gap:8px">'
-        + dismissBtn
-        + '<span class="alert-meta">' + fmtTimestamp(a.timestamp) + ' (' + fmtRelative(a.timestamp) + ')</span>'
-        + '</span>'
+        + sev.toUpperCase() + '</span>' + patternChips + confBadge(a.confidence||'medium') + fpTag + '</span>'
+        + '<span class="alert-meta">' + fmtTimestamp(a.timestamp) + '</span>'
         + '</div>'
-        + '<div class="alert-context">Context: ' + esc(a.context)
-        + (a.categories ? ' &middot; ' + (a.categories||[]).join(', ') : '') + '</div>'
+        + '<div style="font-size:12px;color:var(--text);margin:4px 0">' + esc(alertSummary(a)) + '</div>'
+        + matchedHtml
+        + '<div class="alert-snippet">' + esc(renderSnippet(a.snippet)) + '</div>'
+        + repeatTag
         + (a.session_id ? '<div class="alert-session" onclick="openDeepDive(\''+a.session_id+'\', '+(a.turn_number||1)+')">' + esc(a.session_title) + turnLabel + '</div>' : '')
-        + '<div class="alert-snippet" data-masked="' + esc(maskSecrets(a.snippet)) + '">' + esc(maskSecrets(a.snippet)) + '</div>'
-        + '<button class="dismiss-btn" style="font-size:10px;margin-top:4px" onclick="event.stopPropagation();toggleReveal(this,' + a.id + ')">Reveal</button>'
+        + '<div style="margin-top:6px">' + dismissBtns + '</div>'
         + '</div>';
     }).join('');
-    // Store full snippets for reveal
     window._alertSnippets = window._alertSnippets || {};
     filtered.forEach(function(a) { window._alertSnippets[a.id] = a.snippet || ''; });
 
@@ -1375,6 +1385,29 @@ async function loadAlerts(customOffset) {
     }
   } catch(e) { console.error('loadAlerts error:', e); }
 }
+var _patternNames = {aws_key:'An AWS access key',github_token:'A GitHub token',anthropic_key:'An Anthropic API key',slack_webhook:'A Slack webhook',stripe_key:'A Stripe key',jwt_token:'A JWT token',password_in_code:'A password',db_connection:'A database connection string',ssn:'A Social Security Number',credit_card:'A credit card number',phone_number:'A phone number',env_file:'Environment file contents',ip_address_private:'A private IP address',api_key_generic:'An API key',vulnerable_package:'A vulnerable package',typosquat:'A typosquatted package',supply_chain_risk:'A risky package install',remote_exec_unpinned:'An unpinned remote execution'};
+var _contextNames = {assistant_response:"Claude's response",tool_result:'tool output','tool:Bash':'a Bash command','tool:Read':'a file read','tool:Write':'a file write','tool:Edit':'a file edit',user_prompt:'the user prompt',supply_chain_scan:'vulnerability scan'};
+function alertSummary(a) {
+  var what = _patternNames[a.patterns && a.patterns[0]] || 'Sensitive data';
+  var where = _contextNames[a.context] || a.context || 'unknown context';
+  var s = what + ' detected in ' + where;
+  if (a.session_title) s += ' — "' + a.session_title.substring(0,40) + '"';
+  if (a.turn_number > 0) s += ', Turn ' + a.turn_number;
+  if (a.likely_false_positive) s += '. Likely a discussion, not an actual exposure.';
+  return s;
+}
+function confBadge(conf) {
+  if (conf === 'high') return '<span class="badge" style="background:#1a2e1a;color:var(--green);font-size:10px;margin-left:4px">HIGH CONF</span>';
+  if (conf === 'medium') return '<span class="badge" style="background:#3d2e1a;color:var(--orange);font-size:10px;margin-left:4px">MED CONF</span>';
+  return '<span class="badge" style="background:var(--surface2);color:var(--text2);font-size:10px;margin-left:4px;border:1px dashed var(--border)">LOW CONF</span>';
+}
+function renderSnippet(raw) {
+  if (!raw) return '';
+  var s = raw.replace(/\\n/g, '\n').replace(/\\t/g, '\t').replace(/\\"/g, '"');
+  if (s.startsWith('{')) { try { var p = JSON.parse(s); s = p.command || p.snippet || p.text || s; } catch(e) {} }
+  if (s.length > 400) s = s.substring(0, 400) + '...';
+  return maskSecrets(s);
+}
 function toggleReveal(btn, alertId) {
   var snippet = btn.previousSibling;
   if (btn.textContent === 'Reveal') {
@@ -1389,17 +1422,16 @@ function filterAlertsByPattern(p) {
   alertPatternFilter = p;
   loadAlerts();
 }
-async function dismissAlert(eventId, btn) {
+async function dismissAlert(eventId, btn, reason) {
   try {
     const r = await fetch(API + '/api/alerts/dismiss', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({event_id: eventId, reason: 'false_positive'})
+      body: JSON.stringify({event_id: eventId, reason: reason || 'dismissed'})
     });
     if (r.ok) {
       const card = btn.closest('.alert-item');
-      if (card) { card.classList.add('dismissed'); }
-      btn.outerHTML = '<span style="font-size:11px;color:var(--text2)">Dismissed</span>';
+      if (card) { card.classList.add('dismissed'); card.querySelector('div:last-child').innerHTML = '<span style="font-size:11px;color:var(--text2)">Dismissed: ' + esc(reason||'dismissed') + '</span>'; }
     }
   } catch(e) {}
 }
