@@ -1744,6 +1744,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             "/api/report": self._api_report,
             "/api/supply-chain": self._api_supply_chain,
             "/api/supply-chain/detail": self._api_supply_chain_detail,
+            "/api/supply-chain/scan-status": self._api_supply_chain_scan_status,
         }
 
         # Match path prefixes for dynamic routes
@@ -1786,6 +1787,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
         post_routes = {
             "/api/alerts/dismiss": self._api_alerts_dismiss,
             "/api/browser/ingest": self._api_browser_ingest,
+            "/api/supply-chain/scan": self._api_supply_chain_scan_post,
         }
 
         handler = post_routes.get(path)
@@ -3384,6 +3386,28 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     rd["risk_flags"] = json.loads(rd.get("risk_flags") or "{}")
                 except (json.JSONDecodeError, TypeError):
                     rd["risk_flags"] = {}
+                # Enrich with vulnerability data
+                vuln_rows = db.execute(
+                    """SELECT vuln_id, severity, cvss_score, fix_version, description
+                       FROM package_vulnerabilities WHERE package_name=? LIMIT 10""",
+                    (rd["package_name"],),
+                ).fetchall()
+                if vuln_rows:
+                    vulns = [dict(v) for v in vuln_rows]
+                    max_cvss = max((v["cvss_score"] or 0) for v in vulns)
+                    rd["vulnerabilities"] = {
+                        "count": len(vulns), "scanned": True,
+                        "max_severity": max((v["severity"] or "unknown") for v in vulns),
+                        "max_cvss": max_cvss, "vulns": vulns,
+                    }
+                else:
+                    has_scan = db.execute(
+                        "SELECT 1 FROM scan_history LIMIT 1"
+                    ).fetchone()
+                    rd["vulnerabilities"] = {
+                        "count": 0, "scanned": has_scan is not None,
+                        "max_severity": None, "max_cvss": None, "vulns": [],
+                    }
                 installs.append(rd)
         else:
             sql = f"""SELECT d.*, s.title as session_title
@@ -3401,6 +3425,33 @@ class DashboardHandler(BaseHTTPRequestHandler):
             },
             "installs": installs,
             "view": view,
+        })
+
+    def _api_supply_chain_scan(self, params):
+        """GET: return scan status (alias for scan-status)."""
+        self._api_supply_chain_scan_status(params)
+
+    def _api_supply_chain_scan_post(self, payload):
+        """POST: trigger a vulnerability scan."""
+        try:
+            from claude_monitoring.vuln_scanner import run_full_scan
+
+            db = get_thread_db()
+            results = run_full_scan(db)
+            self._send_json(results)
+        except Exception as e:
+            self._send_json({"error": str(e)}, 500)
+
+    def _api_supply_chain_scan_status(self, params):
+        """Get last scan info."""
+        db = get_thread_db()
+        row = db.execute("SELECT * FROM scan_history ORDER BY id DESC LIMIT 1").fetchone()
+        vuln_count = db.execute("SELECT COUNT(DISTINCT vuln_id) FROM package_vulnerabilities").fetchone()[0]
+        pkg_count = db.execute("SELECT COUNT(DISTINCT package_name) FROM package_vulnerabilities").fetchone()[0]
+        self._send_json({
+            "last_scan": dict(row) if row else None,
+            "total_vulns": vuln_count,
+            "packages_with_vulns": pkg_count,
         })
 
     def _api_supply_chain_detail(self, params):

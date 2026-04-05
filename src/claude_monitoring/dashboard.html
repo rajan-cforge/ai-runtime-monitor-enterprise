@@ -449,6 +449,7 @@ body { background:var(--bg); color:var(--text); font-family:-apple-system,BlinkM
   <!-- Alerts -->
   <div class="panel" id="panel-supply-chain">
     <div class="system-section">
+      <div id="sc-scan-bar" style="display:flex;align-items:center;gap:8px;margin-bottom:10px;font-size:12px;color:var(--text2)"></div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px" id="sc-stats"></div>
       <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
         <div style="display:flex;gap:2px;background:var(--surface2);border:1px solid var(--border);border-radius:4px;overflow:hidden" id="sc-category-toggle">
@@ -1180,6 +1181,21 @@ function scRiskBadge(score) {
 }
 async function loadSupplyChain() {
   try {
+    // Scan status bar
+    try {
+      var scanR = await fetch(API + '/api/supply-chain/scan-status');
+      var scanD = await scanR.json();
+      var bar = document.getElementById('sc-scan-bar');
+      if (scanD.last_scan) {
+        bar.innerHTML = '<span style="width:8px;height:8px;border-radius:50%;background:var(--green);display:inline-block"></span> '
+          + 'Last scan: ' + fmtRelative(scanD.last_scan.timestamp) + ' &middot; '
+          + scanD.total_vulns + ' vulns across ' + scanD.packages_with_vulns + ' packages'
+          + ' <button onclick="triggerScan()" style="margin-left:8px;background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:2px 8px;color:var(--text);font-size:11px;cursor:pointer">Scan now</button>';
+      } else {
+        bar.innerHTML = '<span style="width:8px;height:8px;border-radius:50%;background:var(--text2);display:inline-block"></span> No vulnerability scans yet'
+          + ' <button onclick="triggerScan()" style="margin-left:8px;background:var(--blue);border:none;border-radius:4px;padding:3px 10px;color:white;font-size:11px;cursor:pointer">Run first scan</button>';
+      }
+    } catch(e) {}
     var mgr = _scManagerFilter || document.getElementById('sc-manager').value;
     var search = document.getElementById('sc-search').value;
     var url = API + '/api/supply-chain?view=grouped&category=' + _scCategory;
@@ -1204,9 +1220,9 @@ async function loadSupplyChain() {
       }).join('');
     var thead = document.getElementById('sc-thead');
     var tbody = document.getElementById('sc-tbody');
-    thead.innerHTML = '<th>Package</th><th>Version</th><th>Manager</th><th>Pinned</th><th>Installs</th><th>Agents</th><th>Projects</th><th>Risk</th>';
+    thead.innerHTML = '<th>Package</th><th>Version</th><th>Manager</th><th>Pinned</th><th>CVEs</th><th>Installs</th><th>Agents</th><th>Projects</th><th>Risk</th>';
     if (!d.installs || !d.installs.length) {
-      tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--text2);padding:32px">No dependencies in this category.</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;color:var(--text2);padding:32px">No dependencies in this category.</td></tr>';
       return;
     }
     tbody.innerHTML = d.installs.map(function(p, idx) {
@@ -1218,17 +1234,22 @@ async function loadSupplyChain() {
       var pinnedHtml = p.pinned ? '<span style="color:var(--green)">Yes</span>' : '<span style="color:var(--orange)">No</span>';
       var rf = p.risk_flags || {};
       var reasonsHtml = (rf.reasons||[]).length ? '<div style="font-size:11px;color:var(--text2);margin-top:2px">' + esc((rf.reasons||[]).join(', ')) + '</div>' : '';
+      var v = p.vulnerabilities || {};
+      var vulnHtml = v.count > 0
+        ? '<span class="badge" style="background:#5c1a1a;color:var(--red);font-size:10px">' + v.count + ' CVE' + (v.count>1?'s':'') + '</span>'
+        : v.scanned ? '<span style="color:var(--green);font-size:11px">0 CVEs</span>' : '<span style="color:var(--text2);font-size:11px">?</span>';
       return '<tr style="border-left:3px solid ' + borderColor + ';cursor:pointer" onclick="scExpandRow(\'' + esc(p.package_name) + '\',\'' + esc(p.package_manager) + '\',' + idx + ')">'
         + '<td><strong>' + esc(p.package_name) + '</strong></td>'
         + '<td>' + esc(ver) + '</td>'
         + '<td>' + esc(p.package_manager) + '</td>'
         + '<td>' + pinnedHtml + '</td>'
+        + '<td>' + vulnHtml + '</td>'
         + '<td>' + (p.install_count||1) + '</td>'
         + '<td>' + esc(agents) + '</td>'
         + '<td>' + esc(projects) + '</td>'
         + '<td>' + scRiskBadge(score) + reasonsHtml + '</td>'
         + '</tr>'
-        + '<tr id="sc-expand-' + idx + '" style="display:none"><td colspan="8" style="background:var(--surface2);padding:12px;font-size:12px">Loading...</td></tr>';
+        + '<tr id="sc-expand-' + idx + '" style="display:none"><td colspan="9" style="background:var(--surface2);padding:12px;font-size:12px">Loading...</td></tr>';
     }).join('');
   } catch(e) { console.error('Supply chain load error:', e); }
 }
@@ -1252,6 +1273,16 @@ async function scExpandRow(pkg, mgr, idx) {
     html += '</tbody></table>';
     row.querySelector('td').innerHTML = html;
   } catch(e) { row.querySelector('td').innerHTML = 'Error loading detail'; }
+}
+async function triggerScan() {
+  var bar = document.getElementById('sc-scan-bar');
+  bar.innerHTML = '<span style="color:var(--blue)">Scanning... this may take a minute</span>';
+  try {
+    var r = await fetch(API + '/api/supply-chain/scan', {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'});
+    var d = await r.json();
+    bar.innerHTML = '<span style="color:var(--green)">Scan complete: ' + (d.vulns_found||0) + ' vulnerabilities found</span>';
+    setTimeout(loadSupplyChain, 500);
+  } catch(e) { bar.innerHTML = '<span style="color:var(--red)">Scan failed</span>'; }
 }
 async function scOpenSession(sessionId, installTs) {
   // Open Deep Dive and try to jump to the turn containing the install timestamp
