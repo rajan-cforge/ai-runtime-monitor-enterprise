@@ -61,6 +61,8 @@ def scan_sensitive(text, names_only=False, validate=True):
                     "name": name,
                     "severity": info["severity"],
                     "category": info["category"],
+                    "matched_value": match.group(0),
+                    "match_start": match.start(),
                 }
                 if VALIDATORS and name in VALIDATORS:
                     entry["validated"] = True

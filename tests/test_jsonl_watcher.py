@@ -353,7 +353,7 @@ class TestCheckSensitive:
         assert data["severity"] == "low"
 
     def test_context_aware_assistant_discussing_security(self, watcher, db):
-        """Assistant discussing security findings should downgrade from critical to medium."""
+        """Assistant discussing security findings should downgrade from critical to low (low confidence)."""
         watcher._ensure_session("sens-ctx-2", "/tmp/s.jsonl")
         text = "I found AKIAI44QH8DHBR3XYZAB in the code and detected a credential leak. You should rotate this key."
         watcher._check_sensitive(text, "sens-ctx-2", "2026-01-01T00:00:00Z", "assistant_response")
@@ -364,7 +364,8 @@ class TestCheckSensitive:
         ).fetchall()
         assert len(rows) >= 1
         data = json.loads(rows[0][0])
-        assert data["severity"] == "medium"
+        assert data["severity"] == "low"
+        assert data["confidence"] == "low"
 
     def test_context_aware_tool_result_with_example(self, watcher, db):
         """Tool result containing 'EXAMPLE' near match should downgrade to low."""

@@ -1019,48 +1019,121 @@ class JSONLSessionWatcher:
         except Exception:
             pass
 
+    # Alert dedup cache: (session_id, pattern, matched_prefix) -> event_id
+    _alert_dedup = {}
+
+    @staticmethod
+    def _calculate_confidence(context, pattern, matched_value, full_text):
+        """Determine confidence level based on context and content."""
+        if context == "user_prompt":
+            return "high"
+        if context == "tool_result":
+            text_lower = (full_text or "").lower()
+            if "/tests/" in full_text or "/test_" in full_text or "test_" in text_lower:
+                return "low"
+            if "EXAMPLE" in full_text or "example" in text_lower:
+                return "low"
+            return "high"
+        if context == "assistant_response":
+            return "low"  # assistants quote/discuss credentials, never introduce them
+        if context and context.startswith("tool:"):
+            text_lower = (full_text or "").lower()
+            # Git commits about security = low
+            if "git commit" in text_lower and any(w in text_lower for w in ("mask", "redact", "secret", "fix", "clean")):
+                return "low"
+            # SQL/DB cleanup = low
+            if any(w in text_lower for w in ("delete from", "sqlite3", "vacuum", "select count")):
+                return "low"
+            # Actual credential usage = high
+            if any(w in text_lower for w in ("aws ", "curl -h", "export ", "ssh ", "docker login")):
+                return "high"
+            return "medium"
+        return "medium"
+
+    @staticmethod
+    def _cap_severity_by_confidence(severity, confidence):
+        """Cap severity based on confidence level."""
+        if confidence == "low":
+            return "low"
+        if confidence == "medium" and severity in ("critical", "high"):
+            return "medium"
+        return severity
+
     def _check_sensitive(self, text, session_id, timestamp, context):
-        """Scan text for sensitive patterns and store alerts."""
+        """Scan text for sensitive patterns and store alerts with confidence."""
         if not text:
             return
         matches = scan_sensitive(text)
         if not matches:
             return
-        # Filter out known example secrets
         matches = [m for m in matches if not _is_known_example(m["name"], text)]
         if not matches:
             return
-        # Filter out phone_number false positives from OpenClaw Telegram metadata
-        # (sender_id is a Telegram user ID like "7465847486", not a phone number)
         if "sender_id" in text or "message_id" in text:
             matches = [m for m in matches if m["name"] != "phone_number"]
         if not matches:
             return
-        # Filter out credit_card false positives in API metadata
-        # (long numeric strings in token counts, request IDs, response IDs)
         if any(kw in text for kw in ("input_tokens", "anthropic", "responseId", "cache_read")):
             matches = [m for m in matches if m["name"] != "credit_card"]
         if not matches:
             return
-        # Find highest severity
-        severity = min((m["severity"] for m in matches), key=lambda s: SEVERITY_ORDER.get(s, 99))
-        # Context-aware severity downgrade
-        severity = self._adjust_alert_severity(severity, context, text)
+
+        # Capture the first match's value and context window
+        first_match = matches[0]
+        matched_value = first_match.get("matched_value", "")
+        match_start = first_match.get("match_start", 0)
+        ctx_start = max(0, match_start - 50)
+        ctx_end = min(len(text), match_start + len(matched_value) + 50)
+        match_context = text[ctx_start:ctx_end]
+
+        # Confidence scoring
         pattern_names = [m["name"] for m in matches]
+        confidence = self._calculate_confidence(context, pattern_names[0], matched_value, text)
+        likely_fp = confidence == "low"
+
+        # Severity: pattern severity capped by confidence
+        raw_severity = min((m["severity"] for m in matches), key=lambda s: SEVERITY_ORDER.get(s, 99))
+        severity = self._cap_severity_by_confidence(raw_severity, confidence)
+
+        # Dedup: same pattern + matched value in same session
+        dedup_key = (session_id, pattern_names[0], matched_value[:20] if matched_value else "")
+        if dedup_key in self._alert_dedup:
+            try:
+                existing_id = self._alert_dedup[dedup_key]
+                self.db.execute(
+                    """UPDATE events SET data_json = json_set(data_json,
+                        '$.repeat_count',
+                        COALESCE(json_extract(data_json, '$.repeat_count'), 1) + 1)
+                    WHERE id = ?""",
+                    (existing_id,),
+                )
+                return
+            except Exception:
+                pass
+
         categories = list(set(m["category"] for m in matches))
-        self._store_event(
-            timestamp,
-            session_id,
-            "sensitive_data",
-            "network",
-            {
-                "patterns": pattern_names,
-                "severity": severity,
-                "categories": categories,
-                "context": context,
-                "snippet": text[:200],
-            },
-        )
+        event_data = {
+            "patterns": pattern_names,
+            "severity": severity,
+            "categories": categories,
+            "context": context,
+            "snippet": text[:200],
+            "matched_value": matched_value,
+            "match_context": match_context,
+            "confidence": confidence,
+            "likely_false_positive": likely_fp,
+        }
+        self._store_event(timestamp, session_id, "sensitive_data", "network", event_data)
+
+        # Track for dedup
+        try:
+            row = self.db.execute("SELECT MAX(id) FROM events WHERE event_type='sensitive_data'").fetchone()
+            if row and row[0]:
+                self._alert_dedup[dedup_key] = row[0]
+            if len(self._alert_dedup) > 500:
+                self._alert_dedup.clear()
+        except Exception:
+            pass
 
     def _adjust_alert_severity(self, severity, context, text):
         """Downgrade alert severity based on context to reduce false positives.
