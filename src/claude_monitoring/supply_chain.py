@@ -53,6 +53,8 @@ SHELL_NOISE = {
     "-T", "source", "activate", "cd", "mkdir", "rm", "cp", "mv",
     "chmod", "chown", "sudo", "sh", "-c", "bash", "done",
     "user-local", "user", "local", "global", "system",
+    "start", "enable", "service", "restart", "status", "stop",
+    "daemon-reload", "systemctl",
 }
 
 KNOWN_TYPOSQUATS = {
@@ -106,9 +108,9 @@ def _is_valid_package_name(name):
     """Check if a token looks like a real package name."""
     if not name or len(name) < 2:
         return False
-    # Special entries we generate ourselves
+    # Special entries (editable install, from requirements.txt) — valid but not "packages"
     if name.startswith("("):
-        return True
+        return True  # validated separately, categorized as "metadata"
     # 1-char tokens are never packages; 2-char checked against SKIP_WORDS above
     if len(name) < 2:
         return False
@@ -315,7 +317,9 @@ def risk_level(score):
 
 
 def categorize_package(name, manager):
-    """Categorize: package, tool_exec, or build_tool."""
+    """Categorize: package, tool_exec, build_tool, or metadata."""
+    if name.startswith("("):
+        return "metadata"
     if manager == "npx":
         return "tool_exec"
     if manager in ("brew", "apt"):

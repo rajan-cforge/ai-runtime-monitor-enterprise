@@ -52,10 +52,10 @@ body { background:var(--bg); color:var(--text); font-family:-apple-system,BlinkM
 .session-item:hover { background:var(--surface2); }
 .session-item.active { background:var(--surface2); border-left-color:var(--blue); }
 .session-item.browser { border-left-color:var(--purple); }
-.session-item[data-risk="critical"] { border-left-color:#dc2626; }
-.session-item[data-risk="high"] { border-left-color:#ea580c; }
-.session-item[data-risk="medium"] { border-left-color:#d97706; }
-.session-item[data-risk="low"] { border-left-color:#4b5563; }
+.session-item[data-risk="critical"] { border-left-color:#dc2626 !important; }
+.session-item[data-risk="high"] { border-left-color:#ea580c !important; }
+.session-item[data-risk="medium"] { border-left-color:#d97706 !important; }
+.session-item[data-risk="low"]:not(.active) { border-left-color:#6b7280; }
 .risk-badge { padding:2px 6px; border-radius:3px; font-size:0.65em; font-weight:700; text-transform:uppercase; letter-spacing:0.04em; margin-right:4px; }
 .risk-critical { background:#dc2626; color:white; }
 .risk-high { background:#ea580c; color:white; }
@@ -659,16 +659,22 @@ function maskSecrets(s) {
   });
   return s;
 }
+var _titleSkipPrefixes = ['Conversation info','Sender (untrusted','Sender (','untrusted metadata','Caveat:','[Request interrupted','Start with this:','Then paste this','Your task is to create a detailed summary'];
 function cleanTitle(s) {
   if (!s) return '';
   var t = s.replace(/<[^>]+>/g, '');
   t = t.replace(/```[\s\S]*?```/g, '').replace(/```\w*/g, '');
   t = t.replace(/^#+\s*/gm, '').replace(/\*\*/g, '').replace(/__/g, '');
-  if (t.indexOf('Conversation info') === 0) {
-    var parts = t.split('\n\n');
-    for (var i = 0; i < parts.length; i++) {
-      var p = parts[i].trim();
-      if (p && p.indexOf('Conversation info') !== 0 && p.indexOf('Sender ') !== 0 && p.indexOf('untrusted') < 0) { t = p; break; }
+  var trimmed = t.trim();
+  for (var k = 0; k < _titleSkipPrefixes.length; k++) {
+    if (trimmed.indexOf(_titleSkipPrefixes[k]) === 0) {
+      var parts = t.split('\n\n');
+      t = '';
+      for (var i = 0; i < parts.length; i++) {
+        var p = parts[i].trim();
+        if (p && !_titleSkipPrefixes.some(function(px){return p.indexOf(px)===0})) { t = p; break; }
+      }
+      break;
     }
   }
   t = t.replace(/\s+/g, ' ').trim();
@@ -919,6 +925,7 @@ async function pollFeed() {
         + '<span class="detail">'+ctxHtml+esc(cleanFeedSummary(ev.summary||''))+'</span>';
       div.style.cursor = 'pointer';
       div.onclick = ((evData) => () => {
+        if (evData.session_id) { openDeepDive(evData.session_id); return; }
         const existing = div.querySelector('.feed-expand');
         if (existing) { existing.remove(); return; }
         const detail = document.createElement('div');
@@ -927,12 +934,8 @@ async function pollFeed() {
         detail.textContent = JSON.stringify(evData, null, 2);
         div.appendChild(detail);
       })(ev);
-      container.appendChild(div);
+      container.prepend(div);
       lastFeedTs = ev.timestamp;
-    }
-
-    if (d.events.length && document.getElementById('feed-auto-scroll').checked) {
-      container.scrollTop = container.scrollHeight;
     }
   } catch(e) {}
 }
@@ -944,9 +947,16 @@ function updateCharts(stats) {
   const tl = (stats.token_timeline || []).slice().sort(function(a,b) {
     return new Date(a.hour).getTime() - new Date(b.hour).getTime();
   });
-  const labels = tl.map(t => {
-    try { return new Date(t.hour).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit',hour12:false}); }
-    catch(e) { return t.hour; }
+  const labels = tl.map((t, i) => {
+    try {
+      var d = new Date(t.hour);
+      var time = d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit',hour12:false});
+      // Show date on first label and when day changes
+      if (i === 0 || (i > 0 && new Date(tl[i-1].hour).getDate() !== d.getDate())) {
+        return d.toLocaleDateString([],{month:'short',day:'numeric'}) + ' ' + time;
+      }
+      return time;
+    } catch(e) { return t.hour; }
   });
 
   if (charts.tokens) charts.tokens.destroy();
@@ -1077,7 +1087,7 @@ async function loadProcesses() {
       html += '<tr style="cursor:pointer;background:var(--surface2)" onclick="document.querySelectorAll(\'.' + gid + '\').forEach(function(r){r.style.display=r.style.display===\'none\'?\'table-row\':\'none\'})">'
         + '<td colspan="3" style="font-weight:600"><span style="color:var(--purple)">' + esc(app) + '</span> <span style="color:var(--text2);font-weight:normal">(' + g.procs.length + ' process' + (g.procs.length > 1 ? 'es' : '') + ')</span></td>'
         + '<td>' + g.totalCpu.toFixed(1) + '%</td><td>' + g.totalMem.toFixed(1) + '%</td>'
-        + '<td colspan="3" style="color:var(--text2);font-size:11px">Click to expand</td></tr>';
+        + '<td colspan="3" style="color:var(--text2);font-size:11px;text-align:right">&#x25BC;</td></tr>';
       g.procs.forEach(function(p) {
         html += '<tr class="' + gid + '" style="display:none">'
           + '<td>'+p.pid+'</td><td><a style="color:var(--purple);cursor:pointer;text-decoration:none" onclick="event.stopPropagation();loadProcessDetail('+p.pid+')">'+esc(p.name)+'</a></td>'
@@ -1230,7 +1240,7 @@ async function loadAlerts(customOffset) {
     const sevFilter = document.getElementById('alert-severity-filter').value;
     const catFilter = document.getElementById('alert-category-filter').value;
     const showDismissed = document.getElementById('alert-show-dismissed').checked;
-    let url = API + '/api/alerts?limit=200&offset=' + alertOffset;
+    let url = API + '/api/alerts?limit=50&offset=' + alertOffset;
     if (sevFilter) url += '&severity=' + sevFilter;
     if (catFilter) url += '&category=' + catFilter;
     if (showDismissed) url += '&include_dismissed=true';
