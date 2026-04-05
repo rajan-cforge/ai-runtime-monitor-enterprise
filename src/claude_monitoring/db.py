@@ -200,6 +200,32 @@ def init_db(db_path=None):
         except sqlite3.OperationalError:
             pass
 
+    # Vulnerability scanning
+    c.execute("""CREATE TABLE IF NOT EXISTS package_vulnerabilities (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        scan_timestamp TEXT NOT NULL,
+        package_name TEXT NOT NULL,
+        package_version TEXT,
+        ecosystem TEXT,
+        vuln_id TEXT NOT NULL,
+        aliases TEXT DEFAULT '[]',
+        severity TEXT,
+        cvss_score REAL,
+        fix_version TEXT,
+        description TEXT,
+        source TEXT,
+        published TEXT,
+        modified TEXT,
+        UNIQUE(package_name, package_version, vuln_id)
+    )""")
+    c.execute("""CREATE TABLE IF NOT EXISTS scan_history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        timestamp TEXT NOT NULL,
+        packages_scanned INTEGER,
+        vulns_found INTEGER,
+        sources TEXT
+    )""")
+
     # Add dedup_hash column to events if missing (migration for dedup fix)
     try:
         c.execute("ALTER TABLE events ADD COLUMN dedup_hash TEXT")
