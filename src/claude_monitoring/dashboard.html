@@ -1281,10 +1281,10 @@ async function loadSupplyChain() {
       var id = await ir.json();
       var ibar = document.getElementById('sc-intel-bar');
       ibar.innerHTML = '<span style="color:var(--text2)">Threat intel:</span> '
-        + (id.sources||[]).map(function(s) {
+        + (id.sources||[]).map(function(s, si) {
           var dot = s.active ? '<span style="color:var(--green)">●</span>' : '<span style="color:var(--text2)">○</span>';
-          var extra = s.iocs ? ' (' + s.iocs + ')' : (s.cached ? ' (' + s.cached + ')' : (s.description ? ' — ' + s.description : ''));
-          return '<span style="padding:2px 6px;border-radius:10px;border:1px solid var(--border);font-size:10px;color:' + (s.active?'var(--text)':'var(--text2)') + '">' + dot + ' ' + esc(s.name) + extra + '</span>';
+          var extra = s.iocs ? ' (' + s.iocs + ')' : (s.cached ? ' (' + s.cached + ')' : '');
+          return '<span style="padding:2px 6px;border-radius:10px;border:1px solid var(--border);font-size:10px;color:' + (s.active?'var(--text)':'var(--text2)') + ';cursor:pointer;position:relative" onclick="toggleIntelTooltip(this,' + si + ')" data-src=\'' + esc(JSON.stringify(s)) + '\'>' + dot + ' ' + esc(s.name) + extra + '</span>';
         }).join('')
         + (id.total_iocs ? ' <span style="color:var(--text2);font-size:10px">' + id.total_iocs + ' IOCs loaded</span>' : '');
     } catch(e) {}
@@ -1346,9 +1346,20 @@ async function loadSupplyChain() {
       var rf = p.risk_flags || {};
       var reasonsHtml = (rf.reasons||[]).length ? '<div style="font-size:11px;color:var(--text2);margin-top:2px">' + esc((rf.reasons||[]).join(', ')) + '</div>' : '';
       var v = p.vulnerabilities || {};
-      var vulnHtml = v.count > 0
-        ? '<span class="badge" style="background:#5c1a1a;color:var(--red);font-size:10px">' + v.count + ' CVE' + (v.count>1?'s':'') + '</span>'
-        : v.scanned ? '<span style="color:var(--green);font-size:11px">0 CVEs</span>' : '<span style="color:var(--text2);font-size:11px">?</span>';
+      var vulnHtml;
+      if (v.count > 0) {
+        var instVer = p.latest_version || p.package_version;
+        var affCount = 0;
+        (v.vulns||[]).forEach(function(cv) {
+          var cmp = cv.fix_version ? semverCompare(instVer, cv.fix_version.replace(/^>=?/,'')) : null;
+          if (cmp === true) affCount++;
+        });
+        var badgeBg = affCount > 0 ? '#5c1a1a' : '#1a2e1a';
+        var badgeColor = affCount > 0 ? 'var(--red)' : 'var(--green)';
+        vulnHtml = '<span class="badge" style="background:'+badgeBg+';color:'+badgeColor+';font-size:10px">' + v.count + ' CVEs (' + affCount + ' affect you)</span>';
+      } else {
+        vulnHtml = v.scanned ? '<span style="color:var(--green);font-size:11px">0 CVEs</span>' : '<span style="color:var(--text2);font-size:11px">?</span>';
+      }
       return '<tr style="border-left:3px solid ' + borderColor + ';cursor:pointer" onclick="scExpandRow(\'' + esc(p.package_name) + '\',\'' + esc(p.package_manager) + '\',' + idx + ')">'
         + '<td><strong>' + esc(p.package_name) + '</strong></td>'
         + '<td>' + esc(ver) + '</td>'
@@ -1392,6 +1403,33 @@ function renderCVEPanel(vulns) {
   }
   return html;
 }
+function fmtAge(dateStr) {
+  if (!dateStr) return '?';
+  try {
+    var d = new Date(dateStr);
+    var days = Math.floor((Date.now() - d.getTime()) / 86400000);
+    var dateLabel = d.toLocaleDateString([],{month:'short',year:'numeric'});
+    if (days < 1) return '<span style="color:var(--red)">< 24 hours ago (' + dateLabel + ')</span>';
+    if (days < 30) return '<span style="color:' + (days < 7 ? 'var(--red)' : 'var(--orange)') + '">' + days + ' days ago (' + dateLabel + ')</span>';
+    if (days < 365) return Math.floor(days/30) + ' months ago (' + dateLabel + ')';
+    return Math.floor(days/365) + ' years ago (' + dateLabel + ')';
+  } catch(e) { return '?'; }
+}
+function semverCompare(installed, fix) {
+  // Returns true if installed < fix (i.e., affected)
+  if (!installed || !fix) return null;
+  try {
+    var iParts = installed.replace(/[^0-9.]/g,'').split('.').map(Number);
+    var fParts = fix.replace(/[^0-9.]/g,'').split('.').map(Number);
+    if (iParts.some(isNaN) || fParts.some(isNaN) || iParts.length < 2 || fParts.length < 2) return null;
+    for (var i = 0; i < Math.max(iParts.length, fParts.length); i++) {
+      var a = iParts[i] || 0, b = fParts[i] || 0;
+      if (a < b) return true;
+      if (a > b) return false;
+    }
+    return false; // equal = not affected
+  } catch(e) { return null; }
+}
 async function loadEnvironment(search) {
   try {
     var url = API + '/api/supply-chain/environment';
@@ -1411,7 +1449,9 @@ async function loadEnvironment(search) {
       tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text2);padding:32px">No environment data. Click "Scan now" to gather installed packages.</td></tr>';
       return;
     }
-    tbody.innerHTML = d.packages.map(function(p) {
+    // Store for expand
+    window._envPackages = d.packages;
+    tbody.innerHTML = d.packages.map(function(p, idx) {
       var vulnHtml = p.vuln_count > 0
         ? '<span class="badge" style="background:#5c1a1a;color:var(--red);font-size:10px">' + p.vuln_count + ' CVEs</span>'
         : '<span style="color:var(--green);font-size:11px">0 CVEs</span>';
@@ -1419,17 +1459,92 @@ async function loadEnvironment(search) {
         ? '<span class="badge" style="background:#1a2332;color:var(--blue);font-size:10px">agent (' + p.agent_installs + 'x)</span>'
         : '<span style="color:var(--text2);font-size:11px">pre-existing</span>';
       var borderColor = p.vuln_count > 0 ? 'var(--red)' : p.agent_installs > 0 ? 'var(--blue)' : 'var(--border)';
-      var riskScore = p.vuln_count > 0 ? (p.max_cvss ? p.max_cvss.toFixed(1) : '?') : '-';
-      return '<tr style="border-left:3px solid ' + borderColor + '">'
+      return '<tr style="border-left:3px solid ' + borderColor + ';cursor:pointer" onclick="envExpandRow(' + idx + ')">'
         + '<td><strong>' + esc(p.package_name) + '</strong></td>'
         + '<td>' + esc(p.package_version || '-') + '</td>'
         + '<td>' + esc(p.manager) + '</td>'
         + '<td>' + vulnHtml + '</td>'
         + '<td>' + sourceHtml + '</td>'
         + '<td>' + (p.vuln_count > 0 ? scRiskBadge(Math.round(p.max_cvss||5)) : '<span style="color:var(--text2);font-size:11px">-</span>') + '</td>'
-        + '</tr>';
+        + '</tr>'
+        + '<tr id="env-expand-' + idx + '" style="display:none"><td colspan="6" style="background:var(--surface2);padding:12px;font-size:12px">Loading...</td></tr>';
     }).join('');
   } catch(e) { console.error('Environment load error:', e); }
+}
+async function envExpandRow(idx) {
+  var row = document.getElementById('env-expand-' + idx);
+  if (row.style.display !== 'none') { row.style.display = 'none'; return; }
+  row.style.display = 'table-row';
+  var pkg = (window._envPackages||[])[idx];
+  if (!pkg) { row.querySelector('td').innerHTML = 'No data'; return; }
+  try {
+    // Fetch registry + CVE data
+    var regHtml = await renderRegistryPanel(pkg.package_name, pkg.manager);
+    var cveHtml = await renderVersionAwareCVEs(pkg.package_name, pkg.package_version);
+    var sourceHtml = pkg.agent_installs > 0
+      ? '<div style="margin-top:8px"><strong style="color:var(--blue)">Agent-installed</strong> (' + pkg.agent_installs + ' times by AI agents)</div>'
+      : '<div style="margin-top:8px;color:var(--text2)">Pre-existing (not installed by an AI agent)</div>';
+    row.querySelector('td').innerHTML = regHtml + cveHtml + sourceHtml;
+  } catch(e) { row.querySelector('td').innerHTML = 'Error loading detail'; }
+}
+async function renderRegistryPanel(name, manager) {
+  try {
+    var rr = await fetch(API + '/api/supply-chain/registry?package=' + encodeURIComponent(name) + '&manager=' + encodeURIComponent(manager));
+    var rd = await rr.json();
+    if (!rd || !rd.metadata) return '';
+    var m = rd.metadata;
+    var regLabel = manager === 'pip' ? 'PyPI' : manager === 'npm' ? 'npm' : manager;
+    var repoLink = m.repository ? '<a href="' + esc(m.repository) + '" target="_blank" style="color:var(--cyan)">' + esc(m.repository.replace('https://','').substring(0,40)) + '</a>' : '<span style="color:var(--red)">None</span>';
+    return '<div style="margin-bottom:12px"><strong>Registry intelligence (' + esc(regLabel) + ')</strong></div>'
+      + '<div style="display:grid;grid-template-columns:120px 1fr;gap:4px 16px;font-size:12px;margin-bottom:12px">'
+      + '<span style="color:var(--text2)">Published</span><span>' + fmtAge(m.first_published) + '</span>'
+      + '<span style="color:var(--text2)">Author</span><span>' + esc(m.author || '(none)') + '</span>'
+      + '<span style="color:var(--text2)">Description</span><span style="color:' + (m.has_description ? 'var(--text)' : 'var(--red)') + '">' + (m.has_description ? 'Yes' : '(none)') + '</span>'
+      + '<span style="color:var(--text2)">Repository</span><span>' + repoLink + '</span>'
+      + (m.has_install_scripts !== undefined ? '<span style="color:var(--text2)">Install scripts</span><span style="color:' + (m.has_install_scripts ? 'var(--red)' : 'var(--green)') + '">' + (m.has_install_scripts ? 'Detected' : 'None') + '</span>' : '')
+      + '<span style="color:var(--text2)">License</span><span>' + esc(m.license || '(none)') + '</span>'
+      + '</div>';
+  } catch(e) { return ''; }
+}
+async function renderVersionAwareCVEs(pkgName, installedVersion) {
+  try {
+    // Fetch CVEs for this package from the supply chain detail
+    var cr = await fetch(API + '/api/supply-chain/detail?package=' + encodeURIComponent(pkgName) + '&manager=pip');
+    // Also check package_vulnerabilities directly — use the grouped API
+    var vr = await fetch(API + '/api/supply-chain?view=grouped&category=all&search=' + encodeURIComponent(pkgName));
+    var vd = await vr.json();
+    var pkgData = (vd.installs||[]).find(function(p) { return p.package_name === pkgName; });
+    var vulns = (pkgData && pkgData.vulnerabilities && pkgData.vulnerabilities.vulns) || [];
+    if (!vulns.length) {
+      // Try environment-specific vuln lookup
+      var evr = await fetch(API + '/api/supply-chain/environment?search=' + encodeURIComponent(pkgName));
+      var evd = await evr.json();
+      var epkg = (evd.packages||[]).find(function(p) { return p.package_name === pkgName; });
+      if (!epkg || !epkg.vuln_count) return '<div style="color:var(--green);margin-bottom:10px">No known vulnerabilities</div>';
+      return '<div style="color:var(--red);margin-bottom:10px">' + epkg.vuln_count + ' CVEs found (expand in Agent Installed view for details)</div>';
+    }
+    // Version-aware analysis
+    var affected = 0, notAffected = 0, unknown = 0;
+    var rows = vulns.map(function(v) {
+      var cmp = v.fix_version ? semverCompare(installedVersion, v.fix_version.replace(/^>=?/,'')) : null;
+      var statusHtml;
+      if (cmp === true) { affected++; statusHtml = '<span style="color:var(--red)">AFFECTED</span>'; }
+      else if (cmp === false) { notAffected++; statusHtml = '<span style="color:var(--green)">Not affected (fixed in ' + esc(v.fix_version) + ')</span>'; }
+      else { unknown++; statusHtml = '<span style="color:var(--text2)">Cannot determine</span>'; }
+      return '<tr>'
+        + '<td><a href="https://osv.dev/vulnerability/' + esc(v.vuln_id) + '" target="_blank" style="color:var(--cyan);font-family:monospace;font-size:11px">' + esc(v.vuln_id) + '</a></td>'
+        + '<td><span style="color:' + ({critical:'var(--red)',high:'var(--orange)',medium:'var(--blue)',malicious:'var(--red)'}[v.severity]||'var(--text2)') + ';font-weight:600">' + esc((v.severity||'?').toUpperCase()) + '</span></td>'
+        + '<td>' + (v.cvss_score ? v.cvss_score.toFixed(1) : '-') + '</td>'
+        + '<td>' + statusHtml + '</td>'
+        + '</tr>';
+    });
+    var summaryColor = affected > 0 ? 'var(--red)' : 'var(--green)';
+    var summary = vulns.length + ' CVEs found. <strong style="color:' + summaryColor + '">' + affected + ' affect your version (' + esc(installedVersion||'?') + ')</strong>'
+      + (notAffected > 0 ? ', ' + notAffected + ' fixed' : '') + (unknown > 0 ? ', ' + unknown + ' unknown' : '');
+    return '<div style="margin-bottom:12px"><strong style="color:var(--red)">Known vulnerabilities</strong></div>'
+      + '<div style="font-size:12px;margin-bottom:8px">' + summary + '</div>'
+      + '<table style="width:100%;font-size:12px;border:none;margin-bottom:12px"><thead><tr><th>ID</th><th>Severity</th><th>CVSS</th><th>Status</th></tr></thead><tbody>' + rows.join('') + '</tbody></table>';
+  } catch(e) { return ''; }
 }
 async function scExpandRow(pkg, mgr, idx) {
   var row = document.getElementById('sc-expand-' + idx);
@@ -1440,25 +1555,7 @@ async function scExpandRow(pkg, mgr, idx) {
     var vulnData = (window._scVulnData || {})[idx] || {};
     var cveHtml = renderCVEPanel(vulnData);
 
-    // Registry metadata (if available in vuln data response or fetch inline)
-    var regHtml = '';
-    try {
-      var rr = await fetch(API + '/api/supply-chain/registry?package=' + encodeURIComponent(pkg) + '&manager=' + encodeURIComponent(mgr));
-      var rd = await rr.json();
-      if (rd && rd.metadata) {
-        var m = rd.metadata;
-        var age = m.first_published ? Math.floor((Date.now() - new Date(m.first_published).getTime()) / 86400000) + 'd ago' : '?';
-        regHtml = '<div style="margin-bottom:12px"><strong>Registry intelligence</strong></div>'
-          + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 16px;font-size:12px;margin-bottom:12px">'
-          + '<span style="color:var(--text2)">Published</span><span style="text-align:right;color:' + (age.startsWith('0')||age.startsWith('1')||age.startsWith('2')||age.startsWith('3')||age.startsWith('4')||age.startsWith('5')||age.startsWith('6') ? 'var(--red)' : 'var(--text)') + '">' + esc(age) + '</span>'
-          + '<span style="color:var(--text2)">Author</span><span style="text-align:right">' + esc(m.author || '(none)') + '</span>'
-          + '<span style="color:var(--text2)">Description</span><span style="text-align:right;color:' + (m.has_description ? 'var(--text)' : 'var(--red)') + '">' + (m.has_description ? 'Yes' : '(none)') + '</span>'
-          + '<span style="color:var(--text2)">Repository</span><span style="text-align:right;color:' + (m.has_repository ? 'var(--text)' : 'var(--red)') + '">' + (m.has_repository ? 'Yes' : '(none)') + '</span>'
-          + (m.has_install_scripts !== undefined ? '<span style="color:var(--text2)">Install scripts</span><span style="text-align:right;color:' + (m.has_install_scripts ? 'var(--red)' : 'var(--text)') + '">' + (m.has_install_scripts ? 'Detected ⚠' : 'None') + '</span>' : '')
-          + '<span style="color:var(--text2)">License</span><span style="text-align:right">' + esc(m.license || '(none)') + '</span>'
-          + '</div>';
-      }
-    } catch(e) {}
+    var regHtml = await renderRegistryPanel(pkg, mgr);
 
     var r = await fetch(API + '/api/supply-chain/detail?package=' + encodeURIComponent(pkg) + '&manager=' + encodeURIComponent(mgr));
     var d = await r.json();
@@ -1478,6 +1575,25 @@ async function scExpandRow(pkg, mgr, idx) {
     }
     row.querySelector('td').innerHTML = regHtml + cveHtml + installHtml;
   } catch(e) { row.querySelector('td').innerHTML = 'Error loading detail'; }
+}
+function toggleIntelTooltip(el, idx) {
+  var existing = el.querySelector('.intel-tooltip');
+  if (existing) { existing.remove(); return; }
+  // Close others
+  document.querySelectorAll('.intel-tooltip').forEach(function(t){t.remove()});
+  try {
+    var s = JSON.parse(el.dataset.src);
+    var html = '<div class="intel-tooltip" style="position:absolute;top:100%;left:0;z-index:100;background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:10px;width:280px;font-size:12px;box-shadow:0 4px 12px rgba(0,0,0,0.3)">'
+      + '<div style="font-weight:600;margin-bottom:6px">' + esc(s.name) + '</div>'
+      + '<div style="color:var(--text2);margin-bottom:4px">Status: ' + (s.active ? '<span style="color:var(--green)">Active</span>' : '<span style="color:var(--text2)">Not fetched</span>') + '</div>'
+      + (s.description ? '<div style="color:var(--text2);margin-bottom:4px">' + esc(s.description) + '</div>' : '')
+      + (s.iocs !== undefined ? '<div>IOCs loaded: <strong>' + s.iocs + '</strong></div>' : '')
+      + (s.cached !== undefined ? '<div>Cached packages: <strong>' + s.cached + '</strong></div>' : '')
+      + '<div style="margin-top:6px;display:flex;gap:6px">'
+      + ((!s.active && s.name.indexOf('ThreatFox') >= 0) ? '<button onclick="event.stopPropagation();triggerScan();this.closest(\'.intel-tooltip\').remove()" style="background:var(--blue);border:none;border-radius:4px;padding:3px 8px;color:white;font-size:11px;cursor:pointer">Fetch now</button>' : '')
+      + '</div></div>';
+    el.insertAdjacentHTML('beforeend', html);
+  } catch(e) {}
 }
 async function triggerScan() {
   var bar = document.getElementById('sc-scan-bar');
