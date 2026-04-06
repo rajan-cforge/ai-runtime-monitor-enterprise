@@ -715,6 +715,18 @@ async function loadStats() {
       document.getElementById('st-sessions-sub').innerHTML = activeCount > 0 ? '<span style="color:var(--green)">' + activeCount + ' active</span>' : '';
     } catch(e) {}
     document.getElementById('st-agents').textContent = d.active_processes;
+    // Agent breakdown subtitle
+    try {
+      var pr = await fetch(API + '/api/processes');
+      var pd = await pr.json();
+      var agentCounts = {};
+      (pd.processes||[]).forEach(function(p) {
+        var app = classifyProcess(p.name, p.cmdline);
+        if (app) agentCounts[app] = (agentCounts[app]||0) + 1;
+      });
+      var sub = Object.entries(agentCounts).map(function(e){return e[0]+': '+e[1]}).join(' · ');
+      document.getElementById('st-agents-sub').textContent = sub;
+    } catch(e) {}
     document.getElementById('st-input').textContent = fmtNum(d.total_input_tokens);
     document.getElementById('st-output').textContent = fmtNum(d.total_output_tokens);
     document.getElementById('st-alerts').textContent = d.total_alerts;
@@ -941,6 +953,7 @@ const FEED_ICONS = {
   bash_progress:'&#x1f4bb;', system_event:'&#x2699;&#xfe0f;', browser_ai:'&#x1f310;'
 };
 var _feedSeen = {};
+var _connBatch = {}; // {processName: {count, el, timer}}
 function resolveEC2(host) {
   if (!host) return host;
   var m = host.match(/ec2-[\d-]+\.(.+?)\.amazonaws\.com/);
@@ -977,6 +990,22 @@ async function pollFeed() {
       if (!showTokens && ev.event_type === 'token_usage') continue;
       if (typeFilter && ev.event_type !== typeFilter) continue;
       if (!typeFilter && sessionsOnly && !sessionEventTypes.has(ev.event_type)) continue;
+      // Connection batching: group rapid-fire connections from same process
+      if (ev.event_type === 'connection' && ev.summary) {
+        var batchKey = (ev.summary||'').split(' ')[0] || 'unknown';
+        var now = Date.now();
+        if (_connBatch[batchKey] && (now - _connBatch[batchKey].ts) < 5000) {
+          _connBatch[batchKey].count++;
+          _connBatch[batchKey].ts = now;
+          if (_connBatch[batchKey].el) {
+            var lbl = _connBatch[batchKey].el.querySelector('.detail');
+            if (lbl) lbl.innerHTML = '<span class="session-ctx">[' + esc(batchKey) + ' (' + _connBatch[batchKey].count + ' connections)]</span> ' + esc(cleanFeedSummary(ev.summary||''));
+          }
+          lastFeedTs = ev.timestamp;
+          continue;
+        }
+        _connBatch[batchKey] = {count: 1, ts: now, el: null};
+      }
       // Client-side dedup
       var feedKey = (ev.timestamp||'') + '|' + (ev.event_type||'') + '|' + (ev.summary||'').substring(0,60);
       if (_feedSeen[feedKey]) continue;
@@ -1003,6 +1032,11 @@ async function pollFeed() {
         div.appendChild(detail);
       })(ev);
       container.prepend(div);
+      // Store ref for connection batching
+      if (ev.event_type === 'connection') {
+        var bk = (ev.summary||'').split(' ')[0] || 'unknown';
+        if (_connBatch[bk]) _connBatch[bk].el = div;
+      }
       lastFeedTs = ev.timestamp;
     }
   } catch(e) {}
@@ -1406,6 +1440,26 @@ async function scExpandRow(pkg, mgr, idx) {
     var vulnData = (window._scVulnData || {})[idx] || {};
     var cveHtml = renderCVEPanel(vulnData);
 
+    // Registry metadata (if available in vuln data response or fetch inline)
+    var regHtml = '';
+    try {
+      var rr = await fetch(API + '/api/supply-chain/registry?package=' + encodeURIComponent(pkg) + '&manager=' + encodeURIComponent(mgr));
+      var rd = await rr.json();
+      if (rd && rd.metadata) {
+        var m = rd.metadata;
+        var age = m.first_published ? Math.floor((Date.now() - new Date(m.first_published).getTime()) / 86400000) + 'd ago' : '?';
+        regHtml = '<div style="margin-bottom:12px"><strong>Registry intelligence</strong></div>'
+          + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 16px;font-size:12px;margin-bottom:12px">'
+          + '<span style="color:var(--text2)">Published</span><span style="text-align:right;color:' + (age.startsWith('0')||age.startsWith('1')||age.startsWith('2')||age.startsWith('3')||age.startsWith('4')||age.startsWith('5')||age.startsWith('6') ? 'var(--red)' : 'var(--text)') + '">' + esc(age) + '</span>'
+          + '<span style="color:var(--text2)">Author</span><span style="text-align:right">' + esc(m.author || '(none)') + '</span>'
+          + '<span style="color:var(--text2)">Description</span><span style="text-align:right;color:' + (m.has_description ? 'var(--text)' : 'var(--red)') + '">' + (m.has_description ? 'Yes' : '(none)') + '</span>'
+          + '<span style="color:var(--text2)">Repository</span><span style="text-align:right;color:' + (m.has_repository ? 'var(--text)' : 'var(--red)') + '">' + (m.has_repository ? 'Yes' : '(none)') + '</span>'
+          + (m.has_install_scripts !== undefined ? '<span style="color:var(--text2)">Install scripts</span><span style="text-align:right;color:' + (m.has_install_scripts ? 'var(--red)' : 'var(--text)') + '">' + (m.has_install_scripts ? 'Detected ⚠' : 'None') + '</span>' : '')
+          + '<span style="color:var(--text2)">License</span><span style="text-align:right">' + esc(m.license || '(none)') + '</span>'
+          + '</div>';
+      }
+    } catch(e) {}
+
     var r = await fetch(API + '/api/supply-chain/detail?package=' + encodeURIComponent(pkg) + '&manager=' + encodeURIComponent(mgr));
     var d = await r.json();
     var installHtml = '';
@@ -1422,7 +1476,7 @@ async function scExpandRow(pkg, mgr, idx) {
       });
       installHtml += '</tbody></table>';
     }
-    row.querySelector('td').innerHTML = cveHtml + installHtml;
+    row.querySelector('td').innerHTML = regHtml + cveHtml + installHtml;
   } catch(e) { row.querySelector('td').innerHTML = 'Error loading detail'; }
 }
 async function triggerScan() {

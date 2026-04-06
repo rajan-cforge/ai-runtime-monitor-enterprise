@@ -1747,6 +1747,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             "/api/supply-chain/scan-status": self._api_supply_chain_scan_status,
             "/api/supply-chain/environment": self._api_supply_chain_environment,
             "/api/supply-chain/intel-status": self._api_supply_chain_intel_status,
+            "/api/supply-chain/registry": self._api_supply_chain_registry,
         }
 
         # Match path prefixes for dynamic routes
@@ -3481,6 +3482,44 @@ class DashboardHandler(BaseHTTPRequestHandler):
             "stats": {"total": total, "vulnerable": vuln_count, "agent_installed": agent_count, "clean": total - vuln_count},
             "packages": [dict(r) for r in rows],
         })
+
+    def _api_supply_chain_registry(self, params):
+        """Fetch or return cached registry metadata for a package."""
+        pkg = params.get("package", [""])[0]
+        mgr = params.get("manager", [""])[0]
+        if not pkg:
+            self._send_json({"error": "missing package"}, 400)
+            return
+        db = get_thread_db()
+        # Check cache
+        cached = db.execute(
+            "SELECT metadata FROM package_registry_cache WHERE package_name=? AND manager=?",
+            (pkg, mgr),
+        ).fetchone()
+        if cached:
+            try:
+                self._send_json({"metadata": json.loads(cached[0])})
+                return
+            except Exception:
+                pass
+        # Fetch live
+        try:
+            from claude_monitoring.threat_intel import fetch_registry_metadata
+
+            meta = fetch_registry_metadata(pkg, mgr)
+            if meta:
+                db.execute(
+                    """INSERT OR REPLACE INTO package_registry_cache
+                       (package_name, manager, fetch_timestamp, metadata)
+                       VALUES (?, ?, datetime('now'), ?)""",
+                    (pkg, mgr, json.dumps(meta)),
+                )
+                db.commit()
+                self._send_json({"metadata": meta})
+                return
+        except Exception:
+            pass
+        self._send_json({"metadata": None})
 
     def _api_supply_chain_intel_status(self, params):
         """Threat intelligence source status."""
