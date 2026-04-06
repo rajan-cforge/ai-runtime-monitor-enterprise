@@ -472,7 +472,7 @@ body { background:var(--bg); color:var(--text); font-family:-apple-system,BlinkM
         </select>
         <input id="sc-search" placeholder="Search package..." onkeyup="loadSupplyChain()" style="background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:4px 8px;color:var(--text);font-size:12px;flex:1;max-width:250px">
       </div>
-      <table><thead><tr id="sc-thead"></tr></thead>
+      <table style="table-layout:auto;overflow-x:auto"><thead><tr id="sc-thead"></tr></thead>
         <tbody id="sc-tbody"></tbody>
       </table>
     </div>
@@ -1277,10 +1277,10 @@ function scSetCategory(btn) {
   if (panel) panel.scrollTop = 0;
 }
 function scRiskBadge(score) {
-  if (score >= 7) return '<span class="badge" style="background:#5c1a1a;color:var(--red);font-size:10px">CRITICAL (' + score + ')</span>';
-  if (score >= 4) return '<span class="badge" style="background:#3d2e1a;color:var(--orange);font-size:10px">HIGH (' + score + ')</span>';
-  if (score >= 2) return '<span class="badge" style="background:#3d2e1a;color:var(--orange);font-size:10px">MED (' + score + ')</span>';
-  return '<span class="badge" style="background:var(--surface2);color:var(--text2);font-size:10px">LOW</span>';
+  if (score >= 6) return '<span class="badge" style="background:transparent;color:var(--orange);border:1px solid var(--orange);font-size:10px" title="Powerful capabilities warrant monitoring">HIGH CAPABILITY</span>';
+  if (score >= 4) return '<span class="badge" style="background:transparent;color:var(--orange);border:1px solid var(--orange);font-size:10px;opacity:0.8" title="Some elevated capabilities">ELEVATED</span>';
+  if (score >= 1) return '<span style="color:var(--text2);font-size:10px">STANDARD</span>';
+  return '';
 }
 async function loadSupplyChain() {
   try {
@@ -1341,7 +1341,7 @@ async function loadSupplyChain() {
       }).join('');
     var thead = document.getElementById('sc-thead');
     var tbody = document.getElementById('sc-tbody');
-    thead.innerHTML = '<th>Package</th><th>Version</th><th>Manager</th><th>Pinned</th><th>CVEs</th><th>Installs</th><th>Agents</th><th>Projects</th><th>Risk</th>';
+    thead.innerHTML = '<th style="min-width:160px">Package</th><th style="min-width:80px">Version</th><th style="min-width:60px">Mgr</th><th style="min-width:40px">Pin</th><th style="min-width:120px">Vulns</th><th style="min-width:50px">Runs</th><th style="min-width:80px">Agent</th><th style="min-width:100px">Project</th><th style="min-width:160px">Capability</th>';
     if (!d.installs || !d.installs.length) {
       tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;color:var(--text2);padding:32px">No dependencies in this category.</td></tr>';
       return;
@@ -1371,9 +1371,11 @@ async function loadSupplyChain() {
         vulnHtml = v.scanned ? '<span style="color:var(--green);font-size:11px">0 CVEs</span>' : '<span style="color:var(--text2);font-size:11px">?</span>';
       }
       var pkgUrl = p.package_manager === 'pip' ? 'https://pypi.org/project/'+encodeURIComponent(p.package_name)+'/' : p.package_manager === 'npm' ? 'https://www.npmjs.com/package/'+encodeURIComponent(p.package_name) : p.package_manager === 'brew' ? 'https://formulae.brew.sh/formula/'+encodeURIComponent(p.package_name) : '';
+      var catBadge = _scCategory === 'all' ? ({package:'<span style="font-size:9px;color:var(--blue);border:1px solid var(--blue);border-radius:2px;padding:0 3px;margin-right:4px">PKG</span>',tool_exec:'<span style="font-size:9px;color:var(--orange);border:1px solid var(--orange);border-radius:2px;padding:0 3px;margin-right:4px">NPX</span>',build_tool:'<span style="font-size:9px;color:var(--text2);border:1px solid var(--border);border-radius:2px;padding:0 3px;margin-right:4px">SYS</span>'}[p.category] || '') : '';
+      var verDisplay = ver === 'latest' ? '<span style="color:var(--orange)" title="Actual version not resolved">latest</span>' : esc(ver);
       return '<tr style="border-left:3px solid ' + borderColor + ';cursor:pointer" onclick="scExpandRow(\'' + esc(p.package_name) + '\',\'' + esc(p.package_manager) + '\',' + idx + ')">'
-        + '<td><strong>' + esc(p.package_name) + '</strong>' + (pkgUrl ? ' <a href="'+pkgUrl+'" target="_blank" onclick="event.stopPropagation()" style="color:var(--text2);text-decoration:none;font-size:10px" title="View on registry">↗</a>' : '') + '</td>'
-        + '<td>' + esc(ver) + '</td>'
+        + '<td>' + catBadge + '<strong>' + esc(p.package_name) + '</strong>' + (pkgUrl ? ' <a href="'+pkgUrl+'" target="_blank" onclick="event.stopPropagation()" style="color:var(--text2);text-decoration:none;font-size:10px" title="View on registry">↗</a>' : '') + '</td>'
+        + '<td>' + verDisplay + '</td>'
         + '<td>' + esc(p.package_manager) + '</td>'
         + '<td>' + pinnedHtml + '</td>'
         + '<td>' + vulnHtml + '</td>'
@@ -1458,7 +1460,7 @@ async function loadEnvironment(search) {
       + '<span class="badge" style="background:var(--surface2);color:var(--green);border:1px solid var(--border)">Clean: <strong>' + s.clean + '</strong></span>';
     var thead = document.getElementById('sc-thead');
     var tbody = document.getElementById('sc-tbody');
-    thead.innerHTML = '<th>Package</th><th>Version</th><th>Manager</th><th>CVEs</th><th>Source</th><th>Risk</th>';
+    thead.innerHTML = '<th style="min-width:160px">Package</th><th style="min-width:80px">Version</th><th style="min-width:60px">Mgr</th><th style="min-width:120px">Vulns</th><th style="min-width:80px">Source</th><th style="min-width:120px">Capability</th>';
     if (!d.packages || !d.packages.length) {
       tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text2);padding:32px">No environment data. Click "Scan now" to gather installed packages.</td></tr>';
       return;
