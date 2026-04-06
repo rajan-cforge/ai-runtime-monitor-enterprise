@@ -22,16 +22,26 @@ def fetch_pypi_metadata(package_name):
                 upload = f.get("upload_time_iso_8601") or f.get("upload_time")
                 if upload and (not first_release or upload < first_release):
                     first_release = upload
+        # License: prefer classifier over raw text (which can be full license body)
+        raw_license = info.get("license") or ""
+        license_name = raw_license if len(raw_license) < 50 else ""
+        if not license_name:
+            for c in info.get("classifiers", []):
+                if "License" in c and "::" in c:
+                    license_name = c.split("::")[-1].strip()
+                    break
+        repo_url = info.get("project_urls", {}).get("Source") or info.get("project_urls", {}).get("Repository") or info.get("project_urls", {}).get("Homepage") or ""
         return {
             "name": package_name,
             "description": (info.get("summary") or "")[:200],
             "author": info.get("author") or info.get("author_email") or "",
-            "license": info.get("license") or "",
-            "home_page": info.get("home_page") or info.get("project_url") or "",
-            "repository": info.get("project_urls", {}).get("Source") or info.get("project_urls", {}).get("Repository") or "",
+            "license": license_name,
+            "home_page": info.get("home_page") or "",
+            "repository": repo_url,
             "first_published": first_release,
             "has_description": bool(info.get("summary")),
-            "has_repository": bool(info.get("project_urls", {}).get("Source") or info.get("project_urls", {}).get("Repository")),
+            "has_repository": bool(repo_url),
+            "latest_version": info.get("version") or "",
         }
     except Exception:
         return None

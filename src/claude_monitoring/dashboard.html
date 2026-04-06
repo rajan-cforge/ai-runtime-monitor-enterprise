@@ -1452,9 +1452,12 @@ async function loadEnvironment(search) {
     // Store for expand
     window._envPackages = d.packages;
     tbody.innerHTML = d.packages.map(function(p, idx) {
-      var vulnHtml = p.vuln_count > 0
-        ? '<span class="badge" style="background:#5c1a1a;color:var(--red);font-size:10px">' + p.vuln_count + ' CVEs</span>'
-        : '<span style="color:var(--green);font-size:11px">0 CVEs</span>';
+      var vulnHtml;
+      if (p.vuln_count > 0) {
+        vulnHtml = '<span class="badge" style="background:#5c1a1a;color:var(--red);font-size:10px">' + p.vuln_count + ' CVEs</span>';
+      } else {
+        vulnHtml = '<span style="color:var(--green);font-size:11px" title="Scanned by pip-audit + OSV.dev. No known vulnerabilities found for this package. This does not guarantee safety.">Scanned — 0 known</span>';
+      }
       var sourceHtml = p.agent_installs > 0
         ? '<span class="badge" style="background:#1a2332;color:var(--blue);font-size:10px">agent (' + p.agent_installs + 'x)</span>'
         : '<span style="color:var(--text2);font-size:11px">pre-existing</span>';
@@ -1494,15 +1497,17 @@ async function renderRegistryPanel(name, manager) {
     if (!rd || !rd.metadata) return '';
     var m = rd.metadata;
     var regLabel = manager === 'pip' ? 'PyPI' : manager === 'npm' ? 'npm' : manager;
-    var repoLink = m.repository ? '<a href="' + esc(m.repository) + '" target="_blank" style="color:var(--cyan)">' + esc(m.repository.replace('https://','').substring(0,40)) + '</a>' : '<span style="color:var(--red)">None</span>';
+    var repoLink = m.repository ? '<a href="' + (m.repository.startsWith('http') ? '' : 'https://') + esc(m.repository) + '" target="_blank" style="color:var(--cyan)">' + esc(m.repository.replace('https://','').replace('http://','').substring(0,45)) + ' ↗</a>' : '<span style="color:var(--red)">None</span>';
+    var descHtml = m.description ? '<span style="color:var(--text)">' + esc(m.description.substring(0,100)) + '</span>' : '<span style="color:var(--red)">None</span>';
     return '<div style="margin-bottom:12px"><strong>Registry intelligence (' + esc(regLabel) + ')</strong></div>'
       + '<div style="display:grid;grid-template-columns:120px 1fr;gap:4px 16px;font-size:12px;margin-bottom:12px">'
       + '<span style="color:var(--text2)">Published</span><span>' + fmtAge(m.first_published) + '</span>'
       + '<span style="color:var(--text2)">Author</span><span>' + esc(m.author || '(none)') + '</span>'
-      + '<span style="color:var(--text2)">Description</span><span style="color:' + (m.has_description ? 'var(--text)' : 'var(--red)') + '">' + (m.has_description ? 'Yes' : '(none)') + '</span>'
+      + '<span style="color:var(--text2)">Description</span><span>' + descHtml + '</span>'
       + '<span style="color:var(--text2)">Repository</span><span>' + repoLink + '</span>'
       + (m.has_install_scripts !== undefined ? '<span style="color:var(--text2)">Install scripts</span><span style="color:' + (m.has_install_scripts ? 'var(--red)' : 'var(--green)') + '">' + (m.has_install_scripts ? 'Detected' : 'None') + '</span>' : '')
       + '<span style="color:var(--text2)">License</span><span>' + esc(m.license || '(none)') + '</span>'
+      + (m.latest_version ? '<span style="color:var(--text2)">Latest version</span><span>' + esc(m.latest_version) + '</span>' : '')
       + '</div>';
   } catch(e) { return ''; }
 }
