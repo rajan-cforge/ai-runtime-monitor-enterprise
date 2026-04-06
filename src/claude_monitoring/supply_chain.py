@@ -3,6 +3,7 @@
 import hashlib
 import json
 import re
+import subprocess
 
 INSTALL_PATTERNS = {
     "npm install": "npm",
@@ -403,3 +404,63 @@ def backfill_dependencies(db):
 
     db.commit()
     return count
+
+
+# ── Environment inventory ──────────────────────────────────
+
+
+def get_pip_packages():
+    """Get all installed Python packages via pip list."""
+    try:
+        result = subprocess.run(
+            ["pip", "list", "--format=json"],
+            capture_output=True, text=True, timeout=15,
+        )
+        data = json.loads(result.stdout)
+        return [{"name": p["name"], "version": p["version"], "manager": "pip"} for p in data]
+    except Exception:
+        return []
+
+
+def get_brew_packages():
+    """Get all installed Homebrew packages."""
+    try:
+        result = subprocess.run(
+            ["brew", "list", "--versions"],
+            capture_output=True, text=True, timeout=15,
+        )
+        pkgs = []
+        for line in result.stdout.strip().splitlines():
+            parts = line.split()
+            if parts:
+                pkgs.append({"name": parts[0], "version": parts[-1] if len(parts) > 1 else "unknown", "manager": "brew"})
+        return pkgs
+    except Exception:
+        return []
+
+
+def get_full_environment():
+    """Gather full package inventory from all managers."""
+    pkgs = get_pip_packages() + get_brew_packages()
+    return pkgs
+
+
+def store_environment_packages(db, packages):
+    """Store environment packages with dedup (UPSERT)."""
+    from datetime import datetime, timezone
+
+    ts = datetime.now(timezone.utc).isoformat()
+    for p in packages:
+        try:
+            db.execute(
+                """INSERT INTO environment_packages
+                   (scan_timestamp, package_name, package_version, manager, source)
+                   VALUES (?, ?, ?, ?, 'environment')
+                   ON CONFLICT(package_name, manager) DO UPDATE SET
+                   package_version=excluded.package_version,
+                   scan_timestamp=excluded.scan_timestamp""",
+                (ts, p["name"], p["version"], p["manager"]),
+            )
+        except Exception:
+            pass
+    db.commit()

@@ -1745,6 +1745,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             "/api/supply-chain": self._api_supply_chain,
             "/api/supply-chain/detail": self._api_supply_chain_detail,
             "/api/supply-chain/scan-status": self._api_supply_chain_scan_status,
+            "/api/supply-chain/environment": self._api_supply_chain_environment,
         }
 
         # Match path prefixes for dynamic routes
@@ -3432,6 +3433,38 @@ class DashboardHandler(BaseHTTPRequestHandler):
             },
             "installs": installs,
             "view": view,
+        })
+
+    def _api_supply_chain_environment(self, params):
+        """Full environment package inventory with vuln + agent cross-reference."""
+        db = get_thread_db()
+        search = params.get("search", [""])[0]
+        conditions = ["1=1"]
+        bind = []
+        if search:
+            conditions.append("ep.package_name LIKE ?")
+            bind.append(f"%{search}%")
+        where = " AND ".join(conditions)
+
+        sql = f"""SELECT ep.package_name, ep.package_version, ep.manager,
+                     (SELECT COUNT(*) FROM package_vulnerabilities pv
+                      WHERE pv.package_name = ep.package_name) as vuln_count,
+                     (SELECT MAX(pv.cvss_score) FROM package_vulnerabilities pv
+                      WHERE pv.package_name = ep.package_name) as max_cvss,
+                     (SELECT COUNT(*) FROM agent_dependencies ad
+                      WHERE ad.package_name = ep.package_name AND ad.category='package') as agent_installs
+                  FROM environment_packages ep WHERE {where}
+                  ORDER BY vuln_count DESC, agent_installs DESC, ep.package_name
+                  LIMIT 500"""  # nosec B608
+        rows = db.execute(sql, bind).fetchall()
+
+        total = db.execute(f"SELECT COUNT(*) FROM environment_packages ep WHERE {where}", bind).fetchone()[0]  # nosec B608
+        vuln_count = db.execute("SELECT COUNT(DISTINCT package_name) FROM environment_packages ep WHERE package_name IN (SELECT package_name FROM package_vulnerabilities)").fetchone()[0]
+        agent_count = db.execute("SELECT COUNT(DISTINCT package_name) FROM environment_packages WHERE package_name IN (SELECT package_name FROM agent_dependencies WHERE category='package')").fetchone()[0]
+
+        self._send_json({
+            "stats": {"total": total, "vulnerable": vuln_count, "agent_installed": agent_count, "clean": total - vuln_count},
+            "packages": [dict(r) for r in rows],
         })
 
     def _api_supply_chain_scan(self, params):

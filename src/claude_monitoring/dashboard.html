@@ -461,6 +461,7 @@ body { background:var(--bg); color:var(--text); font-family:-apple-system,BlinkM
           <button data-cat="tool_exec" onclick="scSetCategory(this)" style="padding:4px 10px;font-size:12px;border:none;cursor:pointer;color:var(--text2);background:transparent">Tool Executions</button>
           <button data-cat="build_tool" onclick="scSetCategory(this)" style="padding:4px 10px;font-size:12px;border:none;cursor:pointer;color:var(--text2);background:transparent">System Tools</button>
           <button data-cat="all" onclick="scSetCategory(this)" style="padding:4px 10px;font-size:12px;border:none;cursor:pointer;color:var(--text2);background:transparent">All</button>
+          <button data-cat="environment" onclick="scSetCategory(this)" style="padding:4px 10px;font-size:12px;border:none;cursor:pointer;color:var(--text2);background:transparent">Full Environment</button>
         </div>
         <select id="sc-manager" onchange="loadSupplyChain()" style="background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:4px 8px;color:var(--text);font-size:12px">
           <option value="">All Managers</option>
@@ -1243,6 +1244,10 @@ async function loadSupplyChain() {
     } catch(e) {}
     var mgr = _scManagerFilter || document.getElementById('sc-manager').value;
     var search = document.getElementById('sc-search').value;
+    // Environment view uses a different endpoint
+    if (_scCategory === 'environment') {
+      return loadEnvironment(search);
+    }
     var url = API + '/api/supply-chain?view=grouped&category=' + _scCategory;
     if (mgr) url += '&manager=' + mgr;
     if (search) url += '&search=' + encodeURIComponent(search);
@@ -1296,7 +1301,6 @@ async function loadSupplyChain() {
         + '</tr>'
         + '<tr id="sc-expand-' + idx + '" style="display:none"><td colspan="9" style="background:var(--surface2);padding:12px;font-size:12px">Loading...</td></tr>';
     }).join('');
-    // Store vuln data for expand
     window._scVulnData = {};
     d.installs.forEach(function(p, idx) { window._scVulnData[idx] = p.vulnerabilities || {}; });
   } catch(e) { console.error('Supply chain load error:', e); }
@@ -1326,6 +1330,45 @@ function renderCVEPanel(vulns) {
     if (latest) html += '<div style="font-size:12px;margin-bottom:8px">Remediation: <code style="background:var(--surface2);padding:2px 6px;border-radius:3px">pip install ' + esc(vulns.vulns[0].package_name || '') + '>=' + esc(latest.fix_version) + '</code></div>';
   }
   return html;
+}
+async function loadEnvironment(search) {
+  try {
+    var url = API + '/api/supply-chain/environment';
+    if (search) url += '?search=' + encodeURIComponent(search);
+    var r = await fetch(url);
+    var d = await r.json();
+    var s = d.stats || {};
+    document.getElementById('sc-stats').innerHTML =
+      '<span class="badge" style="background:var(--surface2);color:var(--text);border:1px solid var(--border)">Total: <strong>' + s.total + '</strong></span>'
+      + '<span class="badge" style="background:var(--surface2);color:var(--red);border:1px solid var(--border)">Vulnerable: <strong>' + s.vulnerable + '</strong></span>'
+      + '<span class="badge" style="background:var(--surface2);color:var(--blue);border:1px solid var(--border)">Agent-installed: <strong>' + s.agent_installed + '</strong></span>'
+      + '<span class="badge" style="background:var(--surface2);color:var(--green);border:1px solid var(--border)">Clean: <strong>' + s.clean + '</strong></span>';
+    var thead = document.getElementById('sc-thead');
+    var tbody = document.getElementById('sc-tbody');
+    thead.innerHTML = '<th>Package</th><th>Version</th><th>Manager</th><th>CVEs</th><th>Source</th><th>Risk</th>';
+    if (!d.packages || !d.packages.length) {
+      tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text2);padding:32px">No environment data. Click "Scan now" to gather installed packages.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = d.packages.map(function(p) {
+      var vulnHtml = p.vuln_count > 0
+        ? '<span class="badge" style="background:#5c1a1a;color:var(--red);font-size:10px">' + p.vuln_count + ' CVEs</span>'
+        : '<span style="color:var(--green);font-size:11px">0 CVEs</span>';
+      var sourceHtml = p.agent_installs > 0
+        ? '<span class="badge" style="background:#1a2332;color:var(--blue);font-size:10px">agent (' + p.agent_installs + 'x)</span>'
+        : '<span style="color:var(--text2);font-size:11px">pre-existing</span>';
+      var borderColor = p.vuln_count > 0 ? 'var(--red)' : p.agent_installs > 0 ? 'var(--blue)' : 'var(--border)';
+      var riskScore = p.vuln_count > 0 ? (p.max_cvss ? p.max_cvss.toFixed(1) : '?') : '-';
+      return '<tr style="border-left:3px solid ' + borderColor + '">'
+        + '<td><strong>' + esc(p.package_name) + '</strong></td>'
+        + '<td>' + esc(p.package_version || '-') + '</td>'
+        + '<td>' + esc(p.manager) + '</td>'
+        + '<td>' + vulnHtml + '</td>'
+        + '<td>' + sourceHtml + '</td>'
+        + '<td>' + (p.vuln_count > 0 ? scRiskBadge(Math.round(p.max_cvss||5)) : '<span style="color:var(--text2);font-size:11px">-</span>') + '</td>'
+        + '</tr>';
+    }).join('');
+  } catch(e) { console.error('Environment load error:', e); }
 }
 async function scExpandRow(pkg, mgr, idx) {
   var row = document.getElementById('sc-expand-' + idx);
