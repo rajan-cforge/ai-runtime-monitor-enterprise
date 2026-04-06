@@ -237,6 +237,30 @@ def init_db(db_path=None):
         sources TEXT
     )""")
 
+    # Threat intelligence IOCs
+    c.execute("""CREATE TABLE IF NOT EXISTS threat_iocs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        ioc_type TEXT NOT NULL,
+        ioc_value TEXT NOT NULL,
+        threat_type TEXT,
+        malware_family TEXT,
+        confidence INTEGER DEFAULT 0,
+        source TEXT,
+        first_seen TEXT,
+        fetch_timestamp TEXT NOT NULL,
+        UNIQUE(ioc_type, ioc_value, source)
+    )""")
+
+    # Registry metadata cache
+    c.execute("""CREATE TABLE IF NOT EXISTS package_registry_cache (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        package_name TEXT,
+        manager TEXT,
+        fetch_timestamp TEXT,
+        metadata TEXT,
+        UNIQUE(package_name, manager)
+    )""")
+
     # Add dedup_hash column to events if missing (migration for dedup fix)
     try:
         c.execute("ALTER TABLE events ADD COLUMN dedup_hash TEXT")

@@ -93,8 +93,9 @@ def query_osv(package_name, ecosystem, version=None):
         for vuln in data.get("vulns", []):
             cvss = _extract_cvss(vuln)
             _, db_sev = _extract_db_severity(vuln)
-            # Use db_specific severity if available, else map from CVSS
-            severity = db_sev if db_sev != "unknown" else _cvss_to_severity(cvss)
+            # MAL- prefix = malicious code, not just a vulnerability
+            is_malicious = vuln.get("id", "").startswith("MAL-")
+            severity = "malicious" if is_malicious else (db_sev if db_sev != "unknown" else _cvss_to_severity(cvss))
             fix_version = _extract_fix(vuln)
             results.append({
                 "package_name": package_name,
