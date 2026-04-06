@@ -1,0 +1,208 @@
+"""Threat intelligence — registry metadata, IOC feeds, malicious package detection."""
+
+import json
+import urllib.request
+from datetime import datetime, timezone
+
+# ── Registry metadata enrichment ─────────────────────────
+
+
+def fetch_pypi_metadata(package_name):
+    """Fetch package metadata from PyPI."""
+    try:
+        url = f"https://pypi.org/pypi/{package_name}/json"
+        resp = urllib.request.urlopen(url, timeout=10)
+        data = json.loads(resp.read())
+        info = data.get("info", {})
+        releases = data.get("releases", {})
+        # Find earliest release date
+        first_release = None
+        for ver_files in releases.values():
+            for f in ver_files:
+                upload = f.get("upload_time_iso_8601") or f.get("upload_time")
+                if upload and (not first_release or upload < first_release):
+                    first_release = upload
+        return {
+            "name": package_name,
+            "description": (info.get("summary") or "")[:200],
+            "author": info.get("author") or info.get("author_email") or "",
+            "license": info.get("license") or "",
+            "home_page": info.get("home_page") or info.get("project_url") or "",
+            "repository": info.get("project_urls", {}).get("Source") or info.get("project_urls", {}).get("Repository") or "",
+            "first_published": first_release,
+            "has_description": bool(info.get("summary")),
+            "has_repository": bool(info.get("project_urls", {}).get("Source") or info.get("project_urls", {}).get("Repository")),
+        }
+    except Exception:
+        return None
+
+
+def fetch_npm_metadata(package_name):
+    """Fetch package metadata from npm registry."""
+    try:
+        url = f"https://registry.npmjs.org/{package_name}"
+        resp = urllib.request.urlopen(url, timeout=10)
+        data = json.loads(resp.read())
+        time_data = data.get("time", {})
+        created = time_data.get("created", "")
+        latest = data.get("dist-tags", {}).get("latest", "")
+        latest_data = data.get("versions", {}).get(latest, {})
+        scripts = latest_data.get("scripts", {})
+        has_install_scripts = any(k in scripts for k in ("preinstall", "postinstall", "install"))
+        return {
+            "name": package_name,
+            "description": (data.get("description") or "")[:200],
+            "author": data.get("author", {}).get("name", "") if isinstance(data.get("author"), dict) else str(data.get("author", "")),
+            "license": data.get("license") or "",
+            "repository": data.get("repository", {}).get("url", "") if isinstance(data.get("repository"), dict) else "",
+            "first_published": created,
+            "has_description": bool(data.get("description")),
+            "has_repository": bool(data.get("repository")),
+            "has_install_scripts": has_install_scripts,
+        }
+    except Exception:
+        return None
+
+
+def fetch_registry_metadata(package_name, manager):
+    """Fetch metadata from the appropriate registry."""
+    if manager == "pip":
+        return fetch_pypi_metadata(package_name)
+    if manager in ("npm", "yarn", "pnpm"):
+        return fetch_npm_metadata(package_name)
+    return None
+
+
+def assess_registry_risk(package_name, manager, meta):
+    """Score registry risk signals. Returns (score, reasons)."""
+    if not meta:
+        return 0, []
+    score = 0
+    reasons = []
+
+    # Package age
+    if meta.get("first_published"):
+        try:
+            pub = datetime.fromisoformat(meta["first_published"].replace("Z", "+00:00"))
+            age_days = (datetime.now(timezone.utc) - pub).days
+            if age_days < 1:
+                score += 4
+                reasons.append("Published <24h ago (+4)")
+            elif age_days < 7:
+                score += 2
+                reasons.append(f"Published {age_days}d ago (+2)")
+        except Exception:
+            pass
+
+    # Missing metadata
+    if not meta.get("has_description") and not meta.get("has_repository"):
+        score += 2
+        reasons.append("No description, no repository (+2)")
+
+    # Install scripts (npm only)
+    if meta.get("has_install_scripts"):
+        score += 2
+        reasons.append("Has postinstall scripts (+2)")
+
+    return score, reasons
+
+
+# ── Malicious package detection via OSV MAL- prefix ──────
+
+KNOWN_MALICIOUS_PACKAGES = {
+    "strapi-plugin-cron", "strapi-plugin-config", "strapi-plugin-server",
+    "strapi-plugin-database", "strapi-plugin-core", "strapi-plugin-hooks",
+}
+
+
+def is_malicious_advisory(vuln_id):
+    """Check if an OSV advisory indicates malicious code (not just a vulnerability)."""
+    return vuln_id.startswith("MAL-")
+
+
+# ── ThreatFox IOC feed ───────────────────────────────────
+
+
+def fetch_threatfox_iocs():
+    """Fetch recent IOCs from ThreatFox (free, no API key)."""
+    try:
+        payload = json.dumps({"query": "get_iocs", "days": 7}).encode()
+        req = urllib.request.Request(
+            "https://threatfox-api.abuse.ch/api/v1/",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+        )
+        resp = urllib.request.urlopen(req, timeout=30)
+        data = json.loads(resp.read())
+        ips = {}
+        domains = {}
+        for ioc in (data.get("data") or []):
+            ioc_val = ioc.get("ioc", "")
+            ioc_type = ioc.get("ioc_type", "")
+            info = {
+                "threat_type": ioc.get("threat_type", ""),
+                "malware": ioc.get("malware_printable", ""),
+                "confidence": ioc.get("confidence_level", 0),
+            }
+            if ioc_type == "ip:port":
+                ip = ioc_val.split(":")[0]
+                ips[ip] = info
+            elif ioc_type == "domain":
+                domains[ioc_val] = info
+        return {"ips": ips, "domains": domains}
+    except Exception:
+        return {"ips": {}, "domains": {}}
+
+
+def store_iocs(db, ioc_data):
+    """Store IOCs in the database."""
+    ts = datetime.now(timezone.utc).isoformat()
+    for ip, info in ioc_data.get("ips", {}).items():
+        try:
+            db.execute(
+                """INSERT OR IGNORE INTO threat_iocs
+                   (ioc_type, ioc_value, threat_type, malware_family, confidence, source, fetch_timestamp)
+                   VALUES ('ip', ?, ?, ?, ?, 'threatfox', ?)""",
+                (ip, info.get("threat_type", ""), info.get("malware", ""), info.get("confidence", 0), ts),
+            )
+        except Exception:
+            pass
+    for domain, info in ioc_data.get("domains", {}).items():
+        try:
+            db.execute(
+                """INSERT OR IGNORE INTO threat_iocs
+                   (ioc_type, ioc_value, threat_type, malware_family, confidence, source, fetch_timestamp)
+                   VALUES ('domain', ?, ?, ?, ?, 'threatfox', ?)""",
+                (domain, info.get("threat_type", ""), info.get("malware", ""), info.get("confidence", 0), ts),
+            )
+        except Exception:
+            pass
+    db.commit()
+
+
+def check_connection_against_iocs(remote_host, db):
+    """Check if a remote host matches any known IOCs."""
+    if not remote_host:
+        return None
+    # Exact IP match
+    row = db.execute(
+        "SELECT * FROM threat_iocs WHERE ioc_type='ip' AND ioc_value=?", (remote_host,)
+    ).fetchone()
+    if row:
+        return dict(row)
+    # Exact domain match
+    row = db.execute(
+        "SELECT * FROM threat_iocs WHERE ioc_type='domain' AND ioc_value=?", (remote_host,)
+    ).fetchone()
+    if row:
+        return dict(row)
+    # Subdomain match
+    parts = remote_host.split(".")
+    for i in range(1, len(parts)):
+        parent = ".".join(parts[i:])
+        row = db.execute(
+            "SELECT * FROM threat_iocs WHERE ioc_type='domain' AND ioc_value=?", (parent,)
+        ).fetchone()
+        if row:
+            return dict(row)
+    return None
