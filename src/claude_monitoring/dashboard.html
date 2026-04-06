@@ -1257,6 +1257,12 @@ var _scRiskOnly = false;
 var _scUnpinnedOnly = false;
 function scSetCategory(btn) {
   _scCategory = btn.dataset.cat;
+  // Clear all filters on view switch
+  _scManagerFilter = '';
+  _scRiskOnly = false;
+  _scUnpinnedOnly = false;
+  document.getElementById('sc-manager').value = '';
+  document.getElementById('sc-search').value = '';
   document.querySelectorAll('#sc-category-toggle button').forEach(function(b) {
     b.classList.remove('active');
     b.style.background = 'transparent';
@@ -1266,6 +1272,9 @@ function scSetCategory(btn) {
   btn.style.background = 'var(--blue)';
   btn.style.color = 'white';
   loadSupplyChain();
+  // Scroll to top of table
+  var panel = document.getElementById('panel-supply-chain');
+  if (panel) panel.scrollTop = 0;
 }
 function scRiskBadge(score) {
   if (score >= 7) return '<span class="badge" style="background:#5c1a1a;color:var(--red);font-size:10px">CRITICAL (' + score + ')</span>';
@@ -1324,6 +1333,7 @@ async function loadSupplyChain() {
       + '<span class="badge" style="background:var(--surface2);color:var(--blue);border:1px solid var(--border)">Unique: <strong>' + (s.unique_packages||0) + '</strong></span>'
       + '<span class="badge" style="cursor:pointer;background:var(--surface2);color:var(--orange);border:1px solid var(--border)' + unpinnedActive + '" onclick="_scUnpinnedOnly=!_scUnpinnedOnly;loadSupplyChain()">Unpinned: <strong>' + (s.unpinned_count||0) + '</strong></span>'
       + '<span class="badge" style="cursor:pointer;background:var(--surface2);color:var(--red);border:1px solid var(--border)' + riskActive + '" onclick="_scRiskOnly=!_scRiskOnly;loadSupplyChain()">Risk Flagged: <strong>' + (s.risk_flagged_count||0) + '</strong></span>'
+      + ((_scManagerFilter || _scRiskOnly || _scUnpinnedOnly) ? '<span class="badge" style="cursor:pointer;background:var(--red);color:white;border:1px solid var(--red);margin-left:4px" onclick="_scManagerFilter=\'\';_scRiskOnly=false;_scUnpinnedOnly=false;document.getElementById(\'sc-manager\').value=\'\';loadSupplyChain()">&#x2715; Clear filters</span>' : '')
       + Object.entries(s.by_manager||{}).map(function(e) {
         var isActive = _scManagerFilter === e[0];
         var style = isActive ? 'cursor:pointer;background:var(--blue);color:white;border:1px solid var(--blue)' : 'cursor:pointer;background:var(--surface2);color:var(--text2);border:1px solid var(--border)';
@@ -1360,8 +1370,9 @@ async function loadSupplyChain() {
       } else {
         vulnHtml = v.scanned ? '<span style="color:var(--green);font-size:11px">0 CVEs</span>' : '<span style="color:var(--text2);font-size:11px">?</span>';
       }
+      var pkgUrl = p.package_manager === 'pip' ? 'https://pypi.org/project/'+encodeURIComponent(p.package_name)+'/' : p.package_manager === 'npm' ? 'https://www.npmjs.com/package/'+encodeURIComponent(p.package_name) : p.package_manager === 'brew' ? 'https://formulae.brew.sh/formula/'+encodeURIComponent(p.package_name) : '';
       return '<tr style="border-left:3px solid ' + borderColor + ';cursor:pointer" onclick="scExpandRow(\'' + esc(p.package_name) + '\',\'' + esc(p.package_manager) + '\',' + idx + ')">'
-        + '<td><strong>' + esc(p.package_name) + '</strong></td>'
+        + '<td><strong>' + esc(p.package_name) + '</strong>' + (pkgUrl ? ' <a href="'+pkgUrl+'" target="_blank" onclick="event.stopPropagation()" style="color:var(--text2);text-decoration:none;font-size:10px" title="View on registry">↗</a>' : '') + '</td>'
         + '<td>' + esc(ver) + '</td>'
         + '<td>' + esc(p.package_manager) + '</td>'
         + '<td>' + pinnedHtml + '</td>'
@@ -1399,7 +1410,10 @@ function renderCVEPanel(vulns) {
   // Remediation
   if (vulns.vulns.some(function(v){return v.fix_version})) {
     var latest = vulns.vulns.filter(function(v){return v.fix_version}).sort(function(a,b){return (b.cvss_score||0)-(a.cvss_score||0)})[0];
-    if (latest) html += '<div style="font-size:12px;margin-bottom:8px">Remediation: <code style="background:var(--surface2);padding:2px 6px;border-radius:3px">pip install ' + esc(vulns.vulns[0].package_name || '') + '>=' + esc(latest.fix_version) + '</code></div>';
+    if (latest) {
+      var cmd = 'pip install ' + (vulns.vulns[0].package_name || '') + '>=' + latest.fix_version;
+      html += '<div style="font-size:12px;margin-bottom:8px">Remediation: <code style="background:var(--surface2);padding:2px 6px;border-radius:3px">' + esc(cmd) + '</code> <button onclick="navigator.clipboard.writeText(\'' + esc(cmd) + '\');this.textContent=\'Copied!\';setTimeout(()=>this.textContent=\'Copy\',1500)" style="background:var(--surface2);border:1px solid var(--border);border-radius:3px;padding:1px 6px;color:var(--text2);font-size:10px;cursor:pointer">Copy</button></div>';
+    }
   }
   return html;
 }
@@ -1462,8 +1476,9 @@ async function loadEnvironment(search) {
         ? '<span class="badge" style="background:#1a2332;color:var(--blue);font-size:10px">agent (' + p.agent_installs + 'x)</span>'
         : '<span style="color:var(--text2);font-size:11px">pre-existing</span>';
       var borderColor = p.vuln_count > 0 ? 'var(--red)' : p.agent_installs > 0 ? 'var(--blue)' : 'var(--border)';
+      var envPkgUrl = p.manager === 'pip' ? 'https://pypi.org/project/'+encodeURIComponent(p.package_name)+'/' : p.manager === 'brew' ? 'https://formulae.brew.sh/formula/'+encodeURIComponent(p.package_name) : '';
       return '<tr style="border-left:3px solid ' + borderColor + ';cursor:pointer" onclick="envExpandRow(' + idx + ')">'
-        + '<td><strong>' + esc(p.package_name) + '</strong></td>'
+        + '<td><strong>' + esc(p.package_name) + '</strong>' + (envPkgUrl ? ' <a href="'+envPkgUrl+'" target="_blank" onclick="event.stopPropagation()" style="color:var(--text2);text-decoration:none;font-size:10px" title="View on registry">↗</a>' : '') + '</td>'
         + '<td>' + esc(p.package_version || '-') + '</td>'
         + '<td>' + esc(p.manager) + '</td>'
         + '<td>' + vulnHtml + '</td>'
@@ -1588,14 +1603,17 @@ function toggleIntelTooltip(el, idx) {
   document.querySelectorAll('.intel-tooltip').forEach(function(t){t.remove()});
   try {
     var s = JSON.parse(el.dataset.src);
-    var html = '<div class="intel-tooltip" style="position:absolute;top:100%;left:0;z-index:100;background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:10px;width:280px;font-size:12px;box-shadow:0 4px 12px rgba(0,0,0,0.3)">'
+    var srcUrls = {'OSV.dev':'https://osv.dev/list?ecosystem=PyPI','pip-audit':'https://pypi.org/project/pip-audit/','ThreatFox':'https://threatfox.abuse.ch/browse/','URLhaus':'https://urlhaus.abuse.ch/browse/','Registry metadata':'https://pypi.org/'};
+    var srcUrl = srcUrls[s.name] || '';
+    var html = '<div class="intel-tooltip" style="position:absolute;top:100%;left:0;z-index:100;background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:10px;width:300px;font-size:12px;box-shadow:0 4px 12px rgba(0,0,0,0.3)">'
       + '<div style="font-weight:600;margin-bottom:6px">' + esc(s.name) + '</div>'
       + '<div style="color:var(--text2);margin-bottom:4px">Status: ' + (s.active ? '<span style="color:var(--green)">Active</span>' : '<span style="color:var(--text2)">Not fetched</span>') + '</div>'
       + (s.description ? '<div style="color:var(--text2);margin-bottom:4px">' + esc(s.description) + '</div>' : '')
       + (s.iocs !== undefined ? '<div>IOCs loaded: <strong>' + s.iocs + '</strong></div>' : '')
       + (s.cached !== undefined ? '<div>Cached packages: <strong>' + s.cached + '</strong></div>' : '')
       + '<div style="margin-top:6px;display:flex;gap:6px">'
-      + ((!s.active && s.name.indexOf('ThreatFox') >= 0) ? '<button onclick="event.stopPropagation();triggerScan();this.closest(\'.intel-tooltip\').remove()" style="background:var(--blue);border:none;border-radius:4px;padding:3px 8px;color:white;font-size:11px;cursor:pointer">Fetch now</button>' : '')
+      + (srcUrl ? '<a href="' + srcUrl + '" target="_blank" style="background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:3px 8px;color:var(--cyan);font-size:11px;text-decoration:none;cursor:pointer">Open source ↗</a>' : '')
+      + ((!s.active) ? '<button onclick="event.stopPropagation();triggerScan();this.closest(\'.intel-tooltip\').remove()" style="background:var(--blue);border:none;border-radius:4px;padding:3px 8px;color:white;font-size:11px;cursor:pointer">Fetch now</button>' : '')
       + '</div></div>';
     el.insertAdjacentHTML('beforeend', html);
   } catch(e) {}
