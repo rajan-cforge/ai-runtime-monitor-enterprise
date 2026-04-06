@@ -2925,8 +2925,15 @@ class DashboardHandler(BaseHTTPRequestHandler):
         count_sql = f"SELECT COUNT(*) FROM api_calls WHERE {where}"  # nosec B608
         total = db.execute(count_sql, bind_vals).fetchone()[0]
 
+        sort_col = params.get("sort", ["timestamp"])[0]
+        sort_dir = params.get("dir", ["desc"])[0].upper()
+        allowed_sorts = {"timestamp", "model", "input_tokens", "output_tokens", "latency_ms", "http_status", "destination_service"}
+        if sort_col not in allowed_sorts:
+            sort_col = "timestamp"
+        if sort_dir not in ("ASC", "DESC"):
+            sort_dir = "DESC"
         query_sql = f"""SELECT * FROM api_calls WHERE {where}
-            ORDER BY timestamp DESC LIMIT ? OFFSET ?"""  # nosec B608
+            ORDER BY {sort_col} {sort_dir} LIMIT ? OFFSET ?"""  # nosec B608
         rows = db.execute(query_sql, bind_vals + [limit, offset]).fetchall()
 
         self._send_json(
