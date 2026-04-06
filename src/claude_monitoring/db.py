@@ -200,6 +200,17 @@ def init_db(db_path=None):
         except sqlite3.OperationalError:
             pass
 
+    # Environment package inventory
+    c.execute("""CREATE TABLE IF NOT EXISTS environment_packages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        scan_timestamp TEXT,
+        package_name TEXT NOT NULL,
+        package_version TEXT,
+        manager TEXT NOT NULL,
+        source TEXT DEFAULT 'environment',
+        UNIQUE(package_name, manager)
+    )""")
+
     # Vulnerability scanning
     c.execute("""CREATE TABLE IF NOT EXISTS package_vulnerabilities (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
