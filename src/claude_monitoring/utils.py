@@ -1,3 +1,5 @@
+# Copyright 2026 GoCloudForge, Inc. All rights reserved.
+# Proprietary and confidential.
 """Shared utility functions for AI Runtime Monitor.
 
 Used by both monitor.py and watch.py.

@@ -1,3 +1,5 @@
+# Copyright 2026 GoCloudForge, Inc. All rights reserved.
+# Proprietary and confidential.
 """Database layer for AI Runtime Monitor.
 
 Handles SQLite initialization, schema management, and thread-safe connections.

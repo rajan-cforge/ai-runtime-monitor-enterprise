@@ -1,3 +1,5 @@
+# Copyright 2026 GoCloudForge, Inc. All rights reserved.
+# Proprietary and confidential.
 """Supply chain monitoring — parse agent install commands and assess risk."""
 
 import hashlib

@@ -7,15 +7,16 @@ name = "ai-runtime-monitor"
 dynamic = ["version"]
 description = "CrowdStrike-style runtime monitor for AI coding agents"
 readme = "README.md"
-license = "MIT"
+license = "Proprietary"
 requires-python = ">=3.9"
-authors = [{ name = "Rajan Yadav" }]
-keywords = ["ai", "monitoring", "claude", "security", "observability"]
+authors = [{ name = "GoCloudForge, Inc." }]
+keywords = ["ai", "monitoring", "security", "observability", "supply-chain"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Programming Language :: Python :: 3",
     "Topic :: Security",
     "Topic :: System :: Monitoring",
+    "License :: Other/Proprietary License",
 ]
 dependencies = ["psutil>=5.9.0", "watchdog>=3.0"]
 

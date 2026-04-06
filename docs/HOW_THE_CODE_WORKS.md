@@ -1,6 +1,6 @@
 # How the Code Works — Developer Guide
 
-This document explains how each component of AI Runtime Monitor works at the code level. Generated with the aid of the codebase knowledge graph (1125 nodes, 3186 edges).
+This document explains how each component of AI Runtime Monitor works at the code level.
 
 ## Code Graph Summary
 

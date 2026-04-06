@@ -1,3 +1,5 @@
+# Copyright 2026 GoCloudForge, Inc. All rights reserved.
+# Proprietary and confidential.
 """Validators for sensitive data pattern matches.
 
 Each pattern type gets a validator that goes beyond regex to reduce false positives.

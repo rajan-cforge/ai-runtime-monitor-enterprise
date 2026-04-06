@@ -1,3 +1,5 @@
+# Copyright 2026 GoCloudForge, Inc. All rights reserved.
+# Proprietary and confidential.
 """Report generation for AI Runtime Monitor.
 
 Generates shareable summary reports in Markdown, HTML, and CSV formats.

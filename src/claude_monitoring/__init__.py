@@ -1,3 +1,5 @@
+# Copyright 2026 GoCloudForge, Inc. All rights reserved.
+# Proprietary and confidential.
 """AI Runtime Monitor — full visibility into AI coding agents."""
 
 try:

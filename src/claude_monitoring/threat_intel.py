@@ -1,3 +1,5 @@
+# Copyright 2026 GoCloudForge, Inc. All rights reserved.
+# Proprietary and confidential.
 """Threat intelligence — registry metadata, IOC feeds, malicious package detection."""
 
 import json
