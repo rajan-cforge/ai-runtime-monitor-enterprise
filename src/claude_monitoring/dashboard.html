@@ -31,6 +31,7 @@ body { background:var(--bg); color:var(--text); font-family:-apple-system,BlinkM
 .stat-card .value.alert { color:var(--red); }
 .stat-card .value.blue { color:var(--blue); }
 .stat-card .value.purple { color:var(--purple); }
+.stat-sub { font-size:11px; color:var(--text2); margin-top:2px; }
 
 .tabs { display:flex; gap:0; border-bottom:1px solid var(--border); padding:0 24px; background:var(--surface); }
 .tab { padding:10px 20px; cursor:pointer; color:var(--text2); border-bottom:2px solid transparent; font-size:13px; font-weight:500; transition:all 0.2s; }
@@ -106,6 +107,9 @@ body { background:var(--bg); color:var(--text); font-family:-apple-system,BlinkM
 .feed-item.tool_result .type { color:var(--cyan); }
 .feed-item.token_usage .type { color:var(--text2); }
 .feed-item.sensitive_data .type { color:var(--red); }
+.feed-item.sensitive_data { border-left:3px solid var(--red); background:rgba(248,81,73,0.05); }
+.feed-item.tool_use { border-left:3px solid var(--blue); }
+.feed-item.user_prompt { border-left:3px solid var(--blue); }
 .feed-item.process_start .type,.feed-item.process_stop .type { color:var(--purple); }
 .feed-item.connection .type { color:var(--cyan); }
 .feed-item.browser_ai .type { color:var(--purple); }
@@ -253,13 +257,13 @@ body { background:var(--bg); color:var(--text); font-family:-apple-system,BlinkM
 </div>
 
 <div class="stats" id="stat-cards">
-  <div class="stat-card" onclick="switchTab('explorer')"><div class="label">Sessions</div><div class="value blue" id="st-sessions">-</div></div>
-  <div class="stat-card" onclick="switchTab('system')"><div class="label">Active Agents</div><div class="value" id="st-agents">-</div></div>
+  <div class="stat-card" onclick="switchTab('explorer')"><div class="label">Sessions</div><div class="value blue" id="st-sessions">-</div><div class="stat-sub" id="st-sessions-sub"></div></div>
+  <div class="stat-card" onclick="switchTab('system')"><div class="label">Active Agents</div><div class="value" id="st-agents">-</div><div class="stat-sub" id="st-agents-sub"></div></div>
   <div class="stat-card" onclick="switchTab('analytics')"><div class="label">Input Tokens</div><div class="value" id="st-input">-</div></div>
   <div class="stat-card" onclick="switchTab('analytics')"><div class="label">Output Tokens</div><div class="value" id="st-output">-</div></div>
-  <div class="stat-card" onclick="switchTab('analytics')"><div class="label">Burn Rate</div><div class="value" id="st-burnrate" style="font-size:18px">-</div></div>
-  <div class="stat-card" onclick="document.getElementById('session-source').value='browser';switchTab('explorer');loadSessions()"><div class="label">Browser AI</div><div class="value purple" id="st-browser">-</div></div>
-  <div class="stat-card" onclick="switchTab('alerts')"><div class="label">Alerts</div><div class="value alert" id="st-alerts">-</div></div>
+  <div class="stat-card" onclick="switchTab('analytics')"><div class="label">Burn Rate</div><div class="value" id="st-burnrate" style="font-size:18px">-</div><div class="stat-sub" id="st-burnrate-sub"></div></div>
+  <div class="stat-card" onclick="document.getElementById('session-source').value='browser';switchTab('explorer');loadSessions()"><div class="label">Browser AI</div><div class="value purple" id="st-browser">-</div><div class="stat-sub" id="st-browser-sub"></div></div>
+  <div class="stat-card" onclick="switchTab('alerts')"><div class="label">Alerts</div><div class="value alert" id="st-alerts">-</div><div class="stat-sub" id="st-alerts-sub"></div></div>
 </div>
 
 <div class="tabs">
@@ -705,27 +709,40 @@ async function loadStats() {
     document.getElementById('st-input').textContent = fmtNum(d.total_input_tokens);
     document.getElementById('st-output').textContent = fmtNum(d.total_output_tokens);
     document.getElementById('st-alerts').textContent = d.total_alerts;
+    // Subtitles
+    try {
+      var critCount = 0;
+      try { var ar = await fetch(API+'/api/alerts?limit=1&severity=critical&confidence=all'); var ad = await ar.json(); critCount = ad.total||0; } catch(e){}
+      document.getElementById('st-alerts-sub').innerHTML = critCount > 0 ? '<span style="color:var(--red)">' + critCount + ' critical</span>' : 'none critical';
+    } catch(e) {}
 
     currentPlanInfo = d.plan_info || {};
 
-    // Browser AI
+    // Browser AI with service breakdown
     const browserEl = document.getElementById('st-browser');
     if (d.browser_today > 0) {
       browserEl.textContent = d.browser_today + ' visits';
     } else {
       browserEl.textContent = '0';
     }
+    var bd = d.browser_daily || [];
+    if (bd.length) {
+      var svcs = [...new Set(bd.map(function(b){return b.service}))].slice(0,3);
+      document.getElementById('st-browser-sub').textContent = svcs.join(' · ');
+    }
 
-    // Burn rate
+    // Burn rate with cost estimate
     const fc = d.forecast || {};
     const burnEl = document.getElementById('st-burnrate');
     if (fc.daily_burn_rate > 0) {
       burnEl.textContent = fmtNum(fc.daily_burn_rate) + '/d';
-      const trendIcon = fc.burn_trend === 'increasing' ? ' ^' : fc.burn_trend === 'decreasing' ? ' v' : '';
       burnEl.style.color = fc.burn_trend === 'increasing' ? 'var(--orange)' : fc.burn_trend === 'decreasing' ? 'var(--green)' : 'var(--text)';
       if (fc.days_remaining !== null && fc.days_remaining !== undefined) {
         burnEl.title = fc.days_remaining === 0 ? 'Quota exceeded' : fc.days_remaining + ' days remaining at current rate';
       }
+      // Cost estimate: blended Sonnet rate ($3/M in + $15/M out ≈ $9/M blended)
+      var dailyCost = (fc.daily_burn_rate * 0.000009).toFixed(2);
+      document.getElementById('st-burnrate-sub').textContent = '~$' + dailyCost + '/day est.';
     } else {
       burnEl.textContent = '-';
     }
@@ -783,7 +800,7 @@ async function loadSessions() {
         + esc(title) + '</div>'
         + (cwdShort ? '<div class="project-path">' + esc(cwdShort) + '</div>' : '')
         + '<div class="meta">'
-        + '<span>' + (isBrowser ? esc(s.service || '') : (s.model||'unknown').replace('claude-','')) + '</span>'
+        + '<span>' + (isBrowser ? esc(s.service || '') : esc(humanModelName(s.model||'unknown'))) + '</span>'
         + '<span style="color:var(--text2)">' + (isBrowser ? (s.conversation_id||'').substring(0,12) : s.session_id.substring(0,8)) + '</span>'
         + (proj ? '<span class="project-badge">'+esc(proj)+'</span>' : '')
         + agentBadge(s.agent_type)
@@ -915,6 +932,14 @@ const FEED_ICONS = {
   bash_progress:'&#x1f4bb;', system_event:'&#x2699;&#xfe0f;', browser_ai:'&#x1f310;'
 };
 var _feedSeen = {};
+function humanModelName(raw) {
+  if (!raw) return raw;
+  var r = raw.replace('claude-','');
+  if (r.includes('opus')) return 'Claude Opus ' + (r.match(/(\d+[\.\-]\d+)/)||['',''])[1].replace('-','.');
+  if (r.includes('sonnet')) return 'Claude Sonnet ' + (r.match(/(\d+[\.\-]\d+)/)||['',''])[1].replace('-','.');
+  if (r.includes('haiku')) return 'Claude Haiku ' + (r.match(/(\d+[\.\-]\d+)/)||['',''])[1].replace('-','.');
+  return raw;
+}
 function cleanFeedSummary(s) {
   if (!s) return '';
   return s.replace(/^\[?Start with this:[\s\S]{0,200}?\]?\s*/i, '')
@@ -1004,10 +1029,14 @@ function updateCharts(stats) {
   if (charts.tools) charts.tools.destroy();
   if (tc.length) {
     const colors = ['#58a6ff','#3fb950','#d29922','#f85149','#bc8cff','#39d2c0','#f0883e','#a5d6ff'];
+    // Top 8 + Other
+    var topTools = tc.slice(0, 8);
+    var otherCount = tc.slice(8).reduce(function(s,t){return s+(t.cnt||0)},0);
+    if (otherCount > 0) topTools.push({tool:'Other',cnt:otherCount});
     charts.tools = new Chart(document.getElementById('chart-tools'), {
       type:'doughnut', data:{
-        labels:tc.map(t=>t.tool||'?'), datasets:[{data:tc.map(t=>t.cnt),backgroundColor:tc.map((_,i)=>colors[i%colors.length])}]
-      }, options:{...chartOpts,plugins:{legend:{position:'right',labels:{color:'#e6edf3',font:{size:11}}}}}
+        labels:topTools.map(t=>t.tool||'?'), datasets:[{data:topTools.map(t=>t.cnt),backgroundColor:topTools.map((_,i)=>colors[i%colors.length])}]
+      }, options:{...chartOpts,plugins:{legend:{position:'right',labels:{color:'#e6edf3',font:{size:11},boxWidth:12}}}}
     });
   }
 
@@ -1017,7 +1046,7 @@ function updateCharts(stats) {
   if (mu.length) {
     charts.models = new Chart(document.getElementById('chart-models'), {
       type:'bar', data:{
-        labels:mu.map(m=>m.model?m.model.replace('claude-',''):'?'),
+        labels:mu.map(m=>humanModelName(m.model||'?')),
         datasets:[{label:'Sessions',data:mu.map(m=>m.sessions||0),backgroundColor:'rgba(88,166,255,0.7)'}]
       }, options:{...chartOpts,indexAxis:'y',scales:{x:{ticks:{color:'#8b949e'}},y:{ticks:{color:'#e6edf3',font:{size:11}}}}}
     });
@@ -1081,13 +1110,23 @@ function updateCharts(stats) {
 
 // System tab — grouped by application
 var _procAppMap = {'claude':'Claude Code','cursor':'Cursor','chatgpt':'ChatGPT','openclaw':'OpenClaw','codex':'Codex','copilot':'Copilot','windsurf':'Windsurf'};
-function classifyProcess(name) {
+function classifyProcess(name, cmdline) {
   var n = (name||'').toLowerCase();
-  // Version-string names like "2.1.81" are Cursor
-  if (/^\d+\.\d+\.\d+$/.test(n)) return 'Cursor';
-  if (n === 'disclaimer') return null;
+  var cmd = (cmdline||'').toLowerCase();
+  if (/^\d+\.\d+\.\d+$/.test(n)) return 'Claude Code';
+  if (n === 'disclaimer' || n === 'shipIt' || n === 'autoupdate') return null;
+  if (n === 'node' && cmd.indexOf('openclaw') >= 0) return 'OpenClaw';
   for (var k in _procAppMap) { if (n.indexOf(k) >= 0) return _procAppMap[k]; }
   return name || 'Unknown';
+}
+function toggleProcGroup(gid) {
+  document.querySelectorAll('.' + gid).forEach(function(r) {
+    r.style.display = r.style.display === 'none' ? 'table-row' : 'none';
+  });
+}
+function resolveConnName(name) {
+  if (/^\d+\.\d+\.\d+$/.test(name||'')) return 'Claude Code (v' + name + ')';
+  return name;
 }
 async function loadProcesses() {
   try {
@@ -1098,24 +1137,29 @@ async function loadProcesses() {
       tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--text2)">No AI processes detected</td></tr>';
       return;
     }
-    // Group by application
     var groups = {};
     d.processes.forEach(function(p) {
-      var app = classifyProcess(p.name);
+      var app = classifyProcess(p.name, p.cmdline);
       if (!app) return;
-      if (!groups[app]) groups[app] = {procs:[], totalCpu:0, totalMem:0};
-      groups[app].procs.push(p);
-      groups[app].totalCpu += (p.cpu_percent||0);
-      groups[app].totalMem += (p.memory_percent||0);
+      var key = app.toLowerCase();
+      if (!groups[key]) groups[key] = {name:app, procs:[], totalCpu:0, totalMem:0};
+      groups[key].procs.push(p);
+      groups[key].totalCpu += (p.cpu_percent||0);
+      groups[key].totalMem += (p.memory_percent||0);
     });
     var html = '';
-    Object.keys(groups).sort().forEach(function(app) {
-      var g = groups[app];
-      var gid = 'proc-group-' + app.replace(/\s/g,'_');
-      html += '<tr style="cursor:pointer;background:var(--surface2)" onclick="document.querySelectorAll(\'.' + gid + '\').forEach(function(r){r.style.display=r.style.display===\'none\'?\'table-row\':\'none\'})">'
-        + '<td colspan="3" style="font-weight:600"><span style="color:var(--purple)">' + esc(app) + '</span> <span style="color:var(--text2);font-weight:normal">(' + g.procs.length + ' process' + (g.procs.length > 1 ? 'es' : '') + ')</span></td>'
+    Object.keys(groups).sort().forEach(function(key) {
+      var g = groups[key];
+      var gid = 'pg_' + key.replace(/[^a-z0-9]/g,'_');
+      var maxUptime = g.procs.reduce(function(m,p){return p.uptime && p.uptime > m ? p.uptime : m},'');
+      var statuses = g.procs.reduce(function(m,p){m[p.status]=(m[p.status]||0)+1;return m},{});
+      var statusStr = Object.entries(statuses).map(function(e){return e[1]+' '+e[0]}).join(', ');
+      html += '<tr style="cursor:pointer;background:var(--surface2)" onclick="toggleProcGroup(\'' + gid + '\')">'
+        + '<td colspan="2" style="font-weight:600"><span style="color:var(--purple)">' + esc(g.name) + '</span> <span style="color:var(--text2);font-weight:normal">(' + g.procs.length + ')</span></td>'
+        + '<td style="color:var(--text2);font-size:11px">' + esc(statusStr) + '</td>'
         + '<td>' + g.totalCpu.toFixed(1) + '%</td><td>' + g.totalMem.toFixed(1) + '%</td>'
-        + '<td colspan="3" style="color:var(--text2);font-size:11px;text-align:right">&#x25BC;</td></tr>';
+        + '<td style="color:var(--text2);font-size:11px">' + esc(maxUptime ? 'longest: '+maxUptime : '') + '</td>'
+        + '<td colspan="2" style="text-align:right;font-size:11px;color:var(--text2)">&#x25BC;</td></tr>';
       g.procs.forEach(function(p) {
         html += '<tr class="' + gid + '" style="display:none">'
           + '<td>'+p.pid+'</td><td><a style="color:var(--purple);cursor:pointer;text-decoration:none" onclick="event.stopPropagation();loadProcessDetail('+p.pid+')">'+esc(p.name)+'</a></td>'
@@ -1127,7 +1171,7 @@ async function loadProcesses() {
       });
     });
     tbody.innerHTML = html;
-  } catch(e) {}
+  } catch(e) { console.error('loadProcesses error:', e); }
 }
 
 async function loadConnections() {
@@ -1136,7 +1180,7 @@ async function loadConnections() {
     const d = await r.json();
     const tbody = document.getElementById('conn-tbody');
     tbody.innerHTML = d.connections.slice(0,50).map(c =>
-      '<tr><td>'+fmtTime(c.timestamp)+'</td><td>'+esc(c.process_name)+'</td>'
+      '<tr><td>'+fmtTime(c.timestamp)+'</td><td>'+esc(resolveConnName(c.process_name))+'</td>'
       + '<td>'+esc(c.remote_host)+'</td><td>'+c.remote_port+'</td>'
       + '<td>'+esc(c.service)+'</td></tr>'
     ).join('') || '<tr><td colspan="5" style="text-align:center;color:var(--text2)">No connections recorded</td></tr>';
@@ -1148,7 +1192,8 @@ async function loadFiles() {
     const r = await fetch(API + '/api/files?limit=50');
     const d = await r.json();
     const tbody = document.getElementById('file-tbody');
-    tbody.innerHTML = d.files.map(f =>
+    var files = d.files.filter(function(f) { return !f.path || !/\.tmp\.\w+/.test(f.path); });
+    tbody.innerHTML = files.map(f =>
       '<tr><td>'+fmtTime(f.timestamp)+'</td><td>'+esc(f.operation)+'</td>'
       + '<td style="max-width:400px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+esc(f.path)+'">'+esc(f.path)+'</td>'
       + '<td>'+fmtNum(f.size||0)+'</td></tr>'
@@ -1684,16 +1729,27 @@ async function loadTimeline() {
     var sourceColors = {cli:'var(--blue)', browser:'var(--purple)', process:'var(--cyan)', network:'var(--orange)'};
     var sourceIcons = {cli:'&#x1f4bb;', browser:'&#x1f310;', process:'&#x2699;&#xfe0f;', network:'&#x1f517;'};
 
+    // Update count with actual filtered count
+    document.getElementById('timeline-count').textContent = d.timeline.length + ' events' + (source ? ' (' + source + ')' : '');
+    var lastDate = '';
     container.innerHTML = d.timeline.map(function(ev) {
       var color = sourceColors[ev.source] || 'var(--text2)';
       var icon = sourceIcons[ev.source] || '&#x2022;';
-      return '<div class="feed-item ' + ev.event_type + '" style="cursor:pointer"'
+      var isAlert = ev.event_type === 'sensitive_data';
+      var alertStyle = isAlert ? 'border-left:3px solid var(--red);background:rgba(248,81,73,0.05)' : '';
+      // Date separator
+      var dateSep = '';
+      try {
+        var evDate = new Date(ev.timestamp).toLocaleDateString([], {weekday:'long',month:'long',day:'numeric'});
+        if (evDate !== lastDate) { dateSep = '<div style="padding:8px 12px;color:var(--text2);font-size:11px;border-bottom:1px solid var(--border);font-weight:600">&mdash; ' + evDate + ' &mdash;</div>'; lastDate = evDate; }
+      } catch(e) {}
+      return dateSep + '<div class="feed-item ' + ev.event_type + '" style="cursor:pointer;' + alertStyle + '"'
         + ' onclick="timelineClick(\'' + esc(ev.source) + '\',\'' + esc(ev.session_id || '') + '\')">'
         + '<span class="time">' + fmtTime(ev.timestamp) + '</span>'
-        + '<span class="icon">' + icon + '</span>'
-        + '<span class="type" style="color:' + color + '">' + esc(ev.source.toUpperCase()) + '</span>'
+        + '<span class="icon">' + (isAlert ? '&#x26a0;&#xfe0f;' : icon) + '</span>'
+        + '<span class="type" style="color:' + (isAlert ? 'var(--red)' : color) + ';' + (isAlert ? 'font-weight:700' : '') + '">' + esc(isAlert ? 'ALERT' : ev.source.toUpperCase()) + '</span>'
         + '<span class="detail">'
-        + '<span style="color:' + color + ';font-weight:600">' + esc(ev.title) + '</span> '
+        + '<span style="color:' + color + ';font-weight:600">' + esc(resolveConnName(ev.title)) + '</span> '
         + esc(ev.summary || '')
         + '</span></div>';
     }).join('');
@@ -1729,7 +1785,7 @@ async function openDeepDive(sessionId, jumpToTurn) {
 
     document.getElementById('dd-title').textContent = ddSession.title || ddSession.session_id.substring(0,8);
     document.getElementById('dd-meta').textContent =
-      (ddSession.model||'') + ' \u00b7 ' + d.total_turns + ' turns \u00b7 ' + fmtNum(d.total_input + d.total_output) + ' tokens';
+      humanModelName(ddSession.model||'') + ' \u00b7 ' + d.total_turns + ' turns \u00b7 ' + fmtNum(d.total_input + d.total_output) + ' tokens';
 
     renderTurnRail();
     document.getElementById('deepdive-overlay').classList.add('open');
@@ -1859,11 +1915,12 @@ function renderContextPanel(turn) {
   var maxCtx = 200000;
   var pct = Math.min(100, (total / maxCtx) * 100);
 
+  var ctxTooltip = pct >= 100 ? 'Context window exceeded. The model may lose early context, increasing risk of instruction confusion or hallucination.' : pct > 80 ? 'Approaching context window limit. Consider starting a new session.' : 'Context window usage is healthy.';
   var html = '<h4>Context Window</h4>'
-    + '<div class="context-gauge"><div class="context-gauge-fill" style="width:'
+    + '<div class="context-gauge" title="' + ctxTooltip + '"><div class="context-gauge-fill" style="width:'
     + pct + '%;background:' + (pct > 80 ? 'var(--red)' : pct > 60 ? 'var(--orange)' : 'var(--green)')
     + '"></div></div>'
-    + '<div style="font-size:12px;color:var(--text2)">' + fmtNum(total) + ' / ' + fmtNum(maxCtx) + ' (' + pct.toFixed(1) + '%)</div>';
+    + '<div style="font-size:12px;color:' + (pct >= 100 ? 'var(--red)' : 'var(--text2)') + '">' + fmtNum(total) + ' / ' + fmtNum(maxCtx) + ' (' + pct.toFixed(1) + '%)' + (pct >= 100 ? ' — EXCEEDED' : '') + '</div>';
 
   html += '<h4>Turn Tokens</h4>'
     + '<div style="font-size:13px">&#x2191; ' + fmtNum(turn.token_delta.input) + ' in &middot; &#x2193; ' + fmtNum(turn.token_delta.output) + ' out</div>';
@@ -1921,7 +1978,16 @@ async function loadTraffic(reset) {
     const stats = await statsR.json();
     document.getElementById('traffic-total').textContent = fmtNum(stats.total_calls || 0);
     document.getElementById('traffic-latency').textContent = (stats.avg_latency || 0).toFixed(0) + 'ms';
-    document.getElementById('traffic-sensitive').textContent = stats.sensitive_calls || stats.total_sensitive || 0;
+    var sensCount = stats.sensitive_calls || stats.total_sensitive || 0;
+    var sensEl = document.getElementById('traffic-sensitive');
+    sensEl.textContent = sensCount;
+    sensEl.style.cursor = sensCount > 0 ? 'pointer' : 'default';
+    sensEl.title = sensCount > 0 ? 'Click to filter sensitive calls' : '';
+    sensEl.onclick = sensCount > 0 ? function() {
+      window._trafficSensitiveOnly = !window._trafficSensitiveOnly;
+      sensEl.style.background = window._trafficSensitiveOnly ? 'rgba(248,81,73,0.15)' : '';
+      renderTrafficTable();
+    } : null;
 
     // Proxy status banner
     const banner = document.getElementById('traffic-banner');
@@ -1957,7 +2023,11 @@ function renderTrafficTable() {
     return;
   }
 
-  tbody.innerHTML = trafficData.map(function(c, idx) {
+  var filtered = trafficData;
+  if (window._trafficSensitiveOnly) {
+    filtered = filtered.filter(function(c) { return (c.sensitive_pattern_count||0) > 0 || (c.sensitive_patterns && c.sensitive_patterns !== '[]' && c.sensitive_patterns !== ''); });
+  }
+  tbody.innerHTML = filtered.map(function(c, idx) {
     // Normalize field names (DB uses http_status/destination_service/latency_ms)
     var rawStatus = c.http_status || c.status || 0;
     var rawLatency = c.latency_ms || c.latency || 0;
@@ -1965,7 +2035,8 @@ function renderTrafficTable() {
     var status = isProxy ? String(rawStatus) : (rawStatus ? String(rawStatus) : '200');
     var service = c.destination_service || c.service || '-';
     var latencyStr = isProxy ? rawLatency.toFixed(0) + 'ms' : '\u2014';
-    var sourceLabel = isProxy ? 'proxy' : 'jsonl';
+    var sourceLabel = isProxy ? 'Live' : 'Log';
+    var sourceTip = isProxy ? 'Captured via HTTPS proxy' : 'Reconstructed from session logs';
     var tools = c.tool_calls;
     if (typeof tools === 'string') { try { tools = JSON.parse(tools); } catch(e) { tools = []; } }
     if (!Array.isArray(tools)) tools = [];
@@ -1979,13 +2050,13 @@ function renderTrafficTable() {
     const mainRow = '<tr class="expandable" onclick="toggleTrafficDetail(' + idx + ')">'
       + '<td>' + fmtTimestamp(c.timestamp) + '</td>'
       + '<td>' + esc(service) + '</td>'
-      + '<td>' + esc((c.model || '-').replace('claude-', '')) + '</td>'
+      + '<td>' + esc(humanModelName(c.model || '-')) + '</td>'
       + '<td>' + fmtNum(c.input_tokens || 0) + '</td>'
       + '<td>' + fmtNum(c.output_tokens || 0) + '</td>'
       + '<td>' + latencyStr + '</td>'
       + '<td><span style="color:' + statusColor + '">' + esc(status || '\u2014') + '</span>'
       + (hasSensitive ? ' <span style="color:var(--red)">&#x26a0;</span>' : '') + '</td>'
-      + '<td><span style="color:' + srcColor + ';font-size:11px">' + sourceLabel + '</span></td>'
+      + '<td><span style="color:' + srcColor + ';font-size:11px" title="' + sourceTip + '">' + sourceLabel + '</span></td>'
       + '</tr>';
 
     const toolsList = tools.map(function(t) { return '<span class="badge" style="background:var(--surface2);color:var(--orange);margin:2px">' + esc(typeof t === 'string' ? t : t.name || t) + '</span>'; }).join('') || '<span style="color:var(--text2)">None</span>';
@@ -2002,8 +2073,10 @@ function renderTrafficTable() {
       + '<div><div class="td-label">Assistant Response</div><div class="td-value" style="max-height:80px;overflow-y:auto;white-space:pre-wrap;word-break:break-word;font-size:12px;font-family:monospace">' + esc(c.assistant_msg_preview || '-') + '</div></div>'
       + '<div><div class="td-label">Tool Calls</div><div class="td-value">' + toolsList + '</div></div>'
       + '<div><div class="td-label">Sensitive Patterns</div><div class="td-value">' + sensitiveHtml + '</div></div>'
+      + '<div><div class="td-label">Cache Tokens</div><div class="td-value">' + fmtNum(c.cache_read_tokens||0) + ' read / ' + fmtNum(c.cache_write_tokens||0) + ' write</div></div>'
+      + '<div><div class="td-label">Est. Cost</div><div class="td-value">' + (c.estimated_cost_usd ? '$' + Number(c.estimated_cost_usd).toFixed(4) : '-') + '</div></div>'
+      + '<div><div class="td-label">Result</div><div class="td-value">' + (c.stop_reason === 'max_tokens' ? '<span style="color:var(--red);font-weight:600">Truncated (max_tokens)</span>' : c.stop_reason === 'tool_use' ? '<span style="color:var(--blue)">Tool call</span>' : c.stop_reason ? '<span style="color:var(--green)">' + esc(c.stop_reason) + '</span>' : '-') + '</div></div>'
       + '<div><div class="td-label">Session</div><div class="td-value">' + sessionLink + '</div></div>'
-      + '<div><div class="td-label">Full Timestamp</div><div class="td-value">' + fmtDate(c.timestamp) + '</div></div>'
       + '</div></td></tr>';
 
     return mainRow + detailRow;
