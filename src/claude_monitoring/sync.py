@@ -1,3 +1,5 @@
+# Copyright 2026 GoCloudForge, Inc. All rights reserved.
+# Proprietary and confidential.
 """Client sync agent for AI Runtime Monitor control plane integration.
 
 Background thread that periodically reads new data from the local monitor.db

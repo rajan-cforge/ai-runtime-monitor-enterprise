@@ -1,9 +1,6 @@
 # AI Runtime Monitor
 
-[![CI](https://github.com/rajan-cforge/ai-runtime-monitor/actions/workflows/ci.yml/badge.svg)](https://github.com/rajan-cforge/ai-runtime-monitor/actions/workflows/ci.yml)
-[![PyPI](https://img.shields.io/pypi/v/ai-runtime-monitor)](https://pypi.org/project/ai-runtime-monitor/)
-[![Python](https://img.shields.io/pypi/pyversions/ai-runtime-monitor)](https://pypi.org/project/ai-runtime-monitor/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+**GoCloudForge, Inc. — Proprietary and Confidential**
 
 Runtime monitor for AI coding agents. Full visibility into what Claude Code, ChatGPT, Copilot, Cursor, and other AI tools are doing on your machine — network calls, file changes, process activity, token spend, and sensitive data exposure.
 
@@ -18,7 +15,7 @@ python3 -m claude_monitoring.monitor --start
 **From source:**
 
 ```bash
-git clone https://github.com/rajan-cforge/ai-runtime-monitor.git
+git clone <private-repo-url>
 cd ai-runtime-monitor
 make install   # auto-detects pip3/pip
 make start     # launches dashboard on http://localhost:9081
@@ -125,24 +122,17 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the full API reference, database sche
 ## Development
 
 ```bash
-git clone https://github.com/rajan-cforge/ai-runtime-monitor.git
-cd ai-runtime-monitor
+git clone <private-repo-url>
+cd ai-runtime-monitor-enterprise
 make dev       # Install with dev deps
-make test      # Run tests
+make test      # Run 962 tests
 make lint      # Lint check
-make format    # Auto-format
 ```
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the full development guide.
-
-## Contributing
-
-Contributions welcome! Please read the [contributing guide](CONTRIBUTING.md) and our [code of conduct](CODE_OF_CONDUCT.md).
 
 ## Security
 
-To report a vulnerability, see [SECURITY.md](SECURITY.md).
+To report a vulnerability, contact security@gocloudforge.com.
 
 ## License
 
-[MIT](LICENSE)
+Proprietary. Copyright 2026 GoCloudForge, Inc. All rights reserved.

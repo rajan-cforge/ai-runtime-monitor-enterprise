@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright 2026 GoCloudForge, Inc. All rights reserved.
+# Proprietary and confidential.
 """
 claude_watch.py — AI Agent Traffic Observatory
 ================================================

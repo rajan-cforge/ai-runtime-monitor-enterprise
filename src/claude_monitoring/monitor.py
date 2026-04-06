@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright 2026 GoCloudForge, Inc. All rights reserved.
+# Proprietary and confidential.
 """
 ai_monitor.py — AI Runtime Agent: CrowdStrike-Style Full Visibility Monitor
 =============================================================================

@@ -1,3 +1,5 @@
+# Copyright 2026 GoCloudForge, Inc. All rights reserved.
+# Proprietary and confidential.
 """Shared constants for AI Runtime Monitor.
 
 Single source of truth for all constants used by both monitor.py and watch.py.

@@ -1,3 +1,5 @@
+# Copyright 2026 GoCloudForge, Inc. All rights reserved.
+# Proprietary and confidential.
 """Configuration management for AI Runtime Monitor.
 
 Loads settings from TOML config file with sensible defaults.

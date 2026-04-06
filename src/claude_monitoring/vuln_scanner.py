@@ -1,3 +1,5 @@
+# Copyright 2026 GoCloudForge, Inc. All rights reserved.
+# Proprietary and confidential.
 """Vulnerability scanner — pip-audit + OSV.dev integration."""
 
 import json

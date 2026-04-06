@@ -47,3 +47,10 @@ MANIFEST
 # Claude
 .claude/
 ai-runtime-monitor/
+
+# Environment files
+.env
+*.env.local
+
+# Node
+node_modules/
