@@ -279,8 +279,13 @@ def _parse_package_token(token, manager):
     return token, "latest", False
 
 
-def assess_risk(package):
-    """Return numeric risk score (0-10) for a package."""
+def assess_risk(package, active_cves=None):
+    """Return numeric risk score (0-10) for a package.
+
+    Args:
+        package: dict with name, pinned, manager keys
+        active_cves: optional dict with critical/high/medium counts of ACTIVE CVEs
+    """
     score = 0
     reasons = []
     name = (package.get("name") or "").lower()
@@ -304,6 +309,21 @@ def assess_risk(package):
     if any(kw in name for kw in ("trade", "finance", "stripe", "plaid")):
         score += 2
         reasons.append("financial API (+2)")
+
+    # CVE weight from active (version-affected) vulnerabilities
+    if active_cves:
+        crit = active_cves.get("critical", 0)
+        high = active_cves.get("high", 0)
+        med = active_cves.get("medium", 0)
+        if crit > 0:
+            score += 5
+            reasons.append(f"{crit} active critical CVE(s) (+5)")
+        if high > 0:
+            score += 3
+            reasons.append(f"{high} active high CVE(s) (+3)")
+        if med > 0:
+            score += 1
+            reasons.append(f"{med} active medium CVE(s) (+1)")
 
     return score, reasons
 
