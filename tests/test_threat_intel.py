@@ -188,3 +188,77 @@ class TestIOCMatching:
         store_iocs(db, iocs)  # Second store
         count = db.execute("SELECT COUNT(*) FROM threat_iocs WHERE ioc_value='1.2.3.4'").fetchone()[0]
         assert count == 1
+
+
+class TestURLhaus:
+    @patch("claude_monitoring.threat_intel.urllib.request.urlopen")
+    def test_fetch_urlhaus(self, mock_urlopen, db):
+        from claude_monitoring.threat_intel import fetch_urlhaus_iocs
+
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = json.dumps({
+            "urls": [
+                {"url": "http://evil.example.com/malware.exe", "threat": "malware_download",
+                 "tags": ["emotet"], "date_added": "2026-04-05"},
+            ],
+        }).encode()
+        mock_urlopen.return_value = mock_resp
+        count = fetch_urlhaus_iocs(db)
+        assert count == 1
+        row = db.execute("SELECT * FROM threat_iocs WHERE source='urlhaus'").fetchone()
+        assert row is not None
+        assert row["ioc_value"] == "evil.example.com"
+
+    @patch("claude_monitoring.threat_intel.urllib.request.urlopen")
+    def test_urlhaus_timeout(self, mock_urlopen, db):
+        from claude_monitoring.threat_intel import fetch_urlhaus_iocs
+
+        mock_urlopen.side_effect = TimeoutError()
+        assert fetch_urlhaus_iocs(db) == 0
+
+
+class TestCorrelation:
+    def test_correlation_found(self, db):
+        from claude_monitoring.threat_intel import correlate_install_to_connection
+
+        db.execute(
+            """INSERT INTO agent_dependencies
+               (timestamp, session_id, action, package_manager, package_name, command, dedup_hash)
+               VALUES ('2026-04-05T10:00:00Z', 'sess1', 'install', 'npm', 'evil-pkg', 'npm i evil-pkg', 'corr1')"""
+        )
+        db.commit()
+        result = correlate_install_to_connection(
+            "sess1", "2026-04-05T10:00:05Z", "185.1.2.3",
+            {"malware_family": "npm-malware"}, db,
+        )
+        assert result is not None
+        assert result["correlated"] is True
+        assert result["package"] == "evil-pkg"
+
+    def test_correlation_too_old(self, db):
+        from claude_monitoring.threat_intel import correlate_install_to_connection
+
+        db.execute(
+            """INSERT INTO agent_dependencies
+               (timestamp, session_id, action, package_manager, package_name, command, dedup_hash)
+               VALUES ('2026-04-05T10:00:00Z', 'sess1', 'install', 'npm', 'old-pkg', 'npm i old-pkg', 'corr2')"""
+        )
+        db.commit()
+        result = correlate_install_to_connection(
+            "sess1", "2026-04-05T10:05:00Z", "185.1.2.3", {}, db,
+        )
+        assert result is None
+
+    def test_correlation_wrong_session(self, db):
+        from claude_monitoring.threat_intel import correlate_install_to_connection
+
+        db.execute(
+            """INSERT INTO agent_dependencies
+               (timestamp, session_id, action, package_manager, package_name, command, dedup_hash)
+               VALUES ('2026-04-05T10:00:00Z', 'sess1', 'install', 'npm', 'pkg', 'npm i pkg', 'corr3')"""
+        )
+        db.commit()
+        result = correlate_install_to_connection(
+            "sess2", "2026-04-05T10:00:05Z", "185.1.2.3", {}, db,
+        )
+        assert result is None

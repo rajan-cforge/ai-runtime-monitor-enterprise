@@ -206,3 +206,82 @@ def check_connection_against_iocs(remote_host, db):
         if row:
             return dict(row)
     return None
+
+
+# ── URLhaus feed ─────────────────────────────────────────
+
+
+def fetch_urlhaus_iocs(db):
+    """Fetch active malicious URLs/domains from URLhaus."""
+    try:
+        payload = b"urlhaus_status=online"
+        req = urllib.request.Request(
+            "https://urlhaus-api.abuse.ch/v1/urls/recent/",
+            data=payload,
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        resp = urllib.request.urlopen(req, timeout=30)
+        data = json.loads(resp.read())
+        ts = datetime.now(timezone.utc).isoformat()
+        count = 0
+        for entry in (data.get("urls") or [])[:500]:
+            url_str = entry.get("url", "")
+            try:
+                from urllib.parse import urlparse
+
+                parsed = urlparse(url_str)
+                if parsed.hostname:
+                    db.execute(
+                        """INSERT OR IGNORE INTO threat_iocs
+                           (ioc_type, ioc_value, threat_type, malware_family,
+                            confidence, source, first_seen, fetch_timestamp)
+                           VALUES ('domain', ?, ?, ?, 75, 'urlhaus', ?, ?)""",
+                        (
+                            parsed.hostname,
+                            entry.get("threat", "malware"),
+                            (entry.get("tags") or ["unknown"])[0],
+                            entry.get("date_added", ""),
+                            ts,
+                        ),
+                    )
+                    count += 1
+            except Exception:
+                continue
+        db.commit()
+        return count
+    except Exception:
+        return 0
+
+
+# ── Install-to-connection correlation ────────────────────
+
+
+def correlate_install_to_connection(session_id, connection_ts, remote_host, ioc_info, db):
+    """Check if a package was installed right before this IOC-matched connection."""
+    if not session_id:
+        return None
+    try:
+        # Normalize timestamp for comparison (strip T/Z for SQLite datetime math)
+        norm_ts = connection_ts.replace("T", " ").replace("Z", "")
+        recent = db.execute(
+            """SELECT package_name, package_manager, timestamp, command
+               FROM agent_dependencies
+               WHERE session_id = ?
+               AND replace(replace(timestamp, 'T', ' '), 'Z', '')
+                   BETWEEN datetime(?, '-60 seconds') AND ?
+               ORDER BY timestamp DESC LIMIT 1""",
+            (session_id, norm_ts, norm_ts),
+        ).fetchone()
+        if recent:
+            return {
+                "correlated": True,
+                "package": recent["package_name"] if hasattr(recent, "keys") else recent[0],
+                "manager": recent["package_manager"] if hasattr(recent, "keys") else recent[1],
+                "install_time": recent["timestamp"] if hasattr(recent, "keys") else recent[2],
+                "command": recent["command"] if hasattr(recent, "keys") else recent[3],
+                "connection_host": remote_host,
+                "connection_time": connection_ts,
+            }
+    except Exception:
+        pass
+    return None

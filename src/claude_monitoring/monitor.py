@@ -1746,6 +1746,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             "/api/supply-chain/detail": self._api_supply_chain_detail,
             "/api/supply-chain/scan-status": self._api_supply_chain_scan_status,
             "/api/supply-chain/environment": self._api_supply_chain_environment,
+            "/api/supply-chain/intel-status": self._api_supply_chain_intel_status,
         }
 
         # Match path prefixes for dynamic routes
@@ -2923,9 +2924,6 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
         where = " AND ".join(conditions)
 
-        count_sql = f"SELECT COUNT(*) FROM api_calls WHERE {where}"  # nosec B608
-        total = db.execute(count_sql, bind_vals).fetchone()[0]
-
         sort_col = params.get("sort", ["timestamp"])[0]
         sort_dir = params.get("dir", ["desc"])[0].upper()
         allowed_sorts = {"timestamp", "model", "input_tokens", "output_tokens", "latency_ms", "http_status", "destination_service"}
@@ -2937,10 +2935,27 @@ class DashboardHandler(BaseHTTPRequestHandler):
             ORDER BY {sort_col} {sort_dir} LIMIT ? OFFSET ?"""  # nosec B608
         rows = db.execute(query_sql, bind_vals + [limit, offset]).fetchall()
 
+        # Dedup by request_id — keep row with non-null latency preferred
+        seen_rids = {}
+        unique_calls = []
+        for r in rows:
+            rd = dict(r)
+            rid = rd.get("request_id", "")
+            if rid and rid in seen_rids:
+                existing = seen_rids[rid]
+                if rd.get("latency_ms") and not existing.get("latency_ms"):
+                    idx = unique_calls.index(existing)
+                    unique_calls[idx] = rd
+                    seen_rids[rid] = rd
+                continue
+            if rid:
+                seen_rids[rid] = rd
+            unique_calls.append(rd)
+
         self._send_json(
             {
-                "calls": [dict(r) for r in rows],
-                "total": total,
+                "calls": unique_calls,
+                "total": len(unique_calls),
                 "limit": limit,
                 "offset": offset,
             }
@@ -3465,6 +3480,26 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self._send_json({
             "stats": {"total": total, "vulnerable": vuln_count, "agent_installed": agent_count, "clean": total - vuln_count},
             "packages": [dict(r) for r in rows],
+        })
+
+    def _api_supply_chain_intel_status(self, params):
+        """Threat intelligence source status."""
+        db = get_thread_db()
+        ioc_count = db.execute("SELECT COUNT(*) FROM threat_iocs").fetchone()[0]
+        threatfox_count = db.execute("SELECT COUNT(*) FROM threat_iocs WHERE source='threatfox'").fetchone()[0]
+        urlhaus_count = db.execute("SELECT COUNT(*) FROM threat_iocs WHERE source='urlhaus'").fetchone()[0]
+        last_scan = db.execute("SELECT timestamp FROM scan_history ORDER BY id DESC LIMIT 1").fetchone()
+        registry_cached = db.execute("SELECT COUNT(*) FROM package_registry_cache").fetchone()[0]
+        self._send_json({
+            "sources": [
+                {"name": "OSV.dev", "active": True, "description": "15K+ malicious packages"},
+                {"name": "pip-audit", "active": True, "description": "Local Python vuln scan"},
+                {"name": "ThreatFox", "active": threatfox_count > 0, "iocs": threatfox_count},
+                {"name": "URLhaus", "active": urlhaus_count > 0, "iocs": urlhaus_count},
+                {"name": "Registry metadata", "active": True, "cached": registry_cached},
+            ],
+            "total_iocs": ioc_count,
+            "last_scan": last_scan[0] if last_scan else None,
         })
 
     def _api_supply_chain_scan(self, params):

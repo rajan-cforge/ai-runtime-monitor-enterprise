@@ -453,6 +453,7 @@ body { background:var(--bg); color:var(--text); font-family:-apple-system,BlinkM
   <!-- Alerts -->
   <div class="panel" id="panel-supply-chain">
     <div class="system-section">
+      <div id="sc-intel-bar" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:8px;font-size:11px"></div>
       <div id="sc-scan-bar" style="display:flex;align-items:center;gap:8px;margin-bottom:10px;font-size:12px;color:var(--text2)"></div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px" id="sc-stats"></div>
       <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
@@ -706,6 +707,13 @@ async function loadStats() {
     const r = await fetch(API + '/api/stats');
     const d = await r.json();
     document.getElementById('st-sessions').textContent = d.total_sessions;
+    // Count active sessions (last 5 minutes)
+    try {
+      var sr = await fetch(API + '/api/sessions?sort=recent&limit=10');
+      var sd = await sr.json();
+      var activeCount = (sd.sessions||sd||[]).filter(function(s){return s.last_activity && (Date.now()-new Date(s.last_activity).getTime())<300000}).length;
+      document.getElementById('st-sessions-sub').innerHTML = activeCount > 0 ? '<span style="color:var(--green)">' + activeCount + ' active</span>' : '';
+    } catch(e) {}
     document.getElementById('st-agents').textContent = d.active_processes;
     document.getElementById('st-input').textContent = fmtNum(d.total_input_tokens);
     document.getElementById('st-output').textContent = fmtNum(d.total_output_tokens);
@@ -933,6 +941,12 @@ const FEED_ICONS = {
   bash_progress:'&#x1f4bb;', system_event:'&#x2699;&#xfe0f;', browser_ai:'&#x1f310;'
 };
 var _feedSeen = {};
+function resolveEC2(host) {
+  if (!host) return host;
+  var m = host.match(/ec2-[\d-]+\.(.+?)\.amazonaws\.com/);
+  if (m) return 'AWS (us-east-1) · ' + host.substring(0, 20) + '...';
+  return host;
+}
 function humanModelName(raw) {
   if (!raw) return raw;
   var r = raw.replace('claude-','');
@@ -1182,7 +1196,7 @@ async function loadConnections() {
     const tbody = document.getElementById('conn-tbody');
     tbody.innerHTML = d.connections.slice(0,50).map(c =>
       '<tr><td>'+fmtTime(c.timestamp)+'</td><td>'+esc(resolveConnName(c.process_name))+'</td>'
-      + '<td>'+esc(c.remote_host)+'</td><td>'+c.remote_port+'</td>'
+      + '<td>'+esc(resolveEC2(c.remote_host))+'</td><td>'+c.remote_port+'</td>'
       + '<td>'+esc(c.service)+'</td></tr>'
     ).join('') || '<tr><td colspan="5" style="text-align:center;color:var(--text2)">No connections recorded</td></tr>';
   } catch(e) {}
@@ -1227,6 +1241,19 @@ function scRiskBadge(score) {
 }
 async function loadSupplyChain() {
   try {
+    // Intel bar
+    try {
+      var ir = await fetch(API + '/api/supply-chain/intel-status');
+      var id = await ir.json();
+      var ibar = document.getElementById('sc-intel-bar');
+      ibar.innerHTML = '<span style="color:var(--text2)">Threat intel:</span> '
+        + (id.sources||[]).map(function(s) {
+          var dot = s.active ? '<span style="color:var(--green)">●</span>' : '<span style="color:var(--text2)">○</span>';
+          var extra = s.iocs ? ' (' + s.iocs + ')' : (s.cached ? ' (' + s.cached + ')' : (s.description ? ' — ' + s.description : ''));
+          return '<span style="padding:2px 6px;border-radius:10px;border:1px solid var(--border);font-size:10px;color:' + (s.active?'var(--text)':'var(--text2)') + '">' + dot + ' ' + esc(s.name) + extra + '</span>';
+        }).join('')
+        + (id.total_iocs ? ' <span style="color:var(--text2);font-size:10px">' + id.total_iocs + ' IOCs loaded</span>' : '');
+    } catch(e) {}
     // Scan status bar
     try {
       var scanR = await fetch(API + '/api/supply-chain/scan-status');
