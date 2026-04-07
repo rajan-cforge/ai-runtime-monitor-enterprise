@@ -5,6 +5,16 @@
 const MAX_TEXT_LENGTH = 5000;
 let lastEventTime = 0;
 const MIN_EVENT_INTERVAL_MS = 1000;
+let _lastContentHash = '';
+
+function simpleHash(str) {
+  let h = 0;
+  for (let i = 0; i < str.length; i++) {
+    h = ((h << 5) - h) + str.charCodeAt(i);
+    h |= 0;
+  }
+  return h.toString(36);
+}
 
 function truncateText(text) {
   if (!text) return '';
@@ -38,6 +48,10 @@ function getConversationId() {
 function sendCaptureEvent(type, text) {
   const now = Date.now();
   if (now - lastEventTime < MIN_EVENT_INTERVAL_MS) return;
+  // Content-based dedup: skip if same text captured recently
+  const hash = simpleHash((text || '').substring(0, 200));
+  if (hash === _lastContentHash) return;
+  _lastContentHash = hash;
   lastEventTime = now;
 
   const event = {
