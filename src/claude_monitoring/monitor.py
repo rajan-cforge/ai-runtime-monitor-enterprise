@@ -3414,7 +3414,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     rd["risk_flags"] = {}
                 # Enrich with vulnerability data
                 vuln_rows = db.execute(
-                    """SELECT vuln_id, severity, cvss_score, fix_version, description
+                    """SELECT vuln_id, severity, cvss_score, fix_version, description, package_name
                        FROM package_vulnerabilities WHERE package_name=? LIMIT 10""",
                     (rd["package_name"],),
                 ).fetchall()
