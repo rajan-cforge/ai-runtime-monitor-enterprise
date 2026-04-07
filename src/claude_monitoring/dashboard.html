@@ -1533,6 +1533,25 @@ async function renderRegistryPanel(name, manager) {
       + '<span style="color:var(--text2)">License</span><span>' + esc(m.license || '(none)') + '</span>'
       + (m.latest_version ? '<span style="color:var(--text2)">Latest version</span><span>' + esc(m.latest_version) + '</span>' : '')
       + '</div>';
+    // Maintainer intelligence (if available)
+    if (m.publisher || m.maintainer_count) {
+      var pubChanged = m.maintainer_changed;
+      var changeAge = m.maintainer_change_age_days;
+      var changeColor = pubChanged && changeAge <= 7 ? 'var(--red)' : pubChanged ? 'var(--orange)' : 'var(--green)';
+      html += '<div style="margin-bottom:12px"><strong>Maintainer intelligence</strong></div>'
+        + '<div style="display:grid;grid-template-columns:140px 1fr;gap:4px 16px;font-size:12px;margin-bottom:12px">'
+        + (m.publisher ? '<span style="color:var(--text2)">Publisher</span><span>' + esc(m.publisher) + '</span>' : '')
+        + (m.maintainer_count ? '<span style="color:var(--text2)">Maintainers</span><span style="color:' + (m.maintainer_count === 1 ? 'var(--orange)' : 'var(--text)') + '">' + m.maintainer_count + (m.maintainer_count === 1 ? ' (single maintainer)' : '') + '</span>' : '')
+        + '<span style="color:var(--text2)">Publisher changed</span><span style="color:' + changeColor + '">' + (pubChanged ? 'Yes — ' + esc(m.previous_publisher||'?') + ' → ' + esc(m.publisher||'?') + (changeAge != null ? ' (' + changeAge + 'd ago)' : '') : 'No') + '</span>'
+        + (m.version_count ? '<span style="color:var(--text2)">Total versions</span><span>' + m.version_count + '</span>' : '')
+        + '</div>';
+      if (pubChanged && changeAge != null && changeAge <= 7) {
+        html += '<div style="background:rgba(248,81,73,0.1);border:1px solid var(--red);border-radius:4px;padding:8px;font-size:12px;margin-bottom:12px;color:var(--red)">'
+          + 'DPRK and other groups actively target maintainers via phishing to gain publish access. '
+          + 'Verify this change is legitimate before trusting new versions.</div>';
+      }
+    }
+    return html;
   } catch(e) { return ''; }
 }
 async function renderVersionAwareCVEs(pkgName, installedVersion) {

@@ -263,6 +263,18 @@ def init_db(db_path=None):
         UNIQUE(package_name, manager)
     )""")
 
+    # Package maintainer history tracking
+    c.execute("""CREATE TABLE IF NOT EXISTS package_maintainer_history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        package_name TEXT NOT NULL,
+        manager TEXT NOT NULL,
+        scan_timestamp TEXT NOT NULL,
+        maintainer_data TEXT NOT NULL,
+        publisher TEXT,
+        version TEXT,
+        UNIQUE(package_name, manager, version)
+    )""")
+
     # Add dedup_hash column to events if missing (migration for dedup fix)
     try:
         c.execute("ALTER TABLE events ADD COLUMN dedup_hash TEXT")

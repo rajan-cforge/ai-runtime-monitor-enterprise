@@ -50,7 +50,7 @@ def fetch_pypi_metadata(package_name):
 
 
 def fetch_npm_metadata(package_name):
-    """Fetch package metadata from npm registry."""
+    """Fetch package metadata from npm registry with maintainer tracking."""
     try:
         url = f"https://registry.npmjs.org/{package_name}"
         resp = urllib.request.urlopen(url, timeout=10)
@@ -61,6 +61,28 @@ def fetch_npm_metadata(package_name):
         latest_data = data.get("versions", {}).get(latest, {})
         scripts = latest_data.get("scripts", {})
         has_install_scripts = any(k in scripts for k in ("preinstall", "postinstall", "install"))
+        maintainers = data.get("maintainers", [])
+        publisher = latest_data.get("_npmUser", {})
+        publisher_name = publisher.get("name", "") if isinstance(publisher, dict) else str(publisher)
+
+        # Detect publisher change between versions
+        versions_list = sorted(time_data.keys() - {"created", "modified"})
+        previous_version = versions_list[-2] if len(versions_list) >= 2 else None
+        previous_publisher = ""
+        maintainer_changed = False
+        maintainer_change_age_days = None
+        if previous_version:
+            prev_data = data.get("versions", {}).get(previous_version, {})
+            prev_user = prev_data.get("_npmUser", {})
+            previous_publisher = prev_user.get("name", "") if isinstance(prev_user, dict) else str(prev_user)
+            if publisher_name and previous_publisher and publisher_name.lower() != previous_publisher.lower():
+                maintainer_changed = True
+                try:
+                    latest_ts = datetime.fromisoformat(time_data.get(latest, "").replace("Z", "+00:00"))
+                    maintainer_change_age_days = (datetime.now(timezone.utc) - latest_ts).days
+                except Exception:
+                    maintainer_change_age_days = None
+
         return {
             "name": package_name,
             "description": (data.get("description") or "")[:200],
@@ -71,6 +93,14 @@ def fetch_npm_metadata(package_name):
             "has_description": bool(data.get("description")),
             "has_repository": bool(data.get("repository")),
             "has_install_scripts": has_install_scripts,
+            "maintainers": maintainers,
+            "maintainer_count": len(maintainers),
+            "publisher": publisher_name,
+            "previous_publisher": previous_publisher,
+            "maintainer_changed": maintainer_changed,
+            "maintainer_change_age_days": maintainer_change_age_days,
+            "latest_version": latest,
+            "version_count": len(data.get("versions", {})),
         }
     except Exception:
         return None
@@ -116,7 +146,110 @@ def assess_registry_risk(package_name, manager, meta):
         score += 2
         reasons.append("Has postinstall scripts (+2)")
 
+    # Maintainer change detection
+    if meta.get("maintainer_changed"):
+        change_age = meta.get("maintainer_change_age_days")
+        if change_age is not None and change_age <= 7:
+            score += 5
+            reasons.append(f"Maintainer changed {change_age}d ago — new publisher differs from previous (+5)")
+        elif change_age is not None and change_age <= 30:
+            score += 3
+            reasons.append(f"Maintainer changed {change_age}d ago (+3)")
+        elif change_age is not None and change_age <= 90:
+            score += 1
+            reasons.append(f"Maintainer changed {change_age}d ago (+1)")
+
+    # Single maintainer — bus factor / takeover risk
+    if meta.get("maintainer_count") == 1:
+        score += 1
+        reasons.append("Single maintainer — higher takeover risk (+1)")
+
+    # No source repository
+    if not meta.get("has_repository") and not meta.get("has_source_repo"):
+        if not any("repository" in r.lower() for r in reasons):  # avoid double-counting
+            score += 1
+            reasons.append("No source repository linked (+1)")
+
+    # Yanked versions (packages that were pulled)
+    if meta.get("yanked_versions"):
+        count = len(meta["yanked_versions"])
+        score += 2
+        reasons.append(f"{count} version(s) yanked (removed) — possible malicious version retracted (+2)")
+
     return score, reasons
+
+
+# ── Maintainer change detection across scans ─────────────
+
+
+def detect_maintainer_changes(name, manager, current_meta, db):
+    """Compare current maintainers against last known state."""
+    previous = db.execute(
+        """SELECT maintainer_data, publisher, version, scan_timestamp
+           FROM package_maintainer_history
+           WHERE package_name = ? AND manager = ?
+           ORDER BY scan_timestamp DESC LIMIT 1""",
+        (name, manager),
+    ).fetchone()
+
+    curr_maintainers = current_meta.get("maintainers", [])
+    curr_publisher = current_meta.get("publisher", "")
+    curr_version = current_meta.get("latest_version", "")
+
+    if previous:
+        try:
+            prev_maintainers = json.loads(previous["maintainer_data"] if hasattr(previous, "keys") else previous[0])
+        except (json.JSONDecodeError, TypeError):
+            prev_maintainers = []
+        prev_publisher = (previous["publisher"] if hasattr(previous, "keys") else previous[1]) or ""
+
+        changes = []
+        prev_names = {(m.get("name", "") if isinstance(m, dict) else str(m)).lower() for m in prev_maintainers}
+        curr_names = {(m.get("name", "") if isinstance(m, dict) else str(m)).lower() for m in curr_maintainers}
+        added = curr_names - prev_names
+        removed = prev_names - curr_names
+
+        if added:
+            changes.append(f"New maintainer(s) added: {', '.join(added)}")
+        if removed:
+            changes.append(f"Maintainer(s) removed: {', '.join(removed)}")
+        if prev_publisher and curr_publisher and prev_publisher.lower() != curr_publisher.lower():
+            changes.append(f"Publisher changed: {prev_publisher} → {curr_publisher}")
+
+        if changes:
+            # Store updated state
+            try:
+                db.execute(
+                    """INSERT OR REPLACE INTO package_maintainer_history
+                       (package_name, manager, scan_timestamp, maintainer_data, publisher, version)
+                       VALUES (?, ?, ?, ?, ?, ?)""",
+                    (name, manager, datetime.now(timezone.utc).isoformat(),
+                     json.dumps(curr_maintainers), curr_publisher, curr_version),
+                )
+                db.commit()
+            except Exception:
+                pass
+            return {
+                "changed": True,
+                "changes": changes,
+                "previous_scan": (previous["scan_timestamp"] if hasattr(previous, "keys") else previous[3]),
+                "previous_version": (previous["version"] if hasattr(previous, "keys") else previous[2]),
+            }
+
+    # Store current state for next comparison
+    try:
+        db.execute(
+            """INSERT OR REPLACE INTO package_maintainer_history
+               (package_name, manager, scan_timestamp, maintainer_data, publisher, version)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (name, manager, datetime.now(timezone.utc).isoformat(),
+             json.dumps(curr_maintainers), curr_publisher, curr_version),
+        )
+        db.commit()
+    except Exception:
+        pass
+
+    return {"changed": False}
 
 
 # ── Malicious package detection via OSV MAL- prefix ──────
