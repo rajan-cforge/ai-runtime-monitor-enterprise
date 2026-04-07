@@ -1750,6 +1750,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
             "/api/supply-chain/environment": self._api_supply_chain_environment,
             "/api/supply-chain/intel-status": self._api_supply_chain_intel_status,
             "/api/supply-chain/registry": self._api_supply_chain_registry,
+            "/api/supply-chain/sbom": self._api_supply_chain_sbom,
+            "/api/supply-chain/watchlist": self._api_supply_chain_watchlist,
         }
 
         # Match path prefixes for dynamic routes
@@ -3522,6 +3524,34 @@ class DashboardHandler(BaseHTTPRequestHandler):
         except Exception:
             pass
         self._send_json({"metadata": None})
+
+    def _api_supply_chain_sbom(self, params):
+        """Export SBOM in CycloneDX JSON format."""
+        from claude_monitoring.supply_chain import generate_sbom
+
+        db = get_thread_db()
+        sbom = generate_sbom(db)
+        body = json.dumps(sbom, indent=2, default=str).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Disposition", "attachment; filename=ai-runtime-sbom.json")
+        self.send_header("Content-Length", len(body))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _api_supply_chain_watchlist(self, params):
+        """Package watchlist with monitoring priorities."""
+        from claude_monitoring.supply_chain import populate_watchlist
+
+        db = get_thread_db()
+        counts = populate_watchlist(db)
+        rows = db.execute(
+            "SELECT * FROM package_watchlist ORDER BY CASE priority WHEN 'critical' THEN 0 WHEN 'high' THEN 1 ELSE 2 END, package_name LIMIT 100"
+        ).fetchall()
+        self._send_json({
+            "counts": counts,
+            "watchlist": [dict(r) for r in rows],
+        })
 
     def _api_supply_chain_intel_status(self, params):
         """Threat intelligence source status."""

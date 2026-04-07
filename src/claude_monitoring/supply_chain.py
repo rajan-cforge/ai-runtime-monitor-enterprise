@@ -486,3 +486,92 @@ def store_environment_packages(db, packages):
         except Exception:
             pass
     db.commit()
+
+
+def populate_watchlist(db):
+    """Auto-populate the package watchlist based on risk signals."""
+    from datetime import datetime, timezone
+
+    ts = datetime.now(timezone.utc).isoformat()
+    # Agent-installed packages → high priority, 6h
+    agent_pkgs = db.execute(
+        "SELECT DISTINCT package_name, package_manager FROM agent_dependencies WHERE category='package'"
+    ).fetchall()
+    for r in agent_pkgs:
+        name = r["package_name"] if hasattr(r, "keys") else r[0]
+        mgr = r["package_manager"] if hasattr(r, "keys") else r[1]
+        try:
+            db.execute(
+                """INSERT OR IGNORE INTO package_watchlist
+                   (package_name, manager, watch_reason, added_timestamp, priority, check_interval_hours)
+                   VALUES (?, ?, 'agent_installed', ?, 'high', 6)""",
+                (name, mgr, ts),
+            )
+        except Exception:
+            pass
+    # Packages with CVEs → high priority
+    vuln_pkgs = db.execute(
+        "SELECT DISTINCT package_name FROM package_vulnerabilities"
+    ).fetchall()
+    for r in vuln_pkgs:
+        name = r["package_name"] if hasattr(r, "keys") else r[0]
+        try:
+            db.execute(
+                """INSERT OR IGNORE INTO package_watchlist
+                   (package_name, manager, watch_reason, added_timestamp, priority, check_interval_hours)
+                   VALUES (?, 'pip', 'has_cves', ?, 'high', 6)""",
+                (name, ts),
+            )
+        except Exception:
+            pass
+    db.commit()
+    counts = {}
+    for r in db.execute("SELECT priority, COUNT(*) FROM package_watchlist GROUP BY priority").fetchall():
+        counts[r[0] if hasattr(r, "keys") else r["priority"]] = r[1] if hasattr(r, "keys") else r[1]
+    return counts
+
+
+def generate_sbom(db):
+    """Generate a CycloneDX-style SBOM JSON from agent dependencies + vulns."""
+    packages = db.execute(
+        """SELECT DISTINCT ad.package_name, ad.package_version, ad.package_manager,
+                  ad.agent_type, ad.risk_score, ad.category, ad.project
+           FROM agent_dependencies ad WHERE ad.category='package'
+           ORDER BY ad.package_name"""
+    ).fetchall()
+    components = []
+    for p in packages:
+        rd = dict(p) if hasattr(p, "keys") else {"package_name": p[0], "package_version": p[1], "package_manager": p[2]}
+        vulns = db.execute(
+            "SELECT vuln_id, severity, cvss_score, fix_version FROM package_vulnerabilities WHERE package_name=?",
+            (rd["package_name"],),
+        ).fetchall()
+        comp = {
+            "type": "library",
+            "name": rd["package_name"],
+            "version": rd.get("package_version") or "latest",
+            "purl": f"pkg:{rd.get('package_manager','pip')}/{rd['package_name']}@{rd.get('package_version','latest')}",
+            "properties": [
+                {"name": "ai-monitor:agent_installed", "value": "true"},
+                {"name": "ai-monitor:agent_type", "value": str(rd.get("agent_type", ""))},
+                {"name": "ai-monitor:capability_risk_score", "value": str(rd.get("risk_score", 0))},
+                {"name": "ai-monitor:project", "value": str(rd.get("project", ""))},
+            ],
+        }
+        if vulns:
+            comp["vulnerabilities"] = [
+                {"id": dict(v)["vuln_id"] if hasattr(v, "keys") else v[0],
+                 "severity": dict(v)["severity"] if hasattr(v, "keys") else v[1]}
+                for v in vulns
+            ]
+        components.append(comp)
+    return {
+        "bomFormat": "CycloneDX",
+        "specVersion": "1.5",
+        "version": 1,
+        "metadata": {
+            "timestamp": __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat(),
+            "tools": [{"vendor": "GoCloudForge", "name": "AI Runtime Monitor"}],
+        },
+        "components": components,
+    }
