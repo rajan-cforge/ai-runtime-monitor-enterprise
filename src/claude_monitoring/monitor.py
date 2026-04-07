@@ -1642,12 +1642,20 @@ class ChromeHistoryWatcher:
                     conv_id = self._extract_conversation_id(url, service)
 
                     try:
-                        self.db.execute(
-                            """INSERT INTO browser_sessions
-                               (service, url, title, conversation_id, visit_time, duration_seconds)
-                               VALUES (?, ?, ?, ?, ?, ?)""",
-                            (service, url, title, conv_id, visit_iso, duration),
-                        )
+                        # Dedup: skip if same URL visited within 60 seconds
+                        existing = self.db.execute(
+                            """SELECT id FROM browser_sessions
+                               WHERE url = ? AND ABS(strftime('%s', visit_time) - strftime('%s', ?)) < 60
+                               LIMIT 1""",
+                            (url, visit_iso),
+                        ).fetchone()
+                        if not existing:
+                            self.db.execute(
+                                """INSERT INTO browser_sessions
+                                   (service, url, title, conversation_id, visit_time, duration_seconds)
+                                   VALUES (?, ?, ?, ?, ?, ?)""",
+                                (service, url, title, conv_id, visit_iso, duration),
+                            )
                     except Exception:
                         pass
 
@@ -1884,6 +1892,18 @@ class DashboardHandler(BaseHTTPRequestHandler):
             if not service or not ev_type:
                 continue
 
+            # Content-based dedup: skip if same text captured within 30 seconds
+            if text:
+                recent = db.execute(
+                    """SELECT id FROM browser_sessions
+                       WHERE conversation_id = ? AND event_type = ? AND content_text = ?
+                       AND ABS(strftime('%s', visit_time) - strftime('%s', ?)) < 30
+                       LIMIT 1""",
+                    (conv_id, ev_type, text[:5000], timestamp),
+                ).fetchone()
+                if recent:
+                    continue
+
             try:
                 db.execute(
                     """INSERT INTO browser_sessions
@@ -2007,7 +2027,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                           MIN(visit_time) as start_time,
                           MAX(visit_time) as last_activity,
                           COUNT(*) as total_turns,
-                          COALESCE(SUM(duration_seconds), 0) as total_duration,
+                          COALESCE((strftime('%s', MAX(visit_time)) - strftime('%s', MIN(visit_time))), 0) as total_duration,
                           (SELECT b2.title FROM browser_sessions b2
                            WHERE b2.conversation_id = browser_sessions.conversation_id
                              AND b2.title IS NOT NULL AND b2.title != ''
@@ -2970,11 +2990,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
         """Aggregated traffic statistics."""
         db = get_thread_db()
         row = db.execute(
-            """SELECT COUNT(*) as total_calls,
+            """SELECT COUNT(DISTINCT COALESCE(request_id, id)) as total_calls,
                       COALESCE(SUM(input_tokens), 0) as total_input_tokens,
                       COALESCE(SUM(output_tokens), 0) as total_output_tokens,
-                      COALESCE(AVG(latency_ms), 0) as avg_latency,
-                      COALESCE(SUM(sensitive_pattern_count), 0) as total_sensitive
+                      COALESCE(AVG(CASE WHEN latency_ms > 0 THEN latency_ms END), 0) as avg_latency,
+                      COALESCE(SUM(sensitive_pattern_count), 0) as total_sensitive,
+                      COALESCE(SUM(estimated_cost_usd), 0) as total_cost
                FROM api_calls"""
         ).fetchone()
 
@@ -2997,6 +3018,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 "total_output_tokens": row["total_output_tokens"],
                 "avg_latency": round(row["avg_latency"], 1),
                 "total_sensitive": row["total_sensitive"],
+                "total_cost": round(float(row["total_cost"] or 0), 2),
                 "by_service": [dict(r) for r in by_service],
                 "by_model": [dict(r) for r in by_model],
             }

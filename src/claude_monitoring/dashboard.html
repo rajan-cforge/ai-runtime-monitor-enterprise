@@ -356,8 +356,8 @@ body { background:var(--bg); color:var(--text); font-family:-apple-system,BlinkM
       </select>
     </div>
     <div class="stats" id="insights-stats" style="margin-bottom:16px">
-      <div class="stat-card"><div class="label">Sessions</div><div class="value blue" id="ins-sessions">-</div></div>
-      <div class="stat-card"><div class="label">Avg Turns</div><div class="value" id="ins-avg-turns">-</div></div>
+      <div class="stat-card" style="cursor:pointer" onclick="switchTab('explorer')"><div class="label">Sessions</div><div class="value blue" id="ins-sessions">-</div></div>
+      <div class="stat-card" style="cursor:pointer" onclick="switchTab('analytics')"><div class="label">Avg Turns</div><div class="value" id="ins-avg-turns">-</div></div>
       <div class="stat-card"><div class="label">Avg Tok/Turn</div><div class="value" id="ins-avg-tpt">-</div></div>
       <div class="stat-card"><div class="label">Projects</div><div class="value purple" id="ins-projects">-</div></div>
     </div>
@@ -412,6 +412,7 @@ body { background:var(--bg); color:var(--text); font-family:-apple-system,BlinkM
       <div class="traffic-card"><div class="tc-label">&#x1f310; Total API Calls</div><div class="tc-value" id="traffic-total">-</div></div>
       <div class="traffic-card"><div class="tc-label">&#x23f1; Avg Latency</div><div class="tc-value" id="traffic-latency">-</div></div>
       <div class="traffic-card"><div class="tc-label">&#x26a0; Sensitive Calls</div><div class="tc-value" id="traffic-sensitive" style="color:var(--red)">-</div></div>
+      <div class="traffic-card"><div class="tc-label">&#x1f4b0; Est. Total Cost</div><div class="tc-value" id="traffic-cost" style="color:var(--orange)">-</div></div>
     </div>
     <div id="traffic-banner"></div>
     <div style="overflow-x:auto">
@@ -728,8 +729,13 @@ async function loadStats() {
         var app = classifyProcess(p.name, p.cmdline);
         if (app) agentCounts[app] = (agentCounts[app]||0) + 1;
       });
-      var sub = Object.entries(agentCounts).map(function(e){return e[0]+': '+e[1]}).join(' · ');
-      document.getElementById('st-agents-sub').textContent = sub;
+      var sorted = Object.entries(agentCounts).sort(function(a,b){return b[1]-a[1]});
+      var top4 = sorted.slice(0,4).map(function(e){return e[0]+': '+e[1]}).join(' · ');
+      if (sorted.length > 4) top4 += ' +' + (sorted.length-4) + ' more';
+      document.getElementById('st-agents-sub').textContent = top4;
+      // Update count to only real agents
+      var realCount = sorted.reduce(function(s,e){return s+e[1]},0);
+      document.getElementById('st-agents').textContent = realCount;
     } catch(e) {}
     document.getElementById('st-input').textContent = fmtNum(d.total_input_tokens);
     document.getElementById('st-output').textContent = fmtNum(d.total_output_tokens);
@@ -1162,20 +1168,22 @@ function updateCharts(stats) {
 }
 
 // System tab — grouped by application
-var _procAppMap = {'claude':'Claude Code','cursor':'Cursor','chatgpt':'ChatGPT','openclaw':'OpenClaw','codex':'Codex','copilot':'Copilot','windsurf':'Windsurf'};
+var _procAppMap = {'claude':'Claude Code','cursor':'Cursor','chatgpt':'ChatGPT','openclaw':'OpenClaw','codex':'Codex','copilot':'Copilot','windsurf':'Windsurf','ollama':'Ollama'};
+var _procExpandedGroups = new Set();
 function classifyProcess(name, cmdline) {
   var n = (name||'').toLowerCase();
   var cmd = (cmdline||'').toLowerCase();
   if (/^\d+\.\d+\.\d+$/.test(n)) return 'Claude Code';
-  if (n === 'disclaimer' || n === 'shipIt' || n === 'autoupdate') return null;
+  if (n === 'disclaimer' || n === 'shipit' || n === 'autoupdate' || n === 'chrome_crashpad_handler' || n === 'chrome-native-host' || n === 'updater' || n === 'python') return null;
   if (n === 'node' && cmd.indexOf('openclaw') >= 0) return 'OpenClaw';
   for (var k in _procAppMap) { if (n.indexOf(k) >= 0) return _procAppMap[k]; }
-  return name || 'Unknown';
+  return null; // hide unrecognized processes
 }
 function toggleProcGroup(gid) {
-  document.querySelectorAll('.' + gid).forEach(function(r) {
-    r.style.display = r.style.display === 'none' ? 'table-row' : 'none';
-  });
+  var rows = document.querySelectorAll('.' + gid);
+  var isHidden = rows.length > 0 && rows[0].style.display === 'none';
+  rows.forEach(function(r) { r.style.display = isHidden ? 'table-row' : 'none'; });
+  if (isHidden) _procExpandedGroups.add(gid); else _procExpandedGroups.delete(gid);
 }
 function resolveConnName(name) {
   if (/^\d+\.\d+\.\d+$/.test(name||'')) return 'Claude Code (v' + name + ')';
@@ -1207,20 +1215,22 @@ async function loadProcesses() {
       var maxUptime = g.procs.reduce(function(m,p){return p.uptime && p.uptime > m ? p.uptime : m},'');
       var statuses = g.procs.reduce(function(m,p){m[p.status]=(m[p.status]||0)+1;return m},{});
       var statusStr = Object.entries(statuses).map(function(e){return e[1]+' '+e[0]}).join(', ');
+      var isExpanded = _procExpandedGroups.has(gid);
       html += '<tr style="cursor:pointer;background:var(--surface2)" onclick="toggleProcGroup(\'' + gid + '\')">'
         + '<td colspan="2" style="font-weight:600"><span style="color:var(--purple)">' + esc(g.name) + '</span> <span style="color:var(--text2);font-weight:normal">(' + g.procs.length + ')</span></td>'
         + '<td style="color:var(--text2);font-size:11px">' + esc(statusStr) + '</td>'
         + '<td>' + g.totalCpu.toFixed(1) + '%</td><td>' + g.totalMem.toFixed(1) + '%</td>'
         + '<td style="color:var(--text2);font-size:11px">' + esc(maxUptime ? 'longest: '+maxUptime : '') + '</td>'
-        + '<td colspan="2" style="text-align:right;font-size:11px;color:var(--text2)">&#x25BC;</td></tr>';
+        + '<td colspan="2" style="text-align:right;font-size:11px;color:var(--text2)">' + (isExpanded ? '&#x25B2;' : '&#x25BC;') + '</td></tr>';
       g.procs.forEach(function(p) {
-        html += '<tr class="' + gid + '" style="display:none">'
-          + '<td>'+p.pid+'</td><td><a style="color:var(--purple);cursor:pointer;text-decoration:none" onclick="event.stopPropagation();loadProcessDetail('+p.pid+')">'+esc(p.name)+'</a></td>'
+        var statusColor = p.status === 'running' ? 'var(--green)' : 'var(--red)';
+        html += '<tr class="' + gid + '" style="display:' + (isExpanded ? 'table-row' : 'none') + '">'
+          + '<td>'+p.pid+'</td><td style="color:var(--purple)">'+esc(p.name)+'</td>'
           + '<td><span class="badge">'+(p.source_type||'CLI')+'</span></td>'
           + '<td>'+p.cpu_percent+'%</td><td>'+p.memory_percent+'%</td>'
           + '<td>'+esc(p.uptime)+'</td>'
-          + '<td><span class="badge running">'+esc(p.status)+'</span></td>'
-          + '<td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+esc(p.cmdline)+'">'+esc(p.cmdline)+'</td></tr>';
+          + '<td><span style="color:'+statusColor+';font-size:11px">'+esc(p.status)+'</span></td>'
+          + '<td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+esc(p.cmdline)+'">'+esc((p.cmdline||'').substring(0,60))+'</td></tr>';
       });
     });
     tbody.innerHTML = html;
@@ -2283,6 +2293,7 @@ async function loadTraffic(reset) {
     const stats = await statsR.json();
     document.getElementById('traffic-total').textContent = fmtNum(stats.total_calls || 0);
     document.getElementById('traffic-latency').textContent = (stats.avg_latency || 0).toFixed(0) + 'ms';
+    document.getElementById('traffic-cost').textContent = '$' + (stats.total_cost || 0).toFixed(2);
     var sensCount = stats.sensitive_calls || stats.total_sensitive || 0;
     var sensEl = document.getElementById('traffic-sensitive');
     sensEl.textContent = sensCount;
@@ -2374,7 +2385,7 @@ function renderTrafficTable() {
 
     const detailRow = '<tr class="traffic-row-detail" id="traffic-detail-' + idx + '">'
       + '<td colspan="8"><div class="traffic-detail-grid">'
-      + '<div><div class="td-label">Last User Message</div><div class="td-value" style="max-height:80px;overflow-y:auto;white-space:pre-wrap;word-break:break-word;font-size:12px;font-family:monospace">' + esc(c.last_user_msg_preview || '-') + '</div></div>'
+      + '<div><div class="td-label">Last User Message</div><div class="td-value" style="max-height:80px;overflow-y:auto;white-space:pre-wrap;word-break:break-word;font-size:12px;font-family:monospace">' + (c.last_user_msg_preview ? esc(c.last_user_msg_preview) : '<span style="color:var(--text2)">' + (isProxy ? '-' : 'View session for full transcript') + '</span>') + '</div></div>'
       + '<div><div class="td-label">Assistant Response</div><div class="td-value" style="max-height:80px;overflow-y:auto;white-space:pre-wrap;word-break:break-word;font-size:12px;font-family:monospace">' + esc(c.assistant_msg_preview || '-') + '</div></div>'
       + '<div><div class="td-label">Tool Calls</div><div class="td-value">' + toolsList + '</div></div>'
       + '<div><div class="td-label">Sensitive Patterns</div><div class="td-value">' + sensitiveHtml + '</div></div>'
@@ -2467,21 +2478,35 @@ async function loadInsights() {
       });
     }
 
-    // Projects table
+    // Projects table — filter zero-activity projects
     const tbody = document.getElementById('ins-projects-tbody');
-    tbody.innerHTML = (d.projects || []).map(p =>
-      '<tr><td>'+esc(projectName(p.cwd))+'</td><td>'+p.sessions+'</td><td>'+p.turns+'</td><td>'+fmtNum((p.input_tokens||0)+(p.output_tokens||0))+'</td></tr>'
-    ).join('');
+    var filteredProjects = (d.projects || []).filter(function(p) { return p.turns > 0 || (p.input_tokens||0) + (p.output_tokens||0) > 0; });
+    tbody.innerHTML = filteredProjects.map(function(p) {
+      var proj = projectName(p.cwd);
+      var tokens = (p.input_tokens||0) + (p.output_tokens||0);
+      var cost = (tokens * 0.000009).toFixed(2); // blended Sonnet rate
+      return '<tr style="cursor:pointer" onclick="document.getElementById(\'session-search\').value=\''+esc(proj)+'\';switchTab(\'explorer\');loadSessions()">'
+        + '<td><strong>'+esc(proj)+'</strong></td><td>'+p.sessions+'</td><td>'+p.turns+'</td><td>'+fmtNum(tokens)+'</td><td>$'+cost+'</td></tr>';
+    }).join('');
 
-    // Most-read files
+    // Most-read files — show project-relative paths
     const filesList = document.getElementById('ins-files-list');
     if (d.top_files && d.top_files.length) {
-      filesList.innerHTML = d.top_files.map((f,i) =>
-        '<div style="padding:4px 0;border-bottom:1px solid var(--border)">'
-        + '<span style="color:var(--text2)">'+(i+1)+'.</span> '
-        + '<span style="color:var(--blue);word-break:break-all">'+esc(f.file||'')+'</span>'
-        + ' <span style="color:var(--text2)">('+f.count+'x)</span></div>'
-      ).join('');
+      filesList.innerHTML = d.top_files.map(function(f,i) {
+        var path = f.file || '';
+        // Strip home dir prefix, show project-relative
+        path = path.replace(/^\/Users\/[^\/]+\//, '');
+        // Extract project name
+        var parts = path.split('/');
+        var proj = parts.length > 1 ? parts[0] + (parts.length > 2 ? '/' + parts[1] : '') : '';
+        var fileName = parts[parts.length-1];
+        var shortPath = proj ? proj + '/.../' + fileName : path;
+        if (shortPath.length > 60) shortPath = shortPath.substring(0,57) + '...';
+        return '<div style="padding:4px 0;border-bottom:1px solid var(--border)" title="'+esc(f.file)+'">'
+          + '<span style="color:var(--text2)">'+(i+1)+'.</span> '
+          + '<span style="color:var(--blue)">'+esc(shortPath)+'</span>'
+          + ' <span style="color:var(--text2)">('+f.count+'x)</span></div>';
+      }).join('');
     } else {
       filesList.innerHTML = '<div style="color:var(--text2);padding:12px">No file reads tracked yet</div>';
     }

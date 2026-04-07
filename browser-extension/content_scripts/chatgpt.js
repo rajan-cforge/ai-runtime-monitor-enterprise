@@ -1,10 +1,27 @@
 (function() {
+  // Multiple selector patterns — ChatGPT changes DOM frequently
+  const ASSISTANT_SELECTORS = [
+    '[data-message-author-role="assistant"] .markdown',
+    '[data-message-author-role="assistant"]',
+    'article[data-testid*="assistant"]',
+    '.agent-turn .markdown',
+  ];
+  const INPUT_SELECTORS = [
+    '#prompt-textarea',
+    'textarea[data-id="root"]',
+    'div[contenteditable="true"][id="prompt-textarea"]',
+    '#prompt-textarea p',
+  ];
   const SELECTORS = {
     userMessage: '[data-message-author-role="user"]',
-    assistantMessage: '[data-message-author-role="assistant"] .markdown',
-    inputArea: '#prompt-textarea, textarea[data-id="root"]',
+    assistantMessage: ASSISTANT_SELECTORS[0],
+    inputArea: INPUT_SELECTORS.join(', '),
     messageContainer: 'main'
   };
+  // Find the working assistant selector
+  for (const sel of ASSISTANT_SELECTORS) {
+    if (document.querySelector(sel)) { SELECTORS.assistantMessage = sel; break; }
+  }
 
   let observedMessages = new WeakSet();
 
