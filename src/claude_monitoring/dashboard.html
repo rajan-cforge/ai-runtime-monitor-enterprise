@@ -1387,33 +1387,40 @@ async function loadSupplyChain() {
         + '<tr id="sc-expand-' + idx + '" style="display:none"><td colspan="9" style="background:var(--surface2);padding:12px;font-size:12px">Loading...</td></tr>';
     }).join('');
     window._scVulnData = {};
-    d.installs.forEach(function(p, idx) { window._scVulnData[idx] = p.vulnerabilities || {}; });
+    d.installs.forEach(function(p, idx) { window._scVulnData[idx] = p; });
   } catch(e) { console.error('Supply chain load error:', e); }
 }
-function renderCVEPanel(vulns) {
+function renderCVEPanel(vulns, pkgName, installedVer) {
   if (!vulns || !vulns.vulns || !vulns.vulns.length) {
-    if (vulns && vulns.scanned) return '<div style="color:var(--green);margin-bottom:10px">No known vulnerabilities</div>';
+    if (vulns && vulns.scanned) return '<div style="color:var(--green);margin-bottom:10px" title="Scanned by pip-audit + OSV.dev. No known vulnerabilities. This does not guarantee safety.">Scanned — no known vulnerabilities</div>';
     return '<div style="color:var(--text2);margin-bottom:10px">Not yet scanned</div>';
   }
-  var sevColors = {critical:'var(--red)',high:'var(--orange)',medium:'var(--blue)',low:'var(--text2)',unknown:'var(--text2)'};
-  var html = '<div style="margin-bottom:12px"><strong style="color:var(--red)">Known vulnerabilities (' + vulns.vulns.length + ')</strong></div>';
-  html += '<table style="width:100%;font-size:12px;border:none;margin-bottom:12px"><thead><tr><th>ID</th><th>Severity</th><th>CVSS</th><th>Fix</th><th>Description</th></tr></thead><tbody>';
-  vulns.vulns.forEach(function(v) {
+  var sevColors = {critical:'var(--red)',high:'var(--orange)',medium:'var(--blue)',low:'var(--text2)',unknown:'var(--text2)',malicious:'var(--red)'};
+  var affected = 0, notAffected = 0, unknown = 0;
+  var rows = vulns.vulns.map(function(v) {
+    var cmp = (v.fix_version && installedVer && installedVer !== 'latest') ? semverCompare(installedVer, v.fix_version.replace(/^>=?/,'')) : null;
+    var statusHtml = '';
+    if (cmp === true) { affected++; statusHtml = '<span style="color:var(--red);font-size:11px">AFFECTED</span>'; }
+    else if (cmp === false) { notAffected++; statusHtml = '<span style="color:var(--green);font-size:11px">Patched</span>'; }
+    else { unknown++; statusHtml = '<span style="color:var(--text2);font-size:11px">?</span>'; }
     var color = sevColors[v.severity] || 'var(--text2)';
-    html += '<tr>'
+    return '<tr>'
       + '<td><a href="https://osv.dev/vulnerability/' + esc(v.vuln_id) + '" target="_blank" style="color:var(--cyan);font-family:monospace;font-size:11px">' + esc(v.vuln_id) + '</a></td>'
       + '<td><span style="color:' + color + ';font-weight:600;text-transform:uppercase">' + esc(v.severity||'unknown') + '</span></td>'
       + '<td>' + (v.cvss_score ? v.cvss_score.toFixed(1) : '-') + '</td>'
-      + '<td>' + (v.fix_version ? '<span style="color:var(--green)">' + esc(v.fix_version) + '</span>' : '<span style="color:var(--text2)">none</span>') + '</td>'
-      + '<td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(v.description||'') + '</td>'
+      + '<td>' + (v.fix_version ? '<span style="color:var(--green)">' + esc(v.fix_version) + '</span>' : '-') + '</td>'
+      + '<td>' + statusHtml + '</td>'
       + '</tr>';
   });
-  html += '</tbody></table>';
-  // Remediation
+  var summaryColor = affected > 0 ? 'var(--red)' : 'var(--green)';
+  var name = pkgName || (vulns.vulns[0] && vulns.vulns[0].package_name) || '';
+  var summary = vulns.vulns.length + ' CVEs. <strong style="color:' + summaryColor + '">' + affected + ' affect your version' + (installedVer && installedVer !== 'latest' ? ' (' + esc(installedVer) + ')' : '') + '</strong>';
+  var html = '<div style="margin-bottom:8px"><strong>Known vulnerabilities</strong> — ' + summary + '</div>';
+  html += '<table style="width:100%;font-size:12px;border:none;margin-bottom:8px"><thead><tr><th>ID</th><th>Severity</th><th>CVSS</th><th>Fix</th><th>Status</th></tr></thead><tbody>' + rows.join('') + '</tbody></table>';
   if (vulns.vulns.some(function(v){return v.fix_version})) {
     var latest = vulns.vulns.filter(function(v){return v.fix_version}).sort(function(a,b){return (b.cvss_score||0)-(a.cvss_score||0)})[0];
-    if (latest) {
-      var cmd = 'pip install ' + (vulns.vulns[0].package_name || '') + '>=' + latest.fix_version;
+    if (latest && name) {
+      var cmd = 'pip install ' + name + '>=' + latest.fix_version;
       html += '<div style="font-size:12px;margin-bottom:8px">Remediation: <code style="background:var(--surface2);padding:2px 6px;border-radius:3px">' + esc(cmd) + '</code> <button onclick="navigator.clipboard.writeText(\'' + esc(cmd) + '\');this.textContent=\'Copied!\';setTimeout(()=>this.textContent=\'Copy\',1500)" style="background:var(--surface2);border:1px solid var(--border);border-radius:3px;padding:1px 6px;color:var(--text2);font-size:10px;cursor:pointer">Copy</button></div>';
     }
   }
@@ -1518,7 +1525,7 @@ async function renderRegistryPanel(name, manager) {
     var descHtml = m.description ? '<span style="color:var(--text)">' + esc(m.description.substring(0,100)) + '</span>' : '<span style="color:var(--red)">None</span>';
     return '<div style="margin-bottom:12px"><strong>Registry intelligence (' + esc(regLabel) + ')</strong></div>'
       + '<div style="display:grid;grid-template-columns:120px 1fr;gap:4px 16px;font-size:12px;margin-bottom:12px">'
-      + '<span style="color:var(--text2)">Published</span><span>' + fmtAge(m.first_published) + '</span>'
+      + '<span style="color:var(--text2)">First published</span><span>' + fmtAge(m.first_published) + '</span>'
       + '<span style="color:var(--text2)">Author</span><span>' + esc(m.author || '(none)') + '</span>'
       + '<span style="color:var(--text2)">Description</span><span>' + descHtml + '</span>'
       + '<span style="color:var(--text2)">Repository</span><span>' + repoLink + '</span>'
@@ -1573,9 +1580,11 @@ async function scExpandRow(pkg, mgr, idx) {
   if (row.style.display !== 'none') { row.style.display = 'none'; return; }
   row.style.display = 'table-row';
   try {
-    // Render CVE panel from stored data
-    var vulnData = (window._scVulnData || {})[idx] || {};
-    var cveHtml = renderCVEPanel(vulnData);
+    // Render CVE panel from stored grouped row data
+    var storedRow = (window._scVulnData || {})[idx] || {};
+    var vulnData = storedRow.vulnerabilities || {};
+    var instVer = storedRow.latest_version || storedRow.package_version || '';
+    var cveHtml = renderCVEPanel(vulnData, pkg, instVer);
 
     var regHtml = await renderRegistryPanel(pkg, mgr);
 
