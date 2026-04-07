@@ -151,14 +151,11 @@ def init_db(db_path=None):
         pass  # Column already exists
 
     # Add content capture columns for browser extension (migration)
-    try:
-        c.execute("ALTER TABLE browser_sessions ADD COLUMN event_type TEXT")
-    except sqlite3.OperationalError:
-        pass
-    try:
-        c.execute("ALTER TABLE browser_sessions ADD COLUMN content_text TEXT")
-    except sqlite3.OperationalError:
-        pass
+    for col in ["event_type TEXT", "content_text TEXT", "content_hash TEXT"]:
+        try:
+            c.execute(f"ALTER TABLE browser_sessions ADD COLUMN {col}")  # nosec B608
+        except sqlite3.OperationalError:
+            pass
 
     c.execute("""CREATE TABLE IF NOT EXISTS alert_dismissals (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
