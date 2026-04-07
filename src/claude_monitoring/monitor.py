@@ -1892,14 +1892,16 @@ class DashboardHandler(BaseHTTPRequestHandler):
             if not service or not ev_type:
                 continue
 
-            # Content-based dedup: skip if same text captured within 30 seconds
+            # Content-based dedup: hash first 200 chars, 1-hour window
+            content_hash = None
             if text:
+                content_hash = hashlib.sha256(text[:200].encode()).hexdigest()[:16]
                 recent = db.execute(
                     """SELECT id FROM browser_sessions
-                       WHERE conversation_id = ? AND event_type = ? AND content_text = ?
-                       AND ABS(strftime('%s', visit_time) - strftime('%s', ?)) < 30
+                       WHERE conversation_id = ? AND event_type = ? AND content_hash = ?
+                       AND visit_time > datetime(?, '-1 hour')
                        LIMIT 1""",
-                    (conv_id, ev_type, text[:5000], timestamp),
+                    (conv_id, ev_type, content_hash, timestamp),
                 ).fetchone()
                 if recent:
                     continue
@@ -1908,9 +1910,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 db.execute(
                     """INSERT INTO browser_sessions
                        (service, url, title, conversation_id,
-                        visit_time, duration_seconds, source, event_type, content_text)
-                       VALUES (?, ?, ?, ?, ?, 0, 'extension', ?, ?)""",
-                    (service, url, title, conv_id, timestamp, ev_type, text[:5000] if text else None),
+                        visit_time, duration_seconds, source, event_type, content_text, content_hash)
+                       VALUES (?, ?, ?, ?, ?, 0, 'extension', ?, ?, ?)""",
+                    (service, url, title, conv_id, timestamp, ev_type, text[:5000] if text else None, content_hash),
                 )
                 stored += 1
             except Exception:

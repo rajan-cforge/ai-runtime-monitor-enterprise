@@ -1,11 +1,16 @@
+// Copyright 2026 GoCloudForge, Inc. All rights reserved.
+// Proprietary and confidential.
 // AI Runtime Monitor — Content Script (shared)
 // SECURITY: Read-only DOM observation. No page modification. No external network calls.
-// All captured text truncated to 5000 chars. Rate limited to 1 event/sec.
 
 const MAX_TEXT_LENGTH = 5000;
 let lastEventTime = 0;
-const MIN_EVENT_INTERVAL_MS = 1000;
-let _lastContentHash = '';
+const MIN_EVENT_INTERVAL_MS = 2000; // 2 seconds between events
+
+// Content dedup: track captured hashes per conversation+type
+// Survives within page session, resets on full page reload (which is correct)
+const _capturedHashes = new Map(); // key: "convId_type_hash" → timestamp
+const DEDUP_WINDOW_MS = 3600000; // 1 hour
 
 function simpleHash(str) {
   let h = 0;
@@ -48,19 +53,33 @@ function getConversationId() {
 function sendCaptureEvent(type, text) {
   const now = Date.now();
   if (now - lastEventTime < MIN_EVENT_INTERVAL_MS) return;
-  // Content-based dedup: skip if same text captured recently
-  const hash = simpleHash((text || '').substring(0, 200));
-  if (hash === _lastContentHash) return;
-  _lastContentHash = hash;
+  if (!text || text.length < 10) return;
+
+  // Content-based dedup: hash first 200 chars, keyed by conversation+type
+  const convId = getConversationId() || 'unknown';
+  const hash = simpleHash(text.substring(0, 200));
+  const dedupKey = convId + '_' + type + '_' + hash;
+
+  const lastSeen = _capturedHashes.get(dedupKey);
+  if (lastSeen && (now - lastSeen) < DEDUP_WINDOW_MS) return; // Same content within 1 hour
+  _capturedHashes.set(dedupKey, now);
+
+  // Cleanup old entries periodically
+  if (_capturedHashes.size > 200) {
+    for (const [k, v] of _capturedHashes) {
+      if (now - v > DEDUP_WINDOW_MS) _capturedHashes.delete(k);
+    }
+  }
+
   lastEventTime = now;
 
   const event = {
     service: getService(),
     url: window.location.href,
     timestamp: new Date().toISOString(),
-    type: type,  // 'user_prompt' or 'assistant_response'
+    type: type,
     text: truncateText(text),
-    conversation_id: getConversationId(),
+    conversation_id: convId !== 'unknown' ? convId : null,
     title: document.title
   };
 
