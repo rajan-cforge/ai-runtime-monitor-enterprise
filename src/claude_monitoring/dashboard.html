@@ -454,7 +454,11 @@ body { background:var(--bg); color:var(--text); font-family:-apple-system,BlinkM
   <div class="panel" id="panel-supply-chain">
     <div class="system-section">
       <div id="sc-intel-bar" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:8px;font-size:11px"></div>
-      <div id="sc-scan-bar" style="display:flex;align-items:center;gap:8px;margin-bottom:10px;font-size:12px;color:var(--text2)"></div>
+      <div id="sc-scan-bar" style="display:flex;align-items:center;gap:8px;margin-bottom:6px;font-size:12px;color:var(--text2)"></div>
+      <div style="display:flex;gap:8px;margin-bottom:10px;font-size:11px;color:var(--text2)">
+        <span id="sc-watchlist-indicator"></span>
+        <a href="/api/supply-chain/sbom" target="_blank" style="color:var(--cyan);text-decoration:none;font-size:11px">Export SBOM ↗</a>
+      </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px" id="sc-stats"></div>
       <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
         <div style="display:flex;gap:2px;background:var(--surface2);border:1px solid var(--border);border-radius:4px;overflow:hidden" id="sc-category-toggle">
@@ -1284,6 +1288,14 @@ function scRiskBadge(score) {
 }
 async function loadSupplyChain() {
   try {
+    // Watchlist indicator
+    try {
+      var wr = await fetch(API + '/api/supply-chain/watchlist');
+      var wd = await wr.json();
+      var wc = wd.counts || {};
+      document.getElementById('sc-watchlist-indicator').textContent =
+        'Watching: ' + (wc.critical||0) + ' critical (hourly) · ' + (wc.high||0) + ' high (6h) · ' + (wc.normal||0) + ' normal (daily)';
+    } catch(e) {}
     // Intel bar
     try {
       var ir = await fetch(API + '/api/supply-chain/intel-status');

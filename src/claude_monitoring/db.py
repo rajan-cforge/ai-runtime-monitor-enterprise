@@ -263,6 +263,19 @@ def init_db(db_path=None):
         UNIQUE(package_name, manager)
     )""")
 
+    # Package watchlist with prioritized scanning
+    c.execute("""CREATE TABLE IF NOT EXISTS package_watchlist (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        package_name TEXT NOT NULL,
+        manager TEXT NOT NULL,
+        watch_reason TEXT NOT NULL,
+        added_timestamp TEXT NOT NULL,
+        priority TEXT DEFAULT 'normal',
+        last_checked TEXT,
+        check_interval_hours INTEGER DEFAULT 24,
+        UNIQUE(package_name, manager)
+    )""")
+
     # Package maintainer history tracking
     c.execute("""CREATE TABLE IF NOT EXISTS package_maintainer_history (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
