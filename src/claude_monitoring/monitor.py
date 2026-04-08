@@ -1893,17 +1893,16 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 continue
 
             # Content-based dedup: hash first 200 chars
-            # Same content_hash in same conversation → 24h window (prevents cross-day re-capture)
-            # Different content in same conversation → 1h window (allows new messages)
+            # Same content_hash → 7-day window (prevents cross-day re-capture of same text)
+            # Falls back to text prefix match for rows with NULL content_hash
             content_hash = None
             if text:
                 content_hash = hashlib.sha256(text[:200].encode()).hexdigest()[:16]
-                # Check for identical content (same hash) within 24 hours
                 recent = db.execute(
                     """SELECT id FROM browser_sessions
                        WHERE conversation_id = ? AND event_type = ?
                        AND (content_hash = ? OR substr(content_text, 1, 200) = ?)
-                       AND visit_time > datetime(?, '-24 hours')
+                       AND visit_time > datetime(?, '-7 days')
                        LIMIT 1""",
                     (conv_id, ev_type, content_hash, text[:200], timestamp),
                 ).fetchone()
@@ -1919,6 +1918,13 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     (service, url, title, conv_id, timestamp, ev_type, text[:5000] if text else None, content_hash),
                 )
                 stored += 1
+                # Push to live feed
+                push_live_event({
+                    "timestamp": timestamp,
+                    "session_id": "browser_" + (conv_id or ""),
+                    "event_type": "browser_ai",
+                    "summary": f"{service}: {ev_type.replace('_',' ')} — {(text or '')[:60]}",
+                })
             except Exception:
                 continue
 

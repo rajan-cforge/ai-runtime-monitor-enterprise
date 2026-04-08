@@ -1813,7 +1813,7 @@ async function loadAlerts(customOffset) {
   } catch(e) { console.error('loadAlerts error:', e); }
 }
 var _patternNames = {aws_key:'An AWS access key',github_token:'A GitHub token',anthropic_key:'An Anthropic API key',slack_webhook:'A Slack webhook',stripe_key:'A Stripe key',jwt_token:'A JWT token',password_in_code:'A password',db_connection:'A database connection string',ssn:'A Social Security Number',credit_card:'A credit card number',phone_number:'A phone number',env_file:'Environment file contents',ip_address_private:'A private IP address',api_key_generic:'An API key',vulnerable_package:'A vulnerable package',typosquat:'A typosquatted package',supply_chain_risk:'A risky package install',remote_exec_unpinned:'An unpinned remote execution'};
-var _contextNames = {assistant_response:"Claude's response",tool_result:'tool output','tool:Bash':'a Bash command','tool:Read':'a file read','tool:Write':'a file write','tool:Edit':'a file edit',user_prompt:'the user prompt',supply_chain_scan:'vulnerability scan'};
+var _contextNames = {assistant_response:"Claude's response",tool_result:'tool output','tool:Bash':'a Bash command','tool:Read':'a file read','tool:Write':'a file write','tool:Edit':'a file edit',user_prompt:'the user prompt',supply_chain_scan:'vulnerability scan',browser_user_prompt:'a browser AI conversation (user input)',browser_assistant_response:'a browser AI assistant response',supply_chain_registry:'a registry metadata scan'};
 function alertSummary(a) {
   var what = _patternNames[a.patterns && a.patterns[0]] || 'Sensitive data';
   var where = _contextNames[a.context] || a.context || 'unknown context';
