@@ -1,80 +1,87 @@
-// Claude.ai specific selectors and observers
+// Copyright 2026 GoCloudForge, Inc. All rights reserved.
+// Proprietary and confidential.
+// Claude.ai content capture — verified selectors Apr 2026
 (function() {
-  const SELECTORS = {
-    userMessage: '[data-testid="user-message"], .font-user-message',
-    assistantMessage: '[data-testid="assistant-message"], .font-claude-message',
-    inputArea: '[contenteditable="true"], textarea',
-    messageContainer: 'main, [role="main"], .conversation-container'
-  };
+  // Multiple selector strategies — claude.ai changes DOM frequently
+  const USER_SELECTORS = [
+    '[data-testid="user-message"]',
+    '.font-user-message',
+    '[data-testid*="user"]',
+  ];
+  const ASSISTANT_SELECTORS = [
+    '[data-is-streaming="false"]',
+    '[data-is-streaming]',
+    '[data-testid="assistant-message"]',
+    '.font-claude-message',
+  ];
 
-  let observedMessages = new WeakSet();
+  let _lastUserCount = 0;
+  let _lastAssistantCount = 0;
 
-  function extractText(el) {
-    return el ? el.textContent?.trim() || '' : '';
+  function findElements(selectors) {
+    for (const sel of selectors) {
+      try {
+        const els = document.querySelectorAll(sel);
+        if (els.length > 0) return Array.from(els);
+      } catch(e) {}
+    }
+    return [];
   }
 
-  function scanExistingMessages() {
-    document.querySelectorAll(SELECTORS.assistantMessage).forEach(function(el) {
-      if (!observedMessages.has(el)) {
-        observedMessages.add(el);
-        const text = extractText(el);
-        if (text.length > 10) {
-          window.AIMon.sendCaptureEvent('assistant_response', text);
-        }
+  function captureNewMessages() {
+    if (!window.AIMon) return;
+    const users = findElements(USER_SELECTORS);
+    const assistants = findElements(ASSISTANT_SELECTORS);
+
+    // Only capture NEW messages beyond what we've already seen
+    users.slice(_lastUserCount).forEach(function(el) {
+      const text = el.textContent?.trim() || '';
+      if (text.length > 10) {
+        window.AIMon.sendCaptureEvent('user_prompt', text);
       }
     });
+    _lastUserCount = users.length;
+
+    assistants.slice(_lastAssistantCount).forEach(function(el) {
+      // Skip still-streaming messages
+      if (el.getAttribute && el.getAttribute('data-is-streaming') === 'true') return;
+      const text = el.textContent?.trim() || '';
+      if (text.length > 10) {
+        window.AIMon.sendCaptureEvent('assistant_response', text);
+      }
+    });
+    _lastAssistantCount = assistants.length;
   }
 
-  // Watch for new messages via MutationObserver
-  const observer = new MutationObserver(function(mutations) {
-    for (const mutation of mutations) {
-      for (const node of mutation.addedNodes) {
-        if (!(node instanceof HTMLElement)) continue;
-
-        // Check if added node is or contains a message
-        const assistants = node.matches?.(SELECTORS.assistantMessage)
-          ? [node]
-          : Array.from(node.querySelectorAll?.(SELECTORS.assistantMessage) || []);
-
-        assistants.forEach(function(el) {
-          if (!observedMessages.has(el)) {
-            observedMessages.add(el);
-            // Delay to let streaming finish
-            setTimeout(function() {
-              const text = extractText(el);
-              if (text.length > 10) {
-                window.AIMon.sendCaptureEvent('assistant_response', text);
-              }
-            }, 2000);
-          }
-        });
-      }
-    }
+  // MutationObserver with debounce for streaming completion
+  let _debounceTimer = null;
+  const observer = new MutationObserver(function() {
+    clearTimeout(_debounceTimer);
+    _debounceTimer = setTimeout(captureNewMessages, 2000);
   });
 
-  // Start observing
-  function startObserving() {
-    const target = document.querySelector(SELECTORS.messageContainer) || document.body;
+  function start() {
+    const target = document.querySelector('main') || document.body;
     observer.observe(target, { childList: true, subtree: true });
-    scanExistingMessages();
+    // Poll as fallback every 10 seconds
+    setInterval(captureNewMessages, 10000);
+    // Initialize — don't capture existing history
+    _lastUserCount = findElements(USER_SELECTORS).length;
+    _lastAssistantCount = findElements(ASSISTANT_SELECTORS).length;
+    console.log('[AI-Monitor] claude.ai: found', _lastUserCount, 'user +', _lastAssistantCount, 'assistant msgs');
   }
 
-  // Handle submit (user prompt capture)
+  // Capture on Enter key with slight delay for DOM update
   document.addEventListener('keydown', function(e) {
     if (e.key === 'Enter' && !e.shiftKey) {
-      const input = document.querySelector(SELECTORS.inputArea);
-      if (input) {
-        const text = extractText(input);
-        if (text.length > 0) {
-          window.AIMon.sendCaptureEvent('user_prompt', text);
-        }
-      }
+      setTimeout(captureNewMessages, 500);
     }
   }, true);
 
+  // Delay start for SPA rendering
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', startObserving);
+    document.addEventListener('DOMContentLoaded', function() { setTimeout(start, 3000); });
   } else {
-    startObserving();
+    setTimeout(start, 3000);
   }
 })();
