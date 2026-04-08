@@ -1892,16 +1892,20 @@ class DashboardHandler(BaseHTTPRequestHandler):
             if not service or not ev_type:
                 continue
 
-            # Content-based dedup: hash first 200 chars, 1-hour window
+            # Content-based dedup: hash first 200 chars
+            # Same content_hash in same conversation → 24h window (prevents cross-day re-capture)
+            # Different content in same conversation → 1h window (allows new messages)
             content_hash = None
             if text:
                 content_hash = hashlib.sha256(text[:200].encode()).hexdigest()[:16]
+                # Check for identical content (same hash) within 24 hours
                 recent = db.execute(
                     """SELECT id FROM browser_sessions
-                       WHERE conversation_id = ? AND event_type = ? AND content_hash = ?
-                       AND visit_time > datetime(?, '-1 hour')
+                       WHERE conversation_id = ? AND event_type = ?
+                       AND (content_hash = ? OR substr(content_text, 1, 200) = ?)
+                       AND visit_time > datetime(?, '-24 hours')
                        LIMIT 1""",
-                    (conv_id, ev_type, content_hash, timestamp),
+                    (conv_id, ev_type, content_hash, text[:200], timestamp),
                 ).fetchone()
                 if recent:
                     continue
@@ -1918,11 +1922,36 @@ class DashboardHandler(BaseHTTPRequestHandler):
             except Exception:
                 continue
 
-            # Scan captured text for sensitive data
+            # Scan captured text for sensitive data and STORE alerts
             if text:
                 matches = scan_sensitive(text[:5000])
                 if matches:
                     alerts += len(matches)
+                    session_id = "browser_" + (conv_id or "unknown")
+                    matched_value = matches[0].get("matched_value", "") if matches else ""
+                    severity = min((m.get("severity", "medium") for m in matches), key=lambda s: {"critical": 0, "high": 1, "medium": 2, "low": 3}.get(s, 99))
+                    confidence = "high" if ev_type == "user_prompt" else "medium"
+                    data_json = json.dumps({
+                        "patterns": [m["name"] for m in matches],
+                        "severity": severity,
+                        "categories": list(set(m.get("category", "credential") for m in matches)),
+                        "context": f"browser_{ev_type}",
+                        "snippet": text[:200],
+                        "matched_value": matched_value,
+                        "confidence": confidence,
+                        "likely_false_positive": False,
+                    })
+                    dedup_key = f"{session_id}|{timestamp}|{[m['name'] for m in matches]}"
+                    dedup_hash = hashlib.sha256(dedup_key.encode()).hexdigest()[:16]
+                    try:
+                        db.execute(
+                            """INSERT OR IGNORE INTO events
+                               (timestamp, session_id, event_type, source_layer, data_json, dedup_hash)
+                               VALUES (?, ?, 'sensitive_data', 'browser', ?, ?)""",
+                            (timestamp, session_id, data_json, dedup_hash),
+                        )
+                    except Exception:
+                        pass
 
         if stored > 0:
             try:
