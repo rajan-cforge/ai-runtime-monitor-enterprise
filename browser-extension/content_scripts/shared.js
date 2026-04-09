@@ -10,7 +10,7 @@ const MIN_EVENT_INTERVAL_MS = 2000; // 2 seconds between events
 // Content dedup: track captured hashes per conversation+type
 // Survives within page session, resets on full page reload (which is correct)
 const _capturedHashes = new Map(); // key: "convId_type_hash" → timestamp
-const DEDUP_WINDOW_MS = 3600000; // 1 hour
+const DEDUP_WINDOW_MS = 86400000; // 24 hours
 
 function simpleHash(str) {
   let h = 0;
