@@ -63,12 +63,26 @@
   function start() {
     const target = document.querySelector('main') || document.body;
     observer.observe(target, { childList: true, subtree: true });
-    // Poll as fallback every 10 seconds
     setInterval(captureNewMessages, 10000);
-    // Initialize — don't capture existing history
-    _lastUserCount = findElements(USER_SELECTORS).length;
-    _lastAssistantCount = findElements(ASSISTANT_SELECTORS).length;
-    console.log('[AI-Monitor] claude.ai: found', _lastUserCount, 'user +', _lastAssistantCount, 'assistant msgs');
+
+    // Capture last 3 user + assistant messages for context on page load
+    const users = findElements(USER_SELECTORS);
+    const assistants = findElements(ASSISTANT_SELECTORS);
+
+    users.slice(-3).forEach(function(el) {
+      const text = el.textContent?.trim() || '';
+      if (text.length > 10) window.AIMon?.sendCaptureEvent('user_prompt', text);
+    });
+    assistants.slice(-3).forEach(function(el) {
+      if (el.getAttribute?.('data-is-streaming') === 'true') return;
+      const text = el.textContent?.trim() || '';
+      if (text.length > 10) window.AIMon?.sendCaptureEvent('assistant_response', text);
+    });
+
+    // Set counts AFTER initial capture — future captures are incremental
+    _lastUserCount = users.length;
+    _lastAssistantCount = assistants.length;
+    console.log('[AI-Monitor] claude.ai: captured last 3 of', users.length, 'user +', assistants.length, 'assistant msgs');
   }
 
   // Capture on Enter key with slight delay for DOM update

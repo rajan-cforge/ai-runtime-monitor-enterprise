@@ -69,10 +69,24 @@
   function start() {
     const target = document.querySelector('main') || document.body;
     observer.observe(target, { childList: true, subtree: true });
-    // Also poll every 5 seconds as fallback
     setInterval(pollForNewMessages, 5000);
-    // Initialize count of existing messages (don't capture history)
-    lastAssistantCount = findAssistantMessages().length;
+
+    // Self-test: log which selectors match
+    for (const sel of ASSISTANT_SELECTORS) {
+      try {
+        const count = document.querySelectorAll(sel).length;
+        if (count > 0) console.log('[AI-Monitor] ChatGPT selector match:', sel, '→', count);
+      } catch(e) {}
+    }
+
+    // Capture last 3 assistant messages on load for context
+    const msgs = findAssistantMessages();
+    msgs.slice(-3).forEach(function(el) {
+      const text = extractText(el);
+      if (text.length > 10) window.AIMon?.sendCaptureEvent('assistant_response', text);
+    });
+    lastAssistantCount = msgs.length;
+    console.log('[AI-Monitor] chatgpt.com: found', msgs.length, 'assistant messages');
   }
 
   // Capture user prompt on Enter

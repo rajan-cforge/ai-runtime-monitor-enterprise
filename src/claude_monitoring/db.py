@@ -310,6 +310,23 @@ def init_db(db_path=None):
     c.execute("CREATE INDEX IF NOT EXISTS idx_deps_pkg ON agent_dependencies(package_name)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_deps_risk ON agent_dependencies(risk_flags)")
 
+    # Backfill content_hash for browser_sessions + remove extension duplicates
+    try:
+        import hashlib as _hl
+
+        null_rows = c.execute(
+            "SELECT id, content_text FROM browser_sessions WHERE content_hash IS NULL AND content_text IS NOT NULL"
+        ).fetchall()
+        for row in null_rows:
+            h = _hl.sha256(row[1][:200].encode()).hexdigest()[:16]
+            c.execute("UPDATE browser_sessions SET content_hash=? WHERE id=?", (h, row[0]))
+        if null_rows:
+            c.execute("""DELETE FROM browser_sessions WHERE source='extension' AND id NOT IN (
+                SELECT MIN(id) FROM browser_sessions WHERE source='extension' AND content_text IS NOT NULL
+                GROUP BY conversation_id, event_type, content_hash)""")
+    except Exception:
+        pass
+
     conn.commit()
     return conn
 
