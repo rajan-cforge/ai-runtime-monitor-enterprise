@@ -831,6 +831,11 @@ echo "   Run: claude"
     print("=" * 50 + "\n")
 
     # Launch mitmdump with this script as addon
+    # Selective SSL inspection: only AI API domains are decrypted
+    import json as _json
+
+    from claude_monitoring.constants import AI_PROXY_DOMAINS
+
     cmd = [
         "mitmdump",
         "--listen-port",
@@ -840,6 +845,8 @@ echo "   Run: claude"
         str(script_path),
         "--set",
         "flow_detail=0",
+        "--set",
+        "allow_hosts=" + _json.dumps(AI_PROXY_DOMAINS),
         "--quiet",
     ]
 
