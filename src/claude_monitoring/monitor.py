@@ -3924,6 +3924,14 @@ def start_monitoring(cp_url=None, cp_api_key=None):
 
     def signal_handler(sig, frame):
         print("\n\n  Shutting down...")
+        # Auto-disable system proxy on shutdown (safety net)
+        try:
+            subprocess.run(
+                ["networksetup", "-setsecurewebproxystate", "Wi-Fi", "off"],
+                capture_output=True, timeout=5,
+            )
+        except Exception:
+            pass
         jsonl_watcher.stop()
         proc_scanner.stop()
         net_monitor.stop()
@@ -4056,6 +4064,8 @@ def main():
     parser.add_argument("--port", type=int, default=DASHBOARD_PORT, help=f"Dashboard port (default: {DASHBOARD_PORT})")
     parser.add_argument("--init-config", action="store_true", help="Generate default config.toml")
     parser.add_argument("--with-proxy", action="store_true", help="Also start HTTPS proxy for deep API capture")
+    parser.add_argument("--enable-system-proxy", action="store_true", help="Enable macOS system proxy (AI domains only)")
+    parser.add_argument("--disable-system-proxy", action="store_true", help="Disable macOS system proxy")
     parser.add_argument("--control-plane", type=str, default="", help="Control plane URL (e.g. http://localhost:9090)")
     parser.add_argument("--cp-api-key", type=str, default="", help="Control plane API key")
 
@@ -4076,6 +4086,21 @@ def main():
         install_launch_agent()
     elif args.uninstall_agent:
         uninstall_launch_agent()
+    elif args.enable_system_proxy:
+        from claude_monitoring.config import get_proxy_port
+
+        port = get_proxy_port()
+        print(f"Enabling macOS system proxy → 127.0.0.1:{port}")
+        print("Only AI API domains are inspected. All other traffic passes through untouched.")
+        subprocess.run(["networksetup", "-setsecurewebproxy", "Wi-Fi", "127.0.0.1", str(port)], check=False)
+        print("✅ System proxy enabled.")
+        print("Run 'ai-monitor --disable-system-proxy' to disable.")
+        sys.exit(0)
+    elif args.disable_system_proxy:
+        print("Disabling macOS system proxy...")
+        subprocess.run(["networksetup", "-setsecurewebproxystate", "Wi-Fi", "off"], check=False)
+        print("✅ System proxy disabled.")
+        sys.exit(0)
     elif args.scan:
         one_shot_scan()
     elif args.start:
@@ -4087,8 +4112,9 @@ def main():
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
             )
-            print(f"Proxy started on port {get_proxy_port()}")
+            print(f"Proxy started on port {get_proxy_port()} (AI domains only — selective SSL inspection)")
             print(f"To enable: export HTTPS_PROXY=http://127.0.0.1:{get_proxy_port()}")
+            print("For desktop apps: ai-monitor --enable-system-proxy")
         start_monitoring(cp_url=args.control_plane or None, cp_api_key=args.cp_api_key or None)
     else:
         parser.print_help()

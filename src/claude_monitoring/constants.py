@@ -62,6 +62,25 @@ BROWSER_AI_PATTERNS = {
 # AI Hosts — merged superset from monitor.py and watch.py
 # ─────────────────────────────────────────────────────────────
 
+# Domains for selective SSL inspection (mitmproxy allow_hosts)
+# Only these domains are decrypted — everything else passes through untouched
+AI_PROXY_DOMAINS = [
+    "api.anthropic.com",
+    "api.openai.com",
+    "generativelanguage.googleapis.com",
+    "api.cursor.sh",
+    "copilot-proxy.githubusercontent.com",
+    "api.githubcopilot.com",
+    "api.cohere.ai",
+    "api.mistral.ai",
+    "api-inference.huggingface.co",
+    "api.groq.com",
+    "api.together.xyz",
+    "api.fireworks.ai",
+    "api.deepseek.com",
+    "api.perplexity.ai",
+]
+
 AI_HOSTS = {
     # Anthropic
     "api.anthropic.com": "anthropic_api",
