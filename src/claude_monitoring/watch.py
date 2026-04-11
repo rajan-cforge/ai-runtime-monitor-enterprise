@@ -831,10 +831,15 @@ echo "   Run: claude"
     print("=" * 50 + "\n")
 
     # Launch mitmdump with this script as addon
-    # Selective SSL inspection: only AI API domains are decrypted
-    import json as _json
+    # Selective SSL inspection: only AI API domains are decrypted.
+    # mitmproxy matches the regex against "host:port", so we anchor on ":" at the end.
+    # NOTE: --set allow_hosts=<json> does NOT work for sequence options — must use the
+    # --allow-hosts flag with a single regex.
+    import re as _re
 
     from claude_monitoring.constants import AI_PROXY_DOMAINS
+
+    allow_pattern = "^(" + "|".join(_re.escape(d) for d in AI_PROXY_DOMAINS) + "):"
 
     cmd = [
         "mitmdump",
@@ -845,8 +850,8 @@ echo "   Run: claude"
         str(script_path),
         "--set",
         "flow_detail=0",
-        "--set",
-        "allow_hosts=" + _json.dumps(AI_PROXY_DOMAINS),
+        "--allow-hosts",
+        allow_pattern,
         "--quiet",
     ]
 
