@@ -4066,6 +4066,8 @@ def main():
     parser.add_argument("--with-proxy", action="store_true", help="Also start HTTPS proxy for deep API capture")
     parser.add_argument("--enable-system-proxy", action="store_true", help="Enable macOS system proxy (AI domains only)")
     parser.add_argument("--disable-system-proxy", action="store_true", help="Disable macOS system proxy")
+    parser.add_argument("--status", action="store_true", help="Show runtime status (monitor, proxy, cert, security)")
+    parser.add_argument("--status-json", action="store_true", help="Show runtime status as JSON (for scripts)")
     parser.add_argument("--control-plane", type=str, default="", help="Control plane URL (e.g. http://localhost:9090)")
     parser.add_argument("--cp-api-key", type=str, default="", help="Control plane API key")
 
@@ -4101,6 +4103,14 @@ def main():
         subprocess.run(["networksetup", "-setsecurewebproxystate", "Wi-Fi", "off"], check=False)
         print("✅ System proxy disabled.")
         sys.exit(0)
+    elif args.status:
+        from claude_monitoring.status import show_status
+
+        sys.exit(show_status())
+    elif args.status_json:
+        from claude_monitoring.status import show_status_json
+
+        sys.exit(show_status_json())
     elif args.scan:
         one_shot_scan()
     elif args.start:
