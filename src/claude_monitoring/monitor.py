@@ -4330,6 +4330,10 @@ def main():
     parser.add_argument("--disable-system-proxy", action="store_true", help="Disable macOS system proxy")
     parser.add_argument("--status", action="store_true", help="Show runtime status (monitor, proxy, cert, security)")
     parser.add_argument("--status-json", action="store_true", help="Show runtime status as JSON (for scripts)")
+    parser.add_argument("--setup", action="store_true", help="Run the first-time setup wizard (force re-run)")
+    parser.add_argument("--cleanup", action="store_true", help="Remove duplicate captures, empty sessions, etc.")
+    parser.add_argument("--dry-run", action="store_true", help="Modifier for --cleanup: preview without changes")
+    parser.add_argument("--purge", action="store_true", help="Permanently uninstall and delete all monitoring data")
     parser.add_argument("--control-plane", type=str, default="", help="Control plane URL (e.g. http://localhost:9090)")
     parser.add_argument("--cp-api-key", type=str, default="", help="Control plane API key")
 
@@ -4373,9 +4377,34 @@ def main():
         from claude_monitoring.status import show_status_json
 
         sys.exit(show_status_json())
+    elif args.setup:
+        from claude_monitoring.wizard import run_setup_wizard
+
+        sys.exit(0 if run_setup_wizard(force=True) else 1)
+    elif args.cleanup:
+        from claude_monitoring.cleanup import print_cleanup_summary, run_cleanup
+
+        summary = run_cleanup(dry_run=args.dry_run)
+        print_cleanup_summary(summary)
+        sys.exit(0 if summary.get("ok") else 1)
+    elif args.purge:
+        from claude_monitoring.wizard import run_purge
+
+        sys.exit(0 if run_purge() else 1)
     elif args.scan:
         one_shot_scan()
     elif args.start:
+        # Section 8: first-run wizard. Skipped if .setup_complete already
+        # exists. Users can re-run anytime via `ai-monitor --setup`.
+        try:
+            from claude_monitoring.wizard import is_first_run, run_setup_wizard
+
+            if is_first_run():
+                if not run_setup_wizard():
+                    sys.exit(1)
+        except Exception as exc:
+            print(f"  WARNING: setup wizard failed: {exc}")
+
         if args.with_proxy:
             from claude_monitoring.config import get_proxy_port
 
