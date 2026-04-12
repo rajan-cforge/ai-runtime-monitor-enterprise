@@ -105,9 +105,14 @@ def generate_custom_ca(
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     now = datetime.now(timezone.utc)
 
+    # x509 CN attribute is capped at 64 chars. "AI Runtime Monitor - " is 22
+    # chars, so the hostname gets at most 42. CI runners often have long
+    # auto-generated hostnames; truncating is safe — the hostname is cosmetic.
+    cn = f"AI Runtime Monitor - {hostname}"[:64]
+
     subject = issuer = x509.Name(
         [
-            x509.NameAttribute(NameOID.COMMON_NAME, f"AI Runtime Monitor - {hostname}"),
+            x509.NameAttribute(NameOID.COMMON_NAME, cn),
             x509.NameAttribute(NameOID.ORGANIZATION_NAME, "GoCloudForge, Inc."),
             x509.NameAttribute(NameOID.ORGANIZATIONAL_UNIT_NAME, "AI Security Monitoring"),
         ]
