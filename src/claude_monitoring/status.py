@@ -83,8 +83,10 @@ def _is_monitor_running(port: int | None = None) -> bool:
     try:
         import urllib.request
 
-        with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/stats", timeout=2) as resp:
-            return 200 <= resp.status < 500
+        # Probe "/" not "/api/stats" — the dashboard HTML loads without auth,
+        # so this works even when token auth is enabled (Section 4b).
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=2) as resp:
+            return resp.status == 200
     except Exception:
         return False
 
