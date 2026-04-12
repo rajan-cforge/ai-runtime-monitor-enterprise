@@ -1829,6 +1829,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             "/api/supply-chain/registry": self._api_supply_chain_registry,
             "/api/supply-chain/sbom": self._api_supply_chain_sbom,
             "/api/supply-chain/watchlist": self._api_supply_chain_watchlist,
+            "/api/browser/extension-health": self._api_browser_extension_health,
         }
 
         # Match path prefixes for dynamic routes
@@ -1886,6 +1887,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
         post_routes = {
             "/api/alerts/dismiss": self._api_alerts_dismiss,
             "/api/browser/ingest": self._api_browser_ingest,
+            "/api/browser/heartbeat": self._api_browser_heartbeat,
             "/api/supply-chain/scan": self._api_supply_chain_scan_post,
         }
 
@@ -1950,6 +1952,101 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self._send_json({"error": "alert already dismissed"}, 409)
             return
         self._send_json({"ok": True, "event_id": event_id, "dismissed_at": now})
+
+    def _api_browser_heartbeat(self, payload):
+        """Section 6: receive 60s heartbeats from extension content scripts.
+
+        Body: { hostname, user_matches, assistant_matches, captures_sent,
+                selector_failure }
+
+        We UPSERT one row per hostname so the table stays small. The
+        /api/browser/extension-health endpoint reads the latest row and
+        decides if a warning should be shown in the dashboard.
+        """
+        if not isinstance(payload, dict):
+            self._send_json({"error": "expected JSON object"}, 400)
+            return
+        hostname = str(payload.get("hostname", ""))[:64]
+        if not hostname:
+            self._send_json({"error": "hostname required"}, 400)
+            return
+        user_m = int(payload.get("user_matches", 0) or 0)
+        asst_m = int(payload.get("assistant_matches", 0) or 0)
+        captures = int(payload.get("captures_sent", 0) or 0)
+        failure = 1 if payload.get("selector_failure") else 0
+        now = datetime.now(timezone.utc).isoformat()
+        db = get_thread_db()
+        try:
+            db.execute(
+                """INSERT INTO extension_heartbeats
+                       (hostname, last_seen, user_matches, assistant_matches,
+                        captures_sent, selector_failure)
+                       VALUES (?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(hostname) DO UPDATE SET
+                       last_seen=excluded.last_seen,
+                       user_matches=excluded.user_matches,
+                       assistant_matches=excluded.assistant_matches,
+                       captures_sent=excluded.captures_sent,
+                       selector_failure=excluded.selector_failure""",
+                (hostname, now, user_m, asst_m, captures, failure),
+            )
+            db.commit()
+        except Exception as e:
+            self._send_json({"error": str(e)}, 500)
+            return
+        self._send_json({"ok": True, "hostname": hostname, "last_seen": now})
+
+    def _api_browser_extension_health(self, params):
+        """Return per-host heartbeat status with stale/failure flags.
+
+        Used by the dashboard to render a yellow warning banner when an
+        extension on claude.ai or chatgpt.com hasn't reported in for 5+
+        minutes or is reporting zero selector matches.
+        """
+        db = get_thread_db()
+        try:
+            rows = db.execute(
+                "SELECT hostname, last_seen, user_matches, assistant_matches, "
+                "captures_sent, selector_failure FROM extension_heartbeats"
+            ).fetchall()
+        except Exception:
+            self._send_json({"hosts": [], "warnings": []})
+            return
+        now = datetime.now(timezone.utc)
+        hosts = []
+        warnings = []
+        for r in rows:
+            try:
+                last_seen = datetime.fromisoformat(r["last_seen"])
+            except Exception:
+                continue
+            stale_seconds = (now - last_seen).total_seconds()
+            user_m = r["user_matches"] or 0
+            asst_m = r["assistant_matches"] or 0
+            failure = bool(r["selector_failure"])
+            entry = {
+                "hostname": r["hostname"],
+                "last_seen": r["last_seen"],
+                "stale_seconds": int(stale_seconds),
+                "user_matches": user_m,
+                "assistant_matches": asst_m,
+                "captures_sent": r["captures_sent"] or 0,
+                "selector_failure": failure,
+                "is_stale": stale_seconds > 300,
+                "is_zero_matches": (user_m + asst_m) == 0,
+            }
+            hosts.append(entry)
+            if entry["is_stale"]:
+                warnings.append(
+                    f"Extension on {r['hostname']} has not reported for "
+                    f"{int(stale_seconds // 60)} minutes — content capture may be stale."
+                )
+            elif entry["is_zero_matches"] or failure:
+                warnings.append(
+                    f"Extension on {r['hostname']} reports zero selector matches — "
+                    "the AI provider may have changed their DOM. Content capture is failing."
+                )
+        self._send_json({"hosts": hosts, "warnings": warnings})
 
     def _api_browser_ingest(self, payload):
         """Receive browser capture events from the Chrome extension."""

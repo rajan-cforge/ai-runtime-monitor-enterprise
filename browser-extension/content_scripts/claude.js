@@ -53,17 +53,47 @@
     _lastAssistantCount = assistants.length;
   }
 
-  // MutationObserver with debounce for streaming completion
+  // MutationObserver with debounce for streaming completion.
+  // Section 6c: schedule a SECOND capture 5s after the debounce fires to
+  // catch the final streaming chunk that arrives after Claude flips
+  // data-is-streaming="false".
   let _debounceTimer = null;
   const observer = new MutationObserver(function() {
     clearTimeout(_debounceTimer);
-    _debounceTimer = setTimeout(captureNewMessages, 2000);
+    _debounceTimer = setTimeout(function() {
+      captureNewMessages();
+      setTimeout(captureNewMessages, 5000);
+    }, 2000);
   });
 
   function start() {
     const target = document.querySelector('main') || document.body;
     observer.observe(target, { childList: true, subtree: true });
     setInterval(captureNewMessages, 10000);
+
+    // Section 6: expose selector counts to shared.js so the heartbeat can
+    // report them. We override window.AIMon.getSelectorCounts after shared.js
+    // has set its default — same window object, runs in document order.
+    if (window.AIMon) {
+      window.AIMon.getSelectorCounts = function() {
+        return {
+          user: findElements(USER_SELECTORS).length,
+          assistant: findElements(ASSISTANT_SELECTORS).length,
+        };
+      };
+    }
+
+    // Section 6d: selector self-test 5s after start. If we found 0 user AND
+    // 0 assistant elements, the next heartbeat will report selector_failure.
+    setTimeout(function() {
+      const u = findElements(USER_SELECTORS).length;
+      const a = findElements(ASSISTANT_SELECTORS).length;
+      if (u === 0 && a === 0) {
+        console.error('[AI-Monitor] claude.ai SELECTORS BROKEN — 0 matches for both user and assistant');
+      } else {
+        console.log('[AI-Monitor] claude.ai self-test:', u, 'user,', a, 'assistant');
+      }
+    }, 5000);
 
     // Capture last 3 user + assistant messages for context on page load
     const users = findElements(USER_SELECTORS);

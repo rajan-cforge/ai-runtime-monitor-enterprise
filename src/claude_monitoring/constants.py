@@ -62,9 +62,17 @@ BROWSER_AI_PATTERNS = {
 # AI Hosts — merged superset from monitor.py and watch.py
 # ─────────────────────────────────────────────────────────────
 
-# Domains for selective SSL inspection (mitmproxy allow_hosts)
-# Only these domains are decrypted — everything else passes through untouched
-AI_PROXY_DOMAINS = [
+# Domains for selective SSL inspection (mitmproxy allow_hosts).
+# Only these domains are decrypted — everything else passes through untouched.
+#
+# Section 5: split into API endpoints (always inspected, full request/response
+# parsing) and browser AI sites (only inspected when the user has trusted the
+# CA cert, METADATA only — we never parse SSE/WebSocket/protobuf content).
+#
+# AI_PROXY_DOMAINS is the union, kept for backwards-compat with existing
+# callers. New code should prefer AI_API_DOMAINS or AI_BROWSER_DOMAINS.
+
+AI_API_DOMAINS = [
     "api.anthropic.com",
     "api.openai.com",
     "generativelanguage.googleapis.com",
@@ -80,6 +88,20 @@ AI_PROXY_DOMAINS = [
     "api.deepseek.com",
     "api.perplexity.ai",
 ]
+
+# Browser-facing AI web UIs. We only inspect TLS for these when the custom CA
+# is trusted (otherwise the browser shows scary warnings). And we only capture
+# metadata: host, path, method, status, sizes, latency. NEVER content — those
+# endpoints stream SSE / WebSockets / protobuf which we cannot reliably parse.
+AI_BROWSER_DOMAINS = [
+    "claude.ai",
+    "chatgpt.com",
+    "chat.openai.com",
+    "gemini.google.com",
+    "perplexity.ai",
+]
+
+AI_PROXY_DOMAINS = AI_API_DOMAINS + AI_BROWSER_DOMAINS
 
 AI_HOSTS = {
     # Anthropic

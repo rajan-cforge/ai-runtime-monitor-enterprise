@@ -39,16 +39,27 @@
     _lastAssistantCount = msgs.length;
   }
 
+  // Section 6c: re-poll 5s later to catch the final streaming chunk.
   let _debounceTimer = null;
   const observer = new MutationObserver(function() {
     clearTimeout(_debounceTimer);
-    _debounceTimer = setTimeout(captureNewMessages, 2000);
+    _debounceTimer = setTimeout(function() {
+      captureNewMessages();
+      setTimeout(captureNewMessages, 5000);
+    }, 2000);
   });
 
   function start() {
     const target = document.querySelector('main') || document.body;
     observer.observe(target, { childList: true, subtree: true });
     setInterval(captureNewMessages, 10000);
+
+    // Section 6: heartbeat selector counts.
+    if (window.AIMon) {
+      window.AIMon.getSelectorCounts = function() {
+        return { user: 0, assistant: findElements(ASSISTANT_SELECTORS).length };
+      };
+    }
 
     // Capture last 3 assistant messages on load
     const msgs = findElements(ASSISTANT_SELECTORS);
