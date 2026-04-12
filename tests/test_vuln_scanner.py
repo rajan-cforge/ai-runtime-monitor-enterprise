@@ -172,6 +172,168 @@ class TestStoreAndScan:
         assert "scan_history" in tables
 
 
+class TestNpmVersionResolution:
+    @patch("claude_monitoring.vuln_scanner.subprocess")
+    def test_npm_version(self, mock_sub):
+        from claude_monitoring.vuln_scanner import resolve_installed_version
+
+        mock_sub.run.return_value = MagicMock(stdout=json.dumps({"dependencies": {"express": {"version": "4.18.2"}}}))
+        v = resolve_installed_version("express", "npm")
+        assert v == "4.18.2"
+
+    @patch("claude_monitoring.vuln_scanner.subprocess")
+    def test_npm_package_not_installed(self, mock_sub):
+        from claude_monitoring.vuln_scanner import resolve_installed_version
+
+        mock_sub.run.return_value = MagicMock(stdout=json.dumps({"dependencies": {}}))
+        v = resolve_installed_version("not-installed", "npm")
+        assert v == ""
+
+
+class TestPipAuditEdgeCases:
+    @patch("claude_monitoring.vuln_scanner.subprocess")
+    def test_file_not_found(self, mock_sub):
+        from claude_monitoring.vuln_scanner import run_pip_audit
+
+        mock_sub.run.side_effect = FileNotFoundError("pip-audit not installed")
+        assert run_pip_audit() == []
+
+    @patch("claude_monitoring.vuln_scanner.subprocess")
+    def test_unexpected_error(self, mock_sub):
+        from claude_monitoring.vuln_scanner import run_pip_audit
+
+        mock_sub.run.side_effect = RuntimeError("boom")
+        assert run_pip_audit() == []
+
+
+class TestExtractDbSeverity:
+    def test_critical_severity(self):
+        from claude_monitoring.vuln_scanner import _extract_db_severity
+
+        score, label = _extract_db_severity({"database_specific": {"severity": "CRITICAL"}})
+        assert score == 9.5
+        assert label == "critical"
+
+    def test_moderate_maps_to_medium(self):
+        from claude_monitoring.vuln_scanner import _extract_db_severity
+
+        score, label = _extract_db_severity({"database_specific": {"severity": "MODERATE"}})
+        assert score == 5.0
+        assert label == "medium"
+
+    def test_unknown_severity(self):
+        from claude_monitoring.vuln_scanner import _extract_db_severity
+
+        score, label = _extract_db_severity({"database_specific": {}})
+        assert score is None
+        assert label == "unknown"
+
+    def test_missing_db_specific(self):
+        from claude_monitoring.vuln_scanner import _extract_db_severity
+
+        score, label = _extract_db_severity({})
+        assert label == "unknown"
+
+
+class TestExtractCvssVector:
+    def test_numeric_score_string(self):
+        from claude_monitoring.vuln_scanner import _extract_cvss
+
+        vuln = {"severity": [{"type": "CVSS_V3", "score": "8.1"}]}
+        assert _extract_cvss(vuln) == 8.1
+
+    def test_vector_with_high_confidentiality(self):
+        from claude_monitoring.vuln_scanner import _extract_cvss
+
+        vuln = {"severity": [{"type": "CVSS_V3", "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N"}]}
+        assert _extract_cvss(vuln) == 7.5
+
+    def test_vector_with_high_availability_only(self):
+        from claude_monitoring.vuln_scanner import _extract_cvss
+
+        vuln = {"severity": [{"type": "CVSS_V3", "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"}]}
+        assert _extract_cvss(vuln) == 7.0
+
+    def test_vector_generic(self):
+        from claude_monitoring.vuln_scanner import _extract_cvss
+
+        vuln = {"severity": [{"type": "CVSS_V3", "score": "CVSS:3.1/AV:L/AC:H/PR:H/UI:R/S:U/C:L/I:L/A:L"}]}
+        assert _extract_cvss(vuln) == 5.0
+
+    def test_no_severity_returns_none(self):
+        from claude_monitoring.vuln_scanner import _extract_cvss
+
+        assert _extract_cvss({}) is None
+
+
+class TestExtractFix:
+    def test_extracts_fixed_version(self):
+        from claude_monitoring.vuln_scanner import _extract_fix
+
+        vuln = {"affected": [{"ranges": [{"events": [{"introduced": "0"}, {"fixed": "1.2.3"}]}]}]}
+        assert _extract_fix(vuln) == "1.2.3"
+
+    def test_no_fix_returns_none(self):
+        from claude_monitoring.vuln_scanner import _extract_fix
+
+        vuln = {"affected": [{"ranges": [{"events": [{"introduced": "0"}]}]}]}
+        assert _extract_fix(vuln) is None
+
+    def test_empty_affected(self):
+        from claude_monitoring.vuln_scanner import _extract_fix
+
+        assert _extract_fix({}) is None
+
+
+class TestMaliciousDetection:
+    @patch("claude_monitoring.vuln_scanner.urllib.request.urlopen")
+    def test_mal_prefix_marked_malicious(self, mock_urlopen):
+        from claude_monitoring.vuln_scanner import query_osv
+
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = json.dumps(
+            {"vulns": [{"id": "MAL-2024-001", "summary": "Malicious package"}]}
+        ).encode()
+        mock_urlopen.return_value = mock_resp
+        vulns = query_osv("evil-pkg", "npm")
+        assert len(vulns) == 1
+        assert vulns[0]["severity"] == "malicious"
+
+
+class TestRunFullScan:
+    @patch("claude_monitoring.vuln_scanner.run_pip_audit")
+    @patch("claude_monitoring.vuln_scanner.query_osv")
+    @patch("claude_monitoring.vuln_scanner.time.sleep")
+    def test_scans_all_packages(self, mock_sleep, mock_osv, mock_pip, db):
+        from claude_monitoring.vuln_scanner import run_full_scan
+
+        mock_pip.return_value = [{"package_name": "foo", "vuln_id": "CVE-1", "source": "pip-audit"}]
+        mock_osv.return_value = [{"package_name": "bar", "vuln_id": "GHSA-1", "source": "osv"}]
+        # Insert a package so the OSV loop has something to scan
+        db.execute(
+            "INSERT INTO agent_dependencies (timestamp, session_id, action, package_name, package_manager, package_version, category) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            ("2026-04-01T00:00:00Z", "test", "install", "bar", "pip", "1.0", "package"),
+        )
+        db.commit()
+
+        results = run_full_scan(db)
+        assert results["vulns_found"] >= 2
+        assert results["scanned"] >= 2
+        # Verify scan_history was written
+        row = db.execute("SELECT * FROM scan_history ORDER BY id DESC LIMIT 1").fetchone()
+        assert row is not None
+
+    @patch("claude_monitoring.vuln_scanner.run_pip_audit")
+    def test_no_packages_still_succeeds(self, mock_pip, db):
+        from claude_monitoring.vuln_scanner import run_full_scan
+
+        mock_pip.return_value = []
+        results = run_full_scan(db)
+        assert results["scanned"] >= 1  # pip-audit counts as 1 scan
+        assert results["vulns_found"] == 0
+
+
 class TestCVSSSeverity:
     def test_critical(self):
         from claude_monitoring.vuln_scanner import _cvss_to_severity
