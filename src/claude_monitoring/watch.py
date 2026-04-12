@@ -933,6 +933,13 @@ echo "   Run: claude"
         "flow_detail=0",
         "--allow-hosts",
         allow_pattern,
+        # Disable upstream_cert so mitmproxy generates leaf certs with ONLY
+        # the SNI hostname as SAN. Without this, mitmproxy copies all SANs
+        # from the upstream cert (including wildcards like *.chatgpt.com)
+        # which can violate the CA's NameConstraints and cause Chrome to
+        # reject the cert with ERR_CERT_AUTHORITY_INVALID.
+        "--set",
+        "upstream_cert=false",
         "--quiet",
     ]
 
