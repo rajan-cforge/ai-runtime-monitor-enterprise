@@ -19,9 +19,7 @@ def db(tmp_path):
 
 class TestWatchlist:
     def test_table_exists(self, db):
-        row = db.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='package_watchlist'"
-        ).fetchone()
+        row = db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='package_watchlist'").fetchone()
         assert row is not None
 
     def test_populate_from_agent_deps(self, db):
@@ -35,9 +33,7 @@ class TestWatchlist:
         db.commit()
         counts = populate_watchlist(db)
         assert counts.get("high", 0) >= 1
-        row = db.execute(
-            "SELECT * FROM package_watchlist WHERE package_name='requests'"
-        ).fetchone()
+        row = db.execute("SELECT * FROM package_watchlist WHERE package_name='requests'").fetchone()
         assert row is not None
         assert row["priority"] == "high"
 
@@ -51,9 +47,7 @@ class TestWatchlist:
         )
         db.commit()
         populate_watchlist(db)
-        row = db.execute(
-            "SELECT * FROM package_watchlist WHERE package_name='cryptography'"
-        ).fetchone()
+        row = db.execute("SELECT * FROM package_watchlist WHERE package_name='cryptography'").fetchone()
         assert row is not None
 
     def test_dedup(self, db):
@@ -67,9 +61,7 @@ class TestWatchlist:
         db.commit()
         populate_watchlist(db)
         populate_watchlist(db)  # Second call
-        count = db.execute(
-            "SELECT COUNT(*) FROM package_watchlist WHERE package_name='flask'"
-        ).fetchone()[0]
+        count = db.execute("SELECT COUNT(*) FROM package_watchlist WHERE package_name='flask'").fetchone()[0]
         assert count == 1
 
 
@@ -116,10 +108,15 @@ class TestSBOMExport:
                (timestamp, action, package_manager, package_name, category, dedup_hash)
                VALUES ('t', 'install', 'pip', 'crypto', 'package', 'sbom3')"""
         )
-        store_vuln(db, {
-            "package_name": "crypto", "vuln_id": "CVE-test-sbom",
-            "severity": "high", "source": "osv",
-        })
+        store_vuln(
+            db,
+            {
+                "package_name": "crypto",
+                "vuln_id": "CVE-test-sbom",
+                "severity": "high",
+                "source": "osv",
+            },
+        )
         db.commit()
         sbom = generate_sbom(db)
         comp = sbom["components"][0]

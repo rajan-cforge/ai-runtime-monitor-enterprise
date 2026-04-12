@@ -23,10 +23,12 @@ class TestEnvironmentGather:
         from claude_monitoring.supply_chain import get_pip_packages
 
         mock_sub.run.return_value = MagicMock(
-            stdout=json.dumps([
-                {"name": "requests", "version": "2.31.0"},
-                {"name": "flask", "version": "3.0.0"},
-            ]),
+            stdout=json.dumps(
+                [
+                    {"name": "requests", "version": "2.31.0"},
+                    {"name": "flask", "version": "3.0.0"},
+                ]
+            ),
             returncode=0,
         )
         pkgs = get_pip_packages()
@@ -45,9 +47,7 @@ class TestEnvironmentGather:
 
 class TestEnvironmentStore:
     def test_table_exists(self, db):
-        row = db.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='environment_packages'"
-        ).fetchone()
+        row = db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='environment_packages'").fetchone()
         assert row is not None
 
     def test_store_and_query(self, db):
@@ -77,14 +77,24 @@ class TestEnvironmentCrossRef:
         from claude_monitoring.supply_chain import store_environment_packages
         from claude_monitoring.vuln_scanner import store_vuln
 
-        store_environment_packages(db, [
-            {"name": "cryptography", "version": "41.0.0", "manager": "pip"},
-        ])
-        store_vuln(db, {
-            "package_name": "cryptography", "package_version": "41.0.0",
-            "ecosystem": "PyPI", "vuln_id": "CVE-test-1",
-            "severity": "high", "cvss_score": 7.5, "source": "osv",
-        })
+        store_environment_packages(
+            db,
+            [
+                {"name": "cryptography", "version": "41.0.0", "manager": "pip"},
+            ],
+        )
+        store_vuln(
+            db,
+            {
+                "package_name": "cryptography",
+                "package_version": "41.0.0",
+                "ecosystem": "PyPI",
+                "vuln_id": "CVE-test-1",
+                "severity": "high",
+                "cvss_score": 7.5,
+                "source": "osv",
+            },
+        )
         db.commit()
 
         row = db.execute("""
@@ -99,9 +109,12 @@ class TestEnvironmentCrossRef:
         """Packages installed by agents should be attributed."""
         from claude_monitoring.supply_chain import store_environment_packages
 
-        store_environment_packages(db, [
-            {"name": "fastapi", "version": "0.100.0", "manager": "pip"},
-        ])
+        store_environment_packages(
+            db,
+            [
+                {"name": "fastapi", "version": "0.100.0", "manager": "pip"},
+            ],
+        )
         db.execute(
             """INSERT INTO agent_dependencies
                (timestamp, action, package_manager, package_name, category, dedup_hash)

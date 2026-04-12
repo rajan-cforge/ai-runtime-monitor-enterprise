@@ -22,9 +22,7 @@ class TestVersionResolution:
     def test_pip_version(self, mock_sub):
         from claude_monitoring.vuln_scanner import resolve_installed_version
 
-        mock_sub.run.return_value = MagicMock(
-            stdout="Name: cryptography\nVersion: 42.0.4\nSummary: ...\n"
-        )
+        mock_sub.run.return_value = MagicMock(stdout="Name: cryptography\nVersion: 42.0.4\nSummary: ...\n")
         v = resolve_installed_version("cryptography", "pip")
         assert v == "42.0.4"
 
@@ -42,22 +40,24 @@ class TestPipAuditParsing:
 
         mock_sub.run.return_value = MagicMock(
             returncode=1,
-            stdout=json.dumps({
-                "dependencies": [
-                    {
-                        "name": "cryptography",
-                        "version": "41.0.0",
-                        "vulns": [
-                            {
-                                "id": "PYSEC-2024-001",
-                                "aliases": ["CVE-2024-26130"],
-                                "fix_versions": ["42.0.4"],
-                                "description": "NULL pointer dereference",
-                            }
-                        ],
-                    }
-                ]
-            }),
+            stdout=json.dumps(
+                {
+                    "dependencies": [
+                        {
+                            "name": "cryptography",
+                            "version": "41.0.0",
+                            "vulns": [
+                                {
+                                    "id": "PYSEC-2024-001",
+                                    "aliases": ["CVE-2024-26130"],
+                                    "fix_versions": ["42.0.4"],
+                                    "description": "NULL pointer dereference",
+                                }
+                            ],
+                        }
+                    ]
+                }
+            ),
         )
         vulns = run_pip_audit()
         assert len(vulns) == 1
@@ -69,9 +69,7 @@ class TestPipAuditParsing:
     def test_no_vulns(self, mock_sub):
         from claude_monitoring.vuln_scanner import run_pip_audit
 
-        mock_sub.run.return_value = MagicMock(
-            returncode=0, stdout=json.dumps({"dependencies": []})
-        )
+        mock_sub.run.return_value = MagicMock(returncode=0, stdout=json.dumps({"dependencies": []}))
         assert run_pip_audit() == []
 
 
@@ -81,18 +79,20 @@ class TestOSVQuery:
         from claude_monitoring.vuln_scanner import query_osv
 
         mock_resp = MagicMock()
-        mock_resp.read.return_value = json.dumps({
-            "vulns": [
-                {
-                    "id": "GHSA-xxxx",
-                    "summary": "XSS vulnerability",
-                    "aliases": ["CVE-2024-99999"],
-                    "severity": [{"type": "CVSS_V3", "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N"}],
-                    "database_specific": {"severity": "HIGH"},
-                    "affected": [{"ranges": [{"events": [{"fixed": "2.0.1"}]}]}],
-                }
-            ]
-        }).encode()
+        mock_resp.read.return_value = json.dumps(
+            {
+                "vulns": [
+                    {
+                        "id": "GHSA-xxxx",
+                        "summary": "XSS vulnerability",
+                        "aliases": ["CVE-2024-99999"],
+                        "severity": [{"type": "CVSS_V3", "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N"}],
+                        "database_specific": {"severity": "HIGH"},
+                        "affected": [{"ranges": [{"events": [{"fixed": "2.0.1"}]}]}],
+                    }
+                ]
+            }
+        ).encode()
         mock_urlopen.return_value.__enter__ = lambda s: mock_resp
         mock_urlopen.return_value.__exit__ = MagicMock(return_value=False)
         mock_urlopen.return_value = mock_resp
@@ -129,13 +129,20 @@ class TestStoreAndScan:
     def test_store_vuln(self, db):
         from claude_monitoring.vuln_scanner import store_vuln
 
-        store_vuln(db, {
-            "package_name": "foo", "package_version": "1.0",
-            "ecosystem": "PyPI", "vuln_id": "CVE-2024-1",
-            "severity": "high", "cvss_score": 7.5,
-            "fix_version": "1.1", "description": "test",
-            "source": "osv",
-        })
+        store_vuln(
+            db,
+            {
+                "package_name": "foo",
+                "package_version": "1.0",
+                "ecosystem": "PyPI",
+                "vuln_id": "CVE-2024-1",
+                "severity": "high",
+                "cvss_score": 7.5,
+                "fix_version": "1.1",
+                "description": "test",
+                "source": "osv",
+            },
+        )
         db.commit()
         row = db.execute("SELECT * FROM package_vulnerabilities WHERE vuln_id='CVE-2024-1'").fetchone()
         assert row is not None
@@ -145,21 +152,22 @@ class TestStoreAndScan:
         from claude_monitoring.vuln_scanner import store_vuln
 
         for _ in range(2):
-            store_vuln(db, {
-                "package_name": "foo", "package_version": "1.0",
-                "ecosystem": "PyPI", "vuln_id": "CVE-DUPE",
-                "source": "osv",
-            })
+            store_vuln(
+                db,
+                {
+                    "package_name": "foo",
+                    "package_version": "1.0",
+                    "ecosystem": "PyPI",
+                    "vuln_id": "CVE-DUPE",
+                    "source": "osv",
+                },
+            )
         db.commit()
-        count = db.execute(
-            "SELECT COUNT(*) FROM package_vulnerabilities WHERE vuln_id='CVE-DUPE'"
-        ).fetchone()[0]
+        count = db.execute("SELECT COUNT(*) FROM package_vulnerabilities WHERE vuln_id='CVE-DUPE'").fetchone()[0]
         assert count == 1
 
     def test_tables_exist(self, db):
-        tables = [r[0] for r in db.execute(
-            "SELECT name FROM sqlite_master WHERE type='table'"
-        ).fetchall()]
+        tables = [r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
         assert "package_vulnerabilities" in tables
         assert "scan_history" in tables
 

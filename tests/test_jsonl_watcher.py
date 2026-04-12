@@ -2318,7 +2318,9 @@ class TestEventDedup:
         count = db.execute("SELECT COUNT(*) FROM events WHERE session_id='dedup-session'").fetchone()[0]
         assert count >= 1  # at least one event stored
         # Check no duplicate dedup_hash
-        dupes = db.execute("SELECT dedup_hash, COUNT(*) as c FROM events WHERE session_id='dedup-session' GROUP BY dedup_hash HAVING c > 1").fetchall()
+        dupes = db.execute(
+            "SELECT dedup_hash, COUNT(*) as c FROM events WHERE session_id='dedup-session' GROUP BY dedup_hash HAVING c > 1"
+        ).fetchall()
         assert len(dupes) == 0, f"Found duplicate hashes: {dupes}"
 
     def test_backfill_does_not_duplicate(self, watcher, tmp_path, db):
@@ -2327,13 +2329,17 @@ class TestEventDedup:
         jsonl.parent.mkdir(parents=True)
         lines = []
         for i in range(10):
-            lines.append(json.dumps({
-                "uuid": f"backfill-uuid-{i}",
-                "type": "user",
-                "sessionId": "backfill-session",
-                "timestamp": f"2024-01-01T00:00:{i:02d}Z",
-                "message": {"role": "user", "content": [{"type": "text", "text": f"msg {i}"}]},
-            }))
+            lines.append(
+                json.dumps(
+                    {
+                        "uuid": f"backfill-uuid-{i}",
+                        "type": "user",
+                        "sessionId": "backfill-session",
+                        "timestamp": f"2024-01-01T00:00:{i:02d}Z",
+                        "message": {"role": "user", "content": [{"type": "text", "text": f"msg {i}"}]},
+                    }
+                )
+            )
         jsonl.write_text("\n".join(lines) + "\n")
 
         watcher.process_jsonl_file(str(jsonl))
@@ -2351,13 +2357,18 @@ class TestEventDedup:
         """After processing, file position is persisted; new data appended later is the only new events."""
         jsonl = tmp_path / "resume-session" / "session.jsonl"
         jsonl.parent.mkdir(parents=True)
-        lines = [json.dumps({
-            "uuid": f"resume-uuid-{i}",
-            "type": "user",
-            "sessionId": "resume-session",
-            "timestamp": f"2024-01-01T00:00:{i:02d}Z",
-            "message": {"role": "user", "content": [{"type": "text", "text": f"msg {i}"}]},
-        }) for i in range(5)]
+        lines = [
+            json.dumps(
+                {
+                    "uuid": f"resume-uuid-{i}",
+                    "type": "user",
+                    "sessionId": "resume-session",
+                    "timestamp": f"2024-01-01T00:00:{i:02d}Z",
+                    "message": {"role": "user", "content": [{"type": "text", "text": f"msg {i}"}]},
+                }
+            )
+            for i in range(5)
+        ]
         jsonl.write_text("\n".join(lines) + "\n")
 
         watcher.process_jsonl_file(str(jsonl))
@@ -2367,13 +2378,18 @@ class TestEventDedup:
         # Append 5 new lines
         with open(str(jsonl), "a") as f:
             for i in range(5, 10):
-                f.write(json.dumps({
-                    "uuid": f"resume-uuid-{i}",
-                    "type": "user",
-                    "sessionId": "resume-session",
-                    "timestamp": f"2024-01-01T00:01:{i:02d}Z",
-                    "message": {"role": "user", "content": [{"type": "text", "text": f"new msg {i}"}]},
-                }) + "\n")
+                f.write(
+                    json.dumps(
+                        {
+                            "uuid": f"resume-uuid-{i}",
+                            "type": "user",
+                            "sessionId": "resume-session",
+                            "timestamp": f"2024-01-01T00:01:{i:02d}Z",
+                            "message": {"role": "user", "content": [{"type": "text", "text": f"new msg {i}"}]},
+                        }
+                    )
+                    + "\n"
+                )
 
         watcher.process_jsonl_file(str(jsonl))
         watcher.db.commit()
@@ -2385,6 +2401,7 @@ class TestEventDedup:
     def test_dedup_hash_deterministic(self, watcher):
         """Identical event data produces the same dedup hash."""
         import hashlib
+
         data1 = json.dumps({"text": "hello"}, default=str)
         data2 = json.dumps({"text": "hello"}, default=str)
         key1 = f"2024-01-01|sess1|user_prompt|{data1}"
@@ -2396,6 +2413,7 @@ class TestEventDedup:
     def test_dedup_hash_unique_for_different_events(self, watcher):
         """Different timestamps produce different dedup hashes."""
         import hashlib
+
         data = json.dumps({"text": "hello"}, default=str)
         key1 = f"2024-01-01T00:00:00|sess1|user_prompt|{data}"
         key2 = f"2024-01-01T00:00:01|sess1|user_prompt|{data}"

@@ -25,56 +25,162 @@ INSTALL_PATTERNS = {
 
 # Flags that take no argument — skip the token
 SKIP_FLAGS = {
-    "--save-dev", "--global", "-g", "--break-system-packages",
-    "--no-cache-dir", "--quiet", "-q", "-U", "--upgrade", "-y",
-    "--yes", "--force", "-D", "--dev", "--save", "--save-exact",
-    "--production", "--legacy-peer-deps", "--no-optional",
-    "--no-default-features", "--optional", "--user", "--system",
+    "--save-dev",
+    "--global",
+    "-g",
+    "--break-system-packages",
+    "--no-cache-dir",
+    "--quiet",
+    "-q",
+    "-U",
+    "--upgrade",
+    "-y",
+    "--yes",
+    "--force",
+    "-D",
+    "--dev",
+    "--save",
+    "--save-exact",
+    "--production",
+    "--legacy-peer-deps",
+    "--no-optional",
+    "--no-default-features",
+    "--optional",
+    "--user",
+    "--system",
 }
 
 # Flags that consume the NEXT token as their argument — skip both
 FLAGS_WITH_VALUES = {
-    "--index-url", "--extra-index-url", "-i", "--trusted-host",
-    "--constraint", "-c", "--config-settings", "--features",
-    "--platform", "--implementation", "--python-version",
-    "--target", "-t", "--prefix", "--root",
+    "--index-url",
+    "--extra-index-url",
+    "-i",
+    "--trusted-host",
+    "--constraint",
+    "-c",
+    "--config-settings",
+    "--features",
+    "--platform",
+    "--implementation",
+    "--python-version",
+    "--target",
+    "-t",
+    "--prefix",
+    "--root",
 }
 
 REGISTRIES = {
-    "npm": "npmjs.org", "yarn": "npmjs.org", "pnpm": "npmjs.org", "npx": "npmjs.org",
-    "pip": "pypi.org", "cargo": "crates.io", "go": "proxy.golang.org",
-    "gem": "rubygems.org", "brew": "formulae.brew.sh", "apt": "apt",
+    "npm": "npmjs.org",
+    "yarn": "npmjs.org",
+    "pnpm": "npmjs.org",
+    "npx": "npmjs.org",
+    "pip": "pypi.org",
+    "cargo": "crates.io",
+    "go": "proxy.golang.org",
+    "gem": "rubygems.org",
+    "brew": "formulae.brew.sh",
+    "apt": "apt",
 }
 
 # Tokens that are NEVER packages — shell noise
 SHELL_NOISE = {
-    "tail", "head", "grep", "cat", "echo", "wc", "tee", "sort", "uniq",
-    "xargs", "sed", "awk", "tr", "true", "false", "test", "sleep",
-    "|", "||", "&&", ";", "\\", "2>&1", "2>/dev/null", ">", ">>",
-    "python3", "python", "python3.12", "python3.14", "python3.11",
-    "pip", "pip3", "install", "docker-compose", "docker", "exec",
-    "-T", "source", "activate", "cd", "mkdir", "rm", "cp", "mv",
-    "chmod", "chown", "sudo", "sh", "-c", "bash", "done",
-    "user-local", "user", "local", "global", "system",
-    "start", "enable", "service", "restart", "status", "stop",
-    "daemon-reload", "systemctl",
+    "tail",
+    "head",
+    "grep",
+    "cat",
+    "echo",
+    "wc",
+    "tee",
+    "sort",
+    "uniq",
+    "xargs",
+    "sed",
+    "awk",
+    "tr",
+    "true",
+    "false",
+    "test",
+    "sleep",
+    "|",
+    "||",
+    "&&",
+    ";",
+    "\\",
+    "2>&1",
+    "2>/dev/null",
+    ">",
+    ">>",
+    "python3",
+    "python",
+    "python3.12",
+    "python3.14",
+    "python3.11",
+    "pip",
+    "pip3",
+    "install",
+    "docker-compose",
+    "docker",
+    "exec",
+    "-T",
+    "source",
+    "activate",
+    "cd",
+    "mkdir",
+    "rm",
+    "cp",
+    "mv",
+    "chmod",
+    "chown",
+    "sudo",
+    "sh",
+    "-c",
+    "bash",
+    "done",
+    "user-local",
+    "user",
+    "local",
+    "global",
+    "system",
+    "start",
+    "enable",
+    "service",
+    "restart",
+    "status",
+    "stop",
+    "daemon-reload",
+    "systemctl",
 }
 
 KNOWN_TYPOSQUATS = {
-    "requets": "requests", "requsts": "requests",
-    "reqeusts": "requests", "request": "requests",
-    "colurs": "colors", "colers": "colors",
-    "axois": "axios", "axio": "axios", "axioss": "axios",
-    "loddash": "lodash", "loadash": "lodash", "lodahs": "lodash",
-    "expresss": "express", "exress": "express",
-    "underscor": "underscore", "undescore": "underscore",
+    "requets": "requests",
+    "requsts": "requests",
+    "reqeusts": "requests",
+    "request": "requests",
+    "colurs": "colors",
+    "colers": "colors",
+    "axois": "axios",
+    "axio": "axios",
+    "axioss": "axios",
+    "loddash": "lodash",
+    "loadash": "lodash",
+    "lodahs": "lodash",
+    "expresss": "express",
+    "exress": "express",
+    "underscor": "underscore",
+    "undescore": "underscore",
     "beutifulsoup": "beautifulsoup4",
-    "djanga": "django", "dajngo": "django",
-    "flassk": "flask", "flaask": "flask",
-    "numpyy": "numpy", "numpi": "numpy",
-    "pandass": "pandas", "pnadas": "pandas",
-    "tenserflow": "tensorflow", "tensorflw": "tensorflow",
-    "pytorh": "pytorch", "pytroch": "pytorch",
+    "djanga": "django",
+    "dajngo": "django",
+    "flassk": "flask",
+    "flaask": "flask",
+    "numpyy": "numpy",
+    "numpi": "numpy",
+    "pandass": "pandas",
+    "pnadas": "pandas",
+    "tenserflow": "tensorflow",
+    "tensorflw": "tensorflow",
+    "pytorh": "pytorch",
+    "pytroch": "pytorch",
 }
 
 HIGH_RISK_PACKAGES = {
@@ -94,17 +200,72 @@ HIGH_RISK_PACKAGES = {
 }
 
 SKIP_WORDS = {
-    "to", "for", "and", "or", "the", "in", "on", "at", "by", "up",
-    "is", "it", "no", "do", "if", "of", "as", "so", "we", "an",
-    "be", "he", "me", "my", "load", "gate", "quality", "scripts",
-    "tests", "build", "install", "run", "test", "check", "set", "get",
-    "all", "new", "use", "add", "api", "app", "bin", "lib", "src",
-    "out", "log", "env", "dev", "opt", "var", "tmp", "not", "but",
-    "bi", "py", "go", "sh", "ok", "os", "re", "id",
+    "to",
+    "for",
+    "and",
+    "or",
+    "the",
+    "in",
+    "on",
+    "at",
+    "by",
+    "up",
+    "is",
+    "it",
+    "no",
+    "do",
+    "if",
+    "of",
+    "as",
+    "so",
+    "we",
+    "an",
+    "be",
+    "he",
+    "me",
+    "my",
+    "load",
+    "gate",
+    "quality",
+    "scripts",
+    "tests",
+    "build",
+    "install",
+    "run",
+    "test",
+    "check",
+    "set",
+    "get",
+    "all",
+    "new",
+    "use",
+    "add",
+    "api",
+    "app",
+    "bin",
+    "lib",
+    "src",
+    "out",
+    "log",
+    "env",
+    "dev",
+    "opt",
+    "var",
+    "tmp",
+    "not",
+    "but",
+    "bi",
+    "py",
+    "go",
+    "sh",
+    "ok",
+    "os",
+    "re",
+    "id",
 }
 
 # Valid package name pattern: starts with letter/@ then alphanumeric/dash/dot/underscore/slash(scoped)
-_VALID_PKG_RE = re.compile(r'^[a-zA-Z@][a-zA-Z0-9._/:-]*[a-zA-Z0-9]$|^[a-zA-Z][a-zA-Z0-9]$')
+_VALID_PKG_RE = re.compile(r"^[a-zA-Z@][a-zA-Z0-9._/:-]*[a-zA-Z0-9]$|^[a-zA-Z][a-zA-Z0-9]$")
 
 
 def _is_valid_package_name(name):
@@ -120,7 +281,7 @@ def _is_valid_package_name(name):
     if name.lower() in SKIP_WORDS or name.lower() in SHELL_NOISE:
         return False
     # No trailing punctuation
-    if name[-1] in (')', '}', '"', "'", ',', ';', '\\'):
+    if name[-1] in (")", "}", '"', "'", ",", ";", "\\"):
         return False
     if name.endswith("-"):
         return False
@@ -134,23 +295,29 @@ def _is_valid_package_name(name):
 
 
 LOCKFILES = {
-    "package-lock.json": "npm", "yarn.lock": "yarn", "pnpm-lock.yaml": "pnpm",
-    "requirements.txt": "pip", "Pipfile.lock": "pip", "poetry.lock": "pip",
-    "Cargo.lock": "cargo", "go.sum": "go", "Gemfile.lock": "gem",
+    "package-lock.json": "npm",
+    "yarn.lock": "yarn",
+    "pnpm-lock.yaml": "pnpm",
+    "requirements.txt": "pip",
+    "Pipfile.lock": "pip",
+    "poetry.lock": "pip",
+    "Cargo.lock": "cargo",
+    "go.sum": "go",
+    "Gemfile.lock": "gem",
 }
 
 
 def _isolate_install_segment(command):
     """Split on shell operators and find the segment with the install keyword."""
     # Split on |, &&, ||, ; — take the segment that contains an install pattern
-    segments = re.split(r'\s*(?:\|\||&&|[|;])\s*', command)
+    segments = re.split(r"\s*(?:\|\||&&|[|;])\s*", command)
     for seg in segments:
         seg = seg.strip()
         for prefix in INSTALL_PATTERNS:
             if prefix in seg:
                 # Strip redirects
-                seg = re.sub(r'\s*2>[>&/\w]*', '', seg)
-                seg = re.sub(r'\s*>[>&\s/\w]*$', '', seg)
+                seg = re.sub(r"\s*2>[>&/\w]*", "", seg)
+                seg = re.sub(r"\s*>[>&\s/\w]*$", "", seg)
                 return seg.strip()
     return None
 
@@ -195,8 +362,7 @@ def parse_install_command(command):
     if matched_manager == "npx":
         for t in tokens:
             if not t.startswith("-") and t not in SHELL_NOISE and _is_valid_package_name(t):
-                return [{"name": t, "version": "latest", "pinned": False,
-                         "manager": "npx", "registry": registry}]
+                return [{"name": t, "version": "latest", "pinned": False, "manager": "npx", "registry": registry}]
         return []
 
     packages = []
@@ -214,18 +380,26 @@ def parse_install_command(command):
             # pip -r / -e handling
             if token == "-r" and matched_manager == "pip" and i + 1 < len(tokens):
                 skip_next = True
-                packages.append({
-                    "name": f"(from {tokens[i + 1]})",
-                    "version": "file", "pinned": True,
-                    "manager": matched_manager, "registry": registry,
-                })
+                packages.append(
+                    {
+                        "name": f"(from {tokens[i + 1]})",
+                        "version": "file",
+                        "pinned": True,
+                        "manager": matched_manager,
+                        "registry": registry,
+                    }
+                )
             elif token == "-e" and matched_manager == "pip" and i + 1 < len(tokens):
                 skip_next = True
-                packages.append({
-                    "name": "(editable install)",
-                    "version": "editable", "pinned": True,
-                    "manager": matched_manager, "registry": registry,
-                })
+                packages.append(
+                    {
+                        "name": "(editable install)",
+                        "version": "editable",
+                        "pinned": True,
+                        "manager": matched_manager,
+                        "registry": registry,
+                    }
+                )
             continue
 
         if token in SKIP_FLAGS or token in SHELL_NOISE or token.lower() in SKIP_WORDS:
@@ -241,10 +415,15 @@ def parse_install_command(command):
 
         name, version, pinned = _parse_package_token(token, matched_manager)
         if name and _is_valid_package_name(name):
-            packages.append({
-                "name": name, "version": version, "pinned": pinned,
-                "manager": matched_manager, "registry": registry,
-            })
+            packages.append(
+                {
+                    "name": name,
+                    "version": version,
+                    "pinned": pinned,
+                    "manager": matched_manager,
+                    "registry": registry,
+                }
+            )
 
     return packages
 
@@ -370,7 +549,7 @@ def store_dependency(db, timestamp, session_id, agent_type, package, command, cw
     level = risk_level(score)
     category = categorize_package(package["name"], package["manager"])
     project = extract_project(cwd) if cwd else extract_project(command)
-    dedup_key = f"{session_id}|{package['name']}|{package.get('version','')}|{command[:100]}"
+    dedup_key = f"{session_id}|{package['name']}|{package.get('version', '')}|{command[:100]}"
     dedup_hash = hashlib.sha256(dedup_key.encode()).hexdigest()[:16]
     try:
         db.execute(
@@ -380,14 +559,19 @@ def store_dependency(db, timestamp, session_id, agent_type, package, command, cw
                 command, risk_flags, risk_score, category, project, dedup_hash)
                VALUES (?, ?, ?, 'install', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
-                timestamp, session_id, agent_type,
-                package["manager"], package["name"],
+                timestamp,
+                session_id,
+                agent_type,
+                package["manager"],
+                package["name"],
                 package.get("version", "latest"),
                 1 if package.get("pinned") else 0,
                 package.get("registry", ""),
                 command[:500],
                 json.dumps({"score": score, "level": level, "reasons": reasons}),
-                score, category, project,
+                score,
+                category,
+                project,
                 dedup_hash,
             ),
         )
@@ -436,7 +620,9 @@ def get_pip_packages():
     try:
         result = subprocess.run(
             ["pip", "list", "--format=json"],
-            capture_output=True, text=True, timeout=15,
+            capture_output=True,
+            text=True,
+            timeout=15,
         )
         data = json.loads(result.stdout)
         return [{"name": p["name"], "version": p["version"], "manager": "pip"} for p in data]
@@ -449,13 +635,17 @@ def get_brew_packages():
     try:
         result = subprocess.run(
             ["brew", "list", "--versions"],
-            capture_output=True, text=True, timeout=15,
+            capture_output=True,
+            text=True,
+            timeout=15,
         )
         pkgs = []
         for line in result.stdout.strip().splitlines():
             parts = line.split()
             if parts:
-                pkgs.append({"name": parts[0], "version": parts[-1] if len(parts) > 1 else "unknown", "manager": "brew"})
+                pkgs.append(
+                    {"name": parts[0], "version": parts[-1] if len(parts) > 1 else "unknown", "manager": "brew"}
+                )
         return pkgs
     except Exception:
         return []
@@ -510,9 +700,7 @@ def populate_watchlist(db):
         except Exception:
             pass
     # Packages with CVEs → high priority
-    vuln_pkgs = db.execute(
-        "SELECT DISTINCT package_name FROM package_vulnerabilities"
-    ).fetchall()
+    vuln_pkgs = db.execute("SELECT DISTINCT package_name FROM package_vulnerabilities").fetchall()
     for r in vuln_pkgs:
         name = r["package_name"] if hasattr(r, "keys") else r[0]
         try:
@@ -550,7 +738,7 @@ def generate_sbom(db):
             "type": "library",
             "name": rd["package_name"],
             "version": rd.get("package_version") or "latest",
-            "purl": f"pkg:{rd.get('package_manager','pip')}/{rd['package_name']}@{rd.get('package_version','latest')}",
+            "purl": f"pkg:{rd.get('package_manager', 'pip')}/{rd['package_name']}@{rd.get('package_version', 'latest')}",
             "properties": [
                 {"name": "ai-monitor:agent_installed", "value": "true"},
                 {"name": "ai-monitor:agent_type", "value": str(rd.get("agent_type", ""))},
@@ -560,8 +748,10 @@ def generate_sbom(db):
         }
         if vulns:
             comp["vulnerabilities"] = [
-                {"id": dict(v)["vuln_id"] if hasattr(v, "keys") else v[0],
-                 "severity": dict(v)["severity"] if hasattr(v, "keys") else v[1]}
+                {
+                    "id": dict(v)["vuln_id"] if hasattr(v, "keys") else v[0],
+                    "severity": dict(v)["severity"] if hasattr(v, "keys") else v[1],
+                }
                 for v in vulns
             ]
         components.append(comp)

@@ -7,7 +7,7 @@ name = "ai-runtime-monitor"
 dynamic = ["version"]
 description = "CrowdStrike-style runtime monitor for AI coding agents"
 readme = "README.md"
-license = "Proprietary"
+license = { text = "Proprietary" }
 requires-python = ">=3.9"
 authors = [{ name = "GoCloudForge, Inc." }]
 keywords = ["ai", "monitoring", "security", "observability", "supply-chain"]
@@ -18,12 +18,13 @@ classifiers = [
     "Topic :: System :: Monitoring",
     "License :: Other/Proprietary License",
 ]
-dependencies = ["psutil>=5.9.0", "watchdog>=3.0"]
+dependencies = ["psutil>=5.9.0", "watchdog>=3.0", "cryptography>=42.0"]
 
 [project.optional-dependencies]
 watch = ["mitmproxy>=10.0"]
 plot = ["matplotlib>=3.5"]
-all = ["mitmproxy>=10.0", "matplotlib>=3.5"]
+security = ["sqlcipher3-binary>=0.5"]  # Optional: DB encryption at rest
+all = ["mitmproxy>=10.0", "matplotlib>=3.5", "sqlcipher3-binary>=0.5"]
 dev = ["pytest>=7.0", "pytest-cov>=4.0", "ruff>=0.4.0", "bandit>=1.7", "pip-audit>=2.7"]
 
 [project.urls]
@@ -58,4 +59,6 @@ addopts = "-v --tb=short"
 
 [tool.bandit]
 exclude_dirs = ["tests"]
-skips = ["B101", "B404", "B603", "B607"]
+# B310 is skipped because every urlopen call uses a hardcoded loopback or
+# trusted-upstream URL, never user input.
+skips = ["B101", "B404", "B603", "B607", "B310"]

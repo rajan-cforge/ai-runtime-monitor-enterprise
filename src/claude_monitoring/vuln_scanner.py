@@ -9,8 +9,13 @@ import urllib.request
 from datetime import datetime, timezone
 
 ECOSYSTEM_MAP = {
-    "pip": "PyPI", "npm": "npm", "cargo": "crates.io",
-    "go": "Go", "gem": "RubyGems", "brew": None, "apt": None,
+    "pip": "PyPI",
+    "npm": "npm",
+    "cargo": "crates.io",
+    "go": "Go",
+    "gem": "RubyGems",
+    "brew": None,
+    "apt": None,
 }
 
 
@@ -20,7 +25,9 @@ def resolve_installed_version(package_name, manager):
         if manager == "pip":
             result = subprocess.run(
                 ["pip", "show", package_name],
-                capture_output=True, text=True, timeout=5,
+                capture_output=True,
+                text=True,
+                timeout=5,
             )
             for line in result.stdout.splitlines():
                 if line.startswith("Version:"):
@@ -28,7 +35,9 @@ def resolve_installed_version(package_name, manager):
         elif manager == "npm":
             result = subprocess.run(
                 ["npm", "list", package_name, "--json", "--depth=0"],
-                capture_output=True, text=True, timeout=5,
+                capture_output=True,
+                text=True,
+                timeout=5,
             )
             data = json.loads(result.stdout)
             deps = data.get("dependencies", {})
@@ -44,25 +53,29 @@ def run_pip_audit():
     try:
         result = subprocess.run(
             ["pip-audit", "--format=json", "--desc"],
-            capture_output=True, text=True, timeout=120,
+            capture_output=True,
+            text=True,
+            timeout=120,
         )
         if result.returncode in (0, 1):  # 1 = vulns found
             data = json.loads(result.stdout)
             vulns = []
             for dep in data.get("dependencies", []):
                 for v in dep.get("vulns", []):
-                    vulns.append({
-                        "package_name": dep["name"],
-                        "package_version": dep["version"],
-                        "ecosystem": "PyPI",
-                        "vuln_id": v.get("id", ""),
-                        "aliases": json.dumps(v.get("aliases", [])),
-                        "severity": _fix_severity(v.get("fix_versions", [])),
-                        "cvss_score": None,
-                        "fix_version": v["fix_versions"][0] if v.get("fix_versions") else None,
-                        "description": (v.get("description") or "")[:200],
-                        "source": "pip-audit",
-                    })
+                    vulns.append(
+                        {
+                            "package_name": dep["name"],
+                            "package_version": dep["version"],
+                            "ecosystem": "PyPI",
+                            "vuln_id": v.get("id", ""),
+                            "aliases": json.dumps(v.get("aliases", [])),
+                            "severity": _fix_severity(v.get("fix_versions", [])),
+                            "cvss_score": None,
+                            "fix_version": v["fix_versions"][0] if v.get("fix_versions") else None,
+                            "description": (v.get("description") or "")[:200],
+                            "source": "pip-audit",
+                        }
+                    )
             return vulns
     except FileNotFoundError:
         pass
@@ -99,20 +112,22 @@ def query_osv(package_name, ecosystem, version=None):
             is_malicious = vuln.get("id", "").startswith("MAL-")
             severity = "malicious" if is_malicious else (db_sev if db_sev != "unknown" else _cvss_to_severity(cvss))
             fix_version = _extract_fix(vuln)
-            results.append({
-                "package_name": package_name,
-                "package_version": version or "unknown",
-                "ecosystem": ecosystem,
-                "vuln_id": vuln.get("id", ""),
-                "aliases": json.dumps(vuln.get("aliases", [])),
-                "severity": severity,
-                "cvss_score": cvss,
-                "fix_version": fix_version,
-                "description": (vuln.get("summary") or "")[:200],
-                "source": "osv",
-                "published": vuln.get("published", ""),
-                "modified": vuln.get("modified", ""),
-            })
+            results.append(
+                {
+                    "package_name": package_name,
+                    "package_version": version or "unknown",
+                    "ecosystem": ecosystem,
+                    "vuln_id": vuln.get("id", ""),
+                    "aliases": json.dumps(vuln.get("aliases", [])),
+                    "severity": severity,
+                    "cvss_score": cvss,
+                    "fix_version": fix_version,
+                    "description": (vuln.get("summary") or "")[:200],
+                    "source": "osv",
+                    "published": vuln.get("published", ""),
+                    "modified": vuln.get("modified", ""),
+                }
+            )
         return results
     except Exception:
         return []
@@ -196,8 +211,10 @@ def store_vuln(db, vuln):
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 datetime.now(timezone.utc).isoformat(),
-                vuln["package_name"], vuln.get("package_version"),
-                vuln.get("ecosystem"), vuln["vuln_id"],
+                vuln["package_name"],
+                vuln.get("package_version"),
+                vuln.get("ecosystem"),
+                vuln["vuln_id"],
                 vuln.get("aliases", "[]"),
                 vuln.get("severity", "unknown"),
                 vuln.get("cvss_score"),
@@ -265,8 +282,7 @@ def run_full_scan(db):
         db.execute(
             """INSERT INTO scan_history (timestamp, packages_scanned, vulns_found, sources)
                VALUES (?, ?, ?, ?)""",
-            (datetime.now(timezone.utc).isoformat(), results["scanned"],
-             results["vulns_found"], "pip-audit,osv"),
+            (datetime.now(timezone.utc).isoformat(), results["scanned"], results["vulns_found"], "pip-audit,osv"),
         )
     except Exception:
         pass
