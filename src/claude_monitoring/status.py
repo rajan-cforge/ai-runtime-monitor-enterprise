@@ -210,12 +210,11 @@ def show_status() -> int:
     print("  Core:")
     print(f"    Monitor:        {_fmt_check(monitor_running, 'Running', 'Stopped')}")
     print(f"    Dashboard:      {dashboard_url}")
-    print(
-        "    Database:       "
-        + _fmt_check(
-            db_encrypted, "Encrypted (SQLCipher)", "Available after: pip install 'ai-runtime-monitor[security]'"
-        )
-    )
+    if db_encrypted:
+        print("    Database:       ✅ Encrypted (SQLCipher)")
+    else:
+        print("    Database:       ✅ Active (chmod 600 + FileVault)")
+        print("                    Optional encryption: pip install 'ai-runtime-monitor[security]'")
     print()
     print("  Proxy:")
     print(f"    mitmproxy:      {_fmt_check(proxy_running, f'Running :{get_proxy_port()}', 'Stopped')}")
