@@ -277,7 +277,7 @@ body { background:var(--bg); color:var(--text); font-family:-apple-system,BlinkM
 </div>
 
 <div class="tabs">
-  <div class="tab active" data-tab="explorer">Session Explorer</div>
+  <div class="tab active" data-tab="explorer">Session Explorer <span id="tab-live-badge" style="font-size:10px;color:var(--green);font-weight:600;margin-left:4px"></span></div>
   <div class="tab" data-tab="feed">Live Feed</div>
   <div class="tab" data-tab="analytics">Analytics</div>
   <div class="tab" data-tab="insights">Insights</div>
@@ -300,6 +300,7 @@ body { background:var(--bg); color:var(--text); font-family:-apple-system,BlinkM
               <option value="all">All Sources</option>
               <option value="cli">CLI Sessions</option>
               <option value="browser">Browser AI</option>
+              <option value="desktop">Desktop Apps</option>
             </select>
             <select id="session-agent" onchange="loadSessions()" style="background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:6px 8px;color:var(--text);font-size:12px;cursor:pointer">
               <option value="">All Agents</option>
@@ -866,22 +867,35 @@ async function loadSessions() {
     const source = document.getElementById('session-source').value;
     const agentFilter = document.getElementById('session-agent').value;
     let url = API + '/api/sessions?sort=' + sort + '&include_browser=true';
-    if (source && source !== 'all') url += '&source=' + source;
+    if (source && source !== 'all' && source !== 'desktop') url += '&source=' + source;
     if (search) url += '&q=' + encodeURIComponent(search);
     const r = await fetch(url);
     const d = await r.json();
+    // Client-side desktop apps filter
+    if (source === 'desktop') {
+      var desktopPatterns = /desktop|chatgpt\.app|claude\s*desktop|cursor/i;
+      d.sessions = d.sessions.filter(function(s) {
+        return desktopPatterns.test(s.agent_type || '') || desktopPatterns.test(s.service || '') || desktopPatterns.test(s.model || '');
+      });
+    }
     // Client-side agent type filter
     if (agentFilter) {
       d.sessions = d.sessions.filter(function(s) { return s.agent_type === agentFilter; });
     }
+    // Mark live sessions (active within last 5 minutes)
+    var now = Date.now();
+    d.sessions.forEach(function(s) { s.is_live = s.last_activity && (now - new Date(s.last_activity).getTime()) < 300000; });
     const container = document.getElementById('session-list-items');
 
     // Build title map for feed
     d.sessions.forEach(s => { if (s.title) sessionTitleMap[s.session_id] = s.title; });
 
     // Partition into active and recent
-    var activeSessions = d.sessions.filter(function(s) { return s.last_activity && (Date.now() - new Date(s.last_activity).getTime()) < 300000; });
-    var recentSessions = d.sessions.filter(function(s) { return !s.last_activity || (Date.now() - new Date(s.last_activity).getTime()) >= 300000; });
+    var activeSessions = d.sessions.filter(function(s) { return s.is_live; });
+    var recentSessions = d.sessions.filter(function(s) { return !s.is_live; });
+    // Update live badge in Session Explorer tab
+    var liveBadge = document.getElementById('tab-live-badge');
+    if (liveBadge) liveBadge.innerHTML = activeSessions.length > 0 ? '<span class="active-dot"></span>' + activeSessions.length + ' LIVE' : '';
     var html = '';
     if (activeSessions.length > 0) {
       html += '<div style="padding:6px 12px;font-size:11px;font-weight:600;color:var(--green);text-transform:uppercase;letter-spacing:0.5px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:6px"><span class="active-dot"></span> ' + activeSessions.length + ' Live Session' + (activeSessions.length > 1 ? 's' : '') + '</div>';
@@ -898,8 +912,7 @@ async function loadSessions() {
       const cwdShort = isBrowser ? '' : shortPath(s.cwd);
       const risk = s.risk_level || 'low';
       const riskBadge = s.risk_score > 0 ? '<span class="risk-badge risk-'+risk+'">'+risk.toUpperCase()+'</span>' : '';
-      const isActive = s.last_activity && (Date.now() - new Date(s.last_activity).getTime()) < 300000;
-      const activeDot = isActive ? '<span class="active-dot"></span>' : '';
+      const activeDot = s.is_live ? '<span class="active-dot"></span>' : '';
       return '<div class="' + itemClass + '" data-id="'+s.session_id+'" data-risk="'+risk+'" data-score="'+(s.risk_score||0)+'" onclick="' + clickFn + '">'
         + '<div class="title">'
         + activeDot + riskBadge
