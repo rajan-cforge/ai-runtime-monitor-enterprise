@@ -896,7 +896,11 @@ echo "   Run: claude"
     #
     # Section 5: browser AI domains (claude.ai, chatgpt.com, gemini.google.com)
     # are added to the allowlist ONLY when the user has trusted the custom CA.
-    # Otherwise the browser shows scary cert warnings on every page load.
+    # Chrome exempts locally-installed root CAs from HSTS pin enforcement
+    # (documented at chromium.googlesource.com transport_security_state.h) —
+    # this is the same model used by Zscaler, Netskope, and every enterprise
+    # proxy. When the CA is NOT trusted, these domains are excluded so the
+    # browser doesn't show cert warnings.
     import re as _re
 
     from claude_monitoring.constants import AI_API_DOMAINS, AI_BROWSER_DOMAINS
