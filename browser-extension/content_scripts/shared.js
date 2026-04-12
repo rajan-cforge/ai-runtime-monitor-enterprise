@@ -90,7 +90,69 @@ function sendCaptureEvent(type, text) {
   }
 }
 
+// ─── Section 6: extension heartbeat ────────────────────────────
+// Every 60 seconds the content script reports selector match counts to the
+// monitor. The monitor's dashboard surfaces a yellow warning banner when:
+//   - A heartbeat hasn't arrived in 5+ minutes (extension crashed/blocked), or
+//   - Selector match counts drop to 0 (Anthropic/OpenAI/Google shipped a DOM
+//     change and our scrapers stopped matching).
+// Site-specific scripts override window.AIMon.getSelectorCounts() to plug
+// in their own selector lists. Default returns zeros so unconfigured pages
+// still send a heartbeat (so we can tell the extension is alive).
+let _capturesSent = 0;
+let _lastSelectorFailureReported = 0;
+
+function _defaultSelectorCounts() {
+  return { user: 0, assistant: 0 };
+}
+
+async function sendHeartbeat(extra) {
+  const counts = (window.AIMon && window.AIMon.getSelectorCounts)
+    ? window.AIMon.getSelectorCounts()
+    : _defaultSelectorCounts();
+  const failure = (counts.user === 0 && counts.assistant === 0);
+  const body = Object.assign({
+    hostname: window.location.hostname,
+    user_matches: counts.user,
+    assistant_matches: counts.assistant,
+    captures_sent: _capturesSent,
+    selector_failure: failure,
+    timestamp: new Date().toISOString(),
+  }, extra || {});
+  try {
+    await fetch('http://127.0.0.1:9081/api/browser/heartbeat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  } catch (e) {
+    // Monitor not running — silently drop. Extension keeps trying every 60s.
+  }
+}
+
+// Wrap sendCaptureEvent to count successful sends for the heartbeat
+const _origSendCaptureEvent = sendCaptureEvent;
+function sendCaptureEventTracked(type, text) {
+  _origSendCaptureEvent(type, text);
+  _capturesSent += 1;
+}
+
 // Export for site-specific scripts
 if (typeof window !== 'undefined') {
-  window.AIMon = { sendCaptureEvent, truncateText, getService, getConversationId };
+  window.AIMon = {
+    sendCaptureEvent: sendCaptureEventTracked,
+    sendHeartbeat,
+    truncateText,
+    getService,
+    getConversationId,
+    getSelectorCounts: _defaultSelectorCounts,
+  };
+
+  // Start the heartbeat loop. First beat fires after 5 seconds so the
+  // selector self-test (Section 6d) can populate its findElements counts
+  // before we ask for them.
+  setTimeout(function() {
+    sendHeartbeat();
+    setInterval(sendHeartbeat, 60000);
+  }, 5000);
 }

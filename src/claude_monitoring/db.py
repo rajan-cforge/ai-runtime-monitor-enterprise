@@ -143,6 +143,20 @@ def init_db(db_path=None):
         window_id INTEGER
     )""")
 
+    # Section 6: extension heartbeat — content scripts post selector match
+    # counts every 60s. Used by /api/browser/extension-health to alert when
+    # Anthropic/OpenAI/Google ship DOM changes that break our scraping.
+    c.execute("""CREATE TABLE IF NOT EXISTS extension_heartbeats (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        hostname TEXT NOT NULL,
+        last_seen TEXT NOT NULL,
+        user_matches INTEGER DEFAULT 0,
+        assistant_matches INTEGER DEFAULT 0,
+        captures_sent INTEGER DEFAULT 0,
+        selector_failure INTEGER DEFAULT 0,
+        UNIQUE(hostname)
+    )""")
+
     c.execute("""CREATE TABLE IF NOT EXISTS api_calls (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         timestamp TEXT NOT NULL,

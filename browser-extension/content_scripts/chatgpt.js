@@ -59,17 +59,30 @@
     }
   }
 
-  // Also keep MutationObserver as a backup for immediate detection
+  // Also keep MutationObserver as a backup for immediate detection.
+  // Section 6c: re-poll 5s later to catch the final streaming chunk after
+  // ChatGPT marks the response complete.
   const observer = new MutationObserver(function() {
-    // Debounce: wait 2 seconds after last mutation for streaming to finish
     clearTimeout(observer._timeout);
-    observer._timeout = setTimeout(pollForNewMessages, 2000);
+    observer._timeout = setTimeout(function() {
+      pollForNewMessages();
+      setTimeout(pollForNewMessages, 5000);
+    }, 2000);
   });
 
   function start() {
     const target = document.querySelector('main') || document.body;
     observer.observe(target, { childList: true, subtree: true });
     setInterval(pollForNewMessages, 5000);
+
+    // Section 6: expose selector counts for the heartbeat. ChatGPT user
+    // input is captured via Enter/click rather than DOM scraping, so we
+    // only report assistant counts here.
+    if (window.AIMon) {
+      window.AIMon.getSelectorCounts = function() {
+        return { user: 0, assistant: findAssistantMessages().length };
+      };
+    }
 
     // Self-test: log which selectors match
     for (const sel of ASSISTANT_SELECTORS) {

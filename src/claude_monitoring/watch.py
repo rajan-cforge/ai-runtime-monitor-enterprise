@@ -539,15 +539,64 @@ try:
             print("  Intercepting: api.anthropic.com + telemetry hosts")
             print("  Press Ctrl+C to stop and analyze\n")
 
+        # Section 5: static asset extensions skipped from browser metadata
+        # capture so we don't fill the DB with .js/.css/.png noise.
+        _STATIC_EXTS = (
+            ".js",
+            ".css",
+            ".png",
+            ".jpg",
+            ".jpeg",
+            ".gif",
+            ".svg",
+            ".webp",
+            ".woff",
+            ".woff2",
+            ".ttf",
+            ".eot",
+            ".ico",
+            ".map",
+            ".mp4",
+            ".webm",
+        )
+
         def _get_service(self, host: str) -> str:
             for h, svc in AI_HOSTS.items():
                 if h in host:
                     return svc
+            # Browser AI sites get a synthetic service name
+            from claude_monitoring.constants import AI_BROWSER_DOMAINS
+
+            for d in AI_BROWSER_DOMAINS:
+                if host.endswith(d):
+                    return self._classify_browser_service(host)
             return "unknown"
 
+        def _classify_browser_service(self, host: str) -> str:
+            if "claude.ai" in host:
+                return "claude_web"
+            if "chatgpt.com" in host or "chat.openai.com" in host:
+                return "chatgpt_web"
+            if "gemini.google.com" in host:
+                return "gemini_web"
+            if "perplexity.ai" in host:
+                return "perplexity_web"
+            return "browser_ai"
+
+        def _is_static_asset(self, path: str) -> bool:
+            base = path.split("?", 1)[0].lower()
+            return any(base.endswith(ext) for ext in self._STATIC_EXTS)
+
         def request(self, flow: mhttp.HTTPFlow):
+            from claude_monitoring.constants import AI_BROWSER_DOMAINS
+
             host = flow.request.host
-            if not any(h in host for h in AI_HOSTS):
+            is_api = any(h in host for h in AI_HOSTS)
+            is_browser = any(host.endswith(d) for d in AI_BROWSER_DOMAINS)
+            if not is_api and not is_browser:
+                return
+            # Browser metadata path: skip static assets entirely
+            if not is_api and is_browser and self._is_static_asset(flow.request.path):
                 return
 
             self.turn_counter += 1
@@ -591,17 +640,24 @@ try:
                 "raw_request_hash": "",
             }
             record["_start_time"] = time.time()
+            # Section 5: tag the source so the dashboard can distinguish full
+            # API parsing ("proxy") from metadata-only browser capture
+            # ("browser_proxy"). Both still flow through the same _write_row.
+            record["_is_browser_metadata"] = not is_api and is_browser
+            record["source"] = "browser_proxy" if record["_is_browser_metadata"] else "proxy"
 
-            # Parse request body using service-specific parser
-            service = record["destination_service"]
-            req_parser = SERVICE_PARSERS_REQUEST.get(service)
-            if req_parser and flow.request.method == "POST":
-                try:
-                    body = json.loads(flow.request.content)
-                    record = req_parser(body, record)
-                    record["raw_request_hash"] = hashlib.sha256(flow.request.content).hexdigest()[:12]
-                except Exception:
-                    pass
+            # Parse request body using service-specific parser. Browser AI
+            # sites are metadata-only — never try to JSON-parse SSE/protobuf.
+            if not record["_is_browser_metadata"]:
+                service = record["destination_service"]
+                req_parser = SERVICE_PARSERS_REQUEST.get(service)
+                if req_parser and flow.request.method == "POST":
+                    try:
+                        body = json.loads(flow.request.content)
+                        record = req_parser(body, record)
+                        record["raw_request_hash"] = hashlib.sha256(flow.request.content).hexdigest()[:12]
+                    except Exception:
+                        pass
 
             self.pending[flow.id] = record
 
@@ -611,14 +667,16 @@ try:
 
             record = self.pending.pop(flow.id)
             start = record.pop("_start_time", time.time())
+            is_browser_meta = record.pop("_is_browser_metadata", False)
             record["latency_ms"] = round((time.time() - start) * 1000)
             record["http_status"] = flow.response.status_code
             record["response_size_bytes"] = len(flow.response.content or b"")
             record["request_id"] = flow.response.headers.get("x-request-id", "")
 
-            # Parse response using service-specific parser
+            # Parse response using service-specific parser — skip for browser
+            # metadata-only path (Section 5).
             service = record.get("destination_service", "")
-            resp_parsers = SERVICE_PARSERS_RESPONSE.get(service)
+            resp_parsers = None if is_browser_meta else SERVICE_PARSERS_RESPONSE.get(service)
             if resp_parsers:
                 try:
                     raw = flow.response.content.decode("utf-8", errors="replace")
@@ -830,16 +888,35 @@ echo "   Run: claude"
     print("   claude\n")
     print("=" * 50 + "\n")
 
-    # Launch mitmdump with this script as addon
+    # Launch mitmdump with this script as addon.
     # Selective SSL inspection: only AI API domains are decrypted.
     # mitmproxy matches the regex against "host:port", so we anchor on ":" at the end.
     # NOTE: --set allow_hosts=<json> does NOT work for sequence options — must use the
     # --allow-hosts flag with a single regex.
+    #
+    # Section 5: browser AI domains (claude.ai, chatgpt.com, gemini.google.com)
+    # are added to the allowlist ONLY when the user has trusted the custom CA.
+    # Otherwise the browser shows scary cert warnings on every page load.
     import re as _re
 
-    from claude_monitoring.constants import AI_PROXY_DOMAINS
+    from claude_monitoring.constants import AI_API_DOMAINS, AI_BROWSER_DOMAINS
 
-    allow_pattern = "^(" + "|".join(_re.escape(d) for d in AI_PROXY_DOMAINS) + "):"
+    domains = list(AI_API_DOMAINS)
+    cert_trusted = False
+    try:
+        from claude_monitoring.status import _is_cert_trusted
+
+        cert_trusted = _is_cert_trusted()
+    except Exception:
+        pass
+    if cert_trusted:
+        domains.extend(AI_BROWSER_DOMAINS)
+        print("  ✅ CA trusted — browser AI sites will be inspected (metadata only)")
+    else:
+        print("  ⚠ CA not trusted — browser AI sites excluded from proxy")
+        print("    Run 'ai-monitor --setup' to trust the CA and enable browser metadata capture")
+
+    allow_pattern = "^(" + "|".join(_re.escape(d) for d in domains) + "):"
 
     cmd = [
         "mitmdump",
