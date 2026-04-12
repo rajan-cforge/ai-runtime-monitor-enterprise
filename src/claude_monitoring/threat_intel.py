@@ -32,7 +32,12 @@ def fetch_pypi_metadata(package_name):
                 if "License" in c and "::" in c:
                     license_name = c.split("::")[-1].strip()
                     break
-        repo_url = info.get("project_urls", {}).get("Source") or info.get("project_urls", {}).get("Repository") or info.get("project_urls", {}).get("Homepage") or ""
+        repo_url = (
+            info.get("project_urls", {}).get("Source")
+            or info.get("project_urls", {}).get("Repository")
+            or info.get("project_urls", {}).get("Homepage")
+            or ""
+        )
         return {
             "name": package_name,
             "description": (info.get("summary") or "")[:200],
@@ -86,7 +91,9 @@ def fetch_npm_metadata(package_name):
         return {
             "name": package_name,
             "description": (data.get("description") or "")[:200],
-            "author": data.get("author", {}).get("name", "") if isinstance(data.get("author"), dict) else str(data.get("author", "")),
+            "author": data.get("author", {}).get("name", "")
+            if isinstance(data.get("author"), dict)
+            else str(data.get("author", "")),
             "license": data.get("license") or "",
             "repository": data.get("repository", {}).get("url", "") if isinstance(data.get("repository"), dict) else "",
             "first_published": created,
@@ -223,8 +230,14 @@ def detect_maintainer_changes(name, manager, current_meta, db):
                     """INSERT OR REPLACE INTO package_maintainer_history
                        (package_name, manager, scan_timestamp, maintainer_data, publisher, version)
                        VALUES (?, ?, ?, ?, ?, ?)""",
-                    (name, manager, datetime.now(timezone.utc).isoformat(),
-                     json.dumps(curr_maintainers), curr_publisher, curr_version),
+                    (
+                        name,
+                        manager,
+                        datetime.now(timezone.utc).isoformat(),
+                        json.dumps(curr_maintainers),
+                        curr_publisher,
+                        curr_version,
+                    ),
                 )
                 db.commit()
             except Exception:
@@ -242,8 +255,14 @@ def detect_maintainer_changes(name, manager, current_meta, db):
             """INSERT OR REPLACE INTO package_maintainer_history
                (package_name, manager, scan_timestamp, maintainer_data, publisher, version)
                VALUES (?, ?, ?, ?, ?, ?)""",
-            (name, manager, datetime.now(timezone.utc).isoformat(),
-             json.dumps(curr_maintainers), curr_publisher, curr_version),
+            (
+                name,
+                manager,
+                datetime.now(timezone.utc).isoformat(),
+                json.dumps(curr_maintainers),
+                curr_publisher,
+                curr_version,
+            ),
         )
         db.commit()
     except Exception:
@@ -255,8 +274,12 @@ def detect_maintainer_changes(name, manager, current_meta, db):
 # ── Malicious package detection via OSV MAL- prefix ──────
 
 KNOWN_MALICIOUS_PACKAGES = {
-    "strapi-plugin-cron", "strapi-plugin-config", "strapi-plugin-server",
-    "strapi-plugin-database", "strapi-plugin-core", "strapi-plugin-hooks",
+    "strapi-plugin-cron",
+    "strapi-plugin-config",
+    "strapi-plugin-server",
+    "strapi-plugin-database",
+    "strapi-plugin-core",
+    "strapi-plugin-hooks",
 }
 
 
@@ -281,7 +304,7 @@ def fetch_threatfox_iocs():
         data = json.loads(resp.read())
         ips = {}
         domains = {}
-        for ioc in (data.get("data") or []):
+        for ioc in data.get("data") or []:
             ioc_val = ioc.get("ioc", "")
             ioc_type = ioc.get("ioc_type", "")
             info = {
@@ -330,24 +353,18 @@ def check_connection_against_iocs(remote_host, db):
     if not remote_host:
         return None
     # Exact IP match
-    row = db.execute(
-        "SELECT * FROM threat_iocs WHERE ioc_type='ip' AND ioc_value=?", (remote_host,)
-    ).fetchone()
+    row = db.execute("SELECT * FROM threat_iocs WHERE ioc_type='ip' AND ioc_value=?", (remote_host,)).fetchone()
     if row:
         return dict(row)
     # Exact domain match
-    row = db.execute(
-        "SELECT * FROM threat_iocs WHERE ioc_type='domain' AND ioc_value=?", (remote_host,)
-    ).fetchone()
+    row = db.execute("SELECT * FROM threat_iocs WHERE ioc_type='domain' AND ioc_value=?", (remote_host,)).fetchone()
     if row:
         return dict(row)
     # Subdomain match
     parts = remote_host.split(".")
     for i in range(1, len(parts)):
         parent = ".".join(parts[i:])
-        row = db.execute(
-            "SELECT * FROM threat_iocs WHERE ioc_type='domain' AND ioc_value=?", (parent,)
-        ).fetchone()
+        row = db.execute("SELECT * FROM threat_iocs WHERE ioc_type='domain' AND ioc_value=?", (parent,)).fetchone()
         if row:
             return dict(row)
     return None

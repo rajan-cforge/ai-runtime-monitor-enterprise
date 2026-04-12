@@ -32,9 +32,7 @@ class TestCVSSParsing:
         from claude_monitoring.vuln_scanner import _extract_cvss
 
         vuln = {
-            "severity": [
-                {"type": "CVSS_V3", "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N"}
-            ],
+            "severity": [{"type": "CVSS_V3", "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N"}],
         }
         cvss = _extract_cvss(vuln)
         # Should not be None — should extract something from vector
@@ -72,17 +70,20 @@ class TestCVSSParsing:
     def test_stored_vuln_has_score(self, db):
         from claude_monitoring.vuln_scanner import store_vuln
 
-        store_vuln(db, {
-            "package_name": "test-pkg",
-            "package_version": "1.0",
-            "ecosystem": "PyPI",
-            "vuln_id": "GHSA-test-1",
-            "severity": "high",
-            "cvss_score": 7.5,
-            "fix_version": "2.0",
-            "description": "test vuln",
-            "source": "osv",
-        })
+        store_vuln(
+            db,
+            {
+                "package_name": "test-pkg",
+                "package_version": "1.0",
+                "ecosystem": "PyPI",
+                "vuln_id": "GHSA-test-1",
+                "severity": "high",
+                "cvss_score": 7.5,
+                "fix_version": "2.0",
+                "description": "test vuln",
+                "source": "osv",
+            },
+        )
         db.commit()
         row = db.execute(
             "SELECT cvss_score, severity FROM package_vulnerabilities WHERE vuln_id='GHSA-test-1'"
@@ -101,21 +102,24 @@ class TestConfidenceFilterBackend:
                    VALUES (?, 's1', 'sensitive_data', 'network', ?, ?)""",
                 (
                     f"2026-04-04T00:00:{i:02d}Z",
-                    json.dumps({
-                        "patterns": ["aws_key"], "severity": "critical",
-                        "categories": ["credential"], "context": "tool_result",
-                        "snippet": f"test {i}", "confidence": conf,
-                        "likely_false_positive": conf == "low",
-                    }),
+                    json.dumps(
+                        {
+                            "patterns": ["aws_key"],
+                            "severity": "critical",
+                            "categories": ["credential"],
+                            "context": "tool_result",
+                            "snippet": f"test {i}",
+                            "confidence": conf,
+                            "likely_false_positive": conf == "low",
+                        }
+                    ),
                     f"conf-test-{i}",
                 ),
             )
         db.commit()
 
         # Simulate API behavior: count with confidence filter
-        all_count = db.execute(
-            "SELECT COUNT(*) FROM events WHERE event_type='sensitive_data'"
-        ).fetchone()[0]
+        all_count = db.execute("SELECT COUNT(*) FROM events WHERE event_type='sensitive_data'").fetchone()[0]
         assert all_count == 6
 
         high_count = db.execute(

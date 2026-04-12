@@ -81,9 +81,7 @@ class TestParsePipInstall:
         assert "editable" in result[0]["name"].lower()
 
     def test_index_url_skipped(self):
-        result = parse_install_command(
-            "pip install --index-url https://custom.pypi.org/simple/ my-pkg"
-        )
+        result = parse_install_command("pip install --index-url https://custom.pypi.org/simple/ my-pkg")
         assert len(result) == 1
         assert result[0]["name"] == "my-pkg"
 
@@ -154,9 +152,7 @@ class TestShellNoiseFiltering:
         assert result[0]["name"] == "boto3"
 
     def test_platform_flags_skipped(self):
-        result = parse_install_command(
-            "pip install --platform manylinux2014_x86_64 --python-version 3.12 cryptography"
-        )
+        result = parse_install_command("pip install --platform manylinux2014_x86_64 --python-version 3.12 cryptography")
         names = [p["name"] for p in result]
         assert names == ["cryptography"]
 
@@ -174,9 +170,7 @@ class TestShellNoiseFiltering:
         assert len(result) == 0
 
     def test_docker_compose_prefix(self):
-        result = parse_install_command(
-            "docker-compose exec -T api pip install pytest moto"
-        )
+        result = parse_install_command("docker-compose exec -T api pip install pytest moto")
         names = [p["name"] for p in result]
         assert "pytest" in names
         assert "moto" in names
@@ -314,9 +308,7 @@ class TestApiEndpoint:
         return conn
 
     def test_table_exists(self, db):
-        row = db.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='agent_dependencies'"
-        ).fetchone()
+        row = db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='agent_dependencies'").fetchone()
         assert row is not None
 
     def test_category_column_exists(self, db):
@@ -333,9 +325,7 @@ class TestApiEndpoint:
                    VALUES ('t', 'install', 'npm', 'foo', 'dup-hash')"""
             )
         db.commit()
-        count = db.execute(
-            "SELECT COUNT(*) FROM agent_dependencies WHERE dedup_hash='dup-hash'"
-        ).fetchone()[0]
+        count = db.execute("SELECT COUNT(*) FROM agent_dependencies WHERE dedup_hash='dup-hash'").fetchone()[0]
         assert count == 1
 
 
@@ -374,9 +364,7 @@ class TestBackfill:
         count = backfill_dependencies(db)
         assert count >= 4
 
-        rows = db.execute(
-            "SELECT * FROM agent_dependencies ORDER BY package_name"
-        ).fetchall()
+        rows = db.execute("SELECT * FROM agent_dependencies ORDER BY package_name").fetchall()
         names = {r["package_name"] for r in rows}
         assert "express" in names
         assert "requests" in names
@@ -399,10 +387,7 @@ class TestBackfill:
         )
         db.commit()
         backfill_dependencies(db)
-        names = [
-            r[0]
-            for r in db.execute("SELECT package_name FROM agent_dependencies").fetchall()
-        ]
+        names = [r[0] for r in db.execute("SELECT package_name FROM agent_dependencies").fetchall()]
         assert "mitmproxy" in names
         assert "tail" not in names
         assert "|" not in names
