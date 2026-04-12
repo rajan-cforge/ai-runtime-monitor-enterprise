@@ -661,10 +661,18 @@ class JSONLSessionWatcher:
 
     # Patterns that should never be session titles
     _TITLE_SKIP_PREFIXES = (
-        "Conversation info", "Sender (untrusted", "Sender (", "untrusted metadata",
-        "Caveat:", "Caveat: The messages", "[Request interrupted",
-        "Start with this:", "Then paste this", "Your task is to create a detailed summary",
-        "de619ec2", "{ \"label\"",
+        "Conversation info",
+        "Sender (untrusted",
+        "Sender (",
+        "untrusted metadata",
+        "Caveat:",
+        "Caveat: The messages",
+        "[Request interrupted",
+        "Start with this:",
+        "Then paste this",
+        "Your task is to create a detailed summary",
+        "de619ec2",
+        '{ "label"',
     )
 
     @staticmethod
@@ -1005,18 +1013,34 @@ class JSONLSessionWatcher:
                 name_lower = pkg["name"].lower()
                 if name_lower in KNOWN_TYPOSQUATS:
                     real_pkg = KNOWN_TYPOSQUATS[name_lower]
-                    self._store_event(timestamp, session_id, "sensitive_data", "supply_chain", {
-                        "severity": "critical", "patterns": ["typosquat"],
-                        "categories": ["supply_chain"], "context": "tool:Bash",
-                        "snippet": f"Agent installed '{pkg['name']}' — known typosquat of '{real_pkg}'. Command: {command[:200]}",
-                    })
+                    self._store_event(
+                        timestamp,
+                        session_id,
+                        "sensitive_data",
+                        "supply_chain",
+                        {
+                            "severity": "critical",
+                            "patterns": ["typosquat"],
+                            "categories": ["supply_chain"],
+                            "context": "tool:Bash",
+                            "snippet": f"Agent installed '{pkg['name']}' — known typosquat of '{real_pkg}'. Command: {command[:200]}",
+                        },
+                    )
                 # High alert for high-risk packages
                 elif level in ("high", "critical"):
-                    self._store_event(timestamp, session_id, "sensitive_data", "supply_chain", {
-                        "severity": level, "patterns": ["supply_chain_risk"],
-                        "categories": ["supply_chain"], "context": "tool:Bash",
-                        "snippet": f"Agent installed '{pkg['name']}' (risk score: {score}). Command: {command[:200]}",
-                    })
+                    self._store_event(
+                        timestamp,
+                        session_id,
+                        "sensitive_data",
+                        "supply_chain",
+                        {
+                            "severity": level,
+                            "patterns": ["supply_chain_risk"],
+                            "categories": ["supply_chain"],
+                            "context": "tool:Bash",
+                            "snippet": f"Agent installed '{pkg['name']}' (risk score: {score}). Command: {command[:200]}",
+                        },
+                    )
             self.db.commit()
         except Exception:
             pass
@@ -1041,7 +1065,9 @@ class JSONLSessionWatcher:
         if context and context.startswith("tool:"):
             text_lower = (full_text or "").lower()
             # Git commits about security = low
-            if "git commit" in text_lower and any(w in text_lower for w in ("mask", "redact", "secret", "fix", "clean")):
+            if "git commit" in text_lower and any(
+                w in text_lower for w in ("mask", "redact", "secret", "fix", "clean")
+            ):
                 return "low"
             # SQL/DB cleanup = low
             if any(w in text_lower for w in ("delete from", "sqlite3", "vacuum", "select count")):
@@ -1113,15 +1139,28 @@ class JSONLSessionWatcher:
             except Exception:
                 pass
 
-        categories = list(set(m["category"] for m in matches))
+        categories = list({m["category"] for m in matches})
+        from claude_monitoring.security import hash_value, mask_value
+
+        # Replace the raw credential everywhere it appears in the snippet so
+        # surrounding context is preserved but the secret is redacted. We
+        # also redact match_context the same way. The DB must NEVER contain
+        # the raw value — an attacker who exfiltrates monitor.db gets no
+        # usable secrets by design.
+        masked_value = mask_value(matched_value)
+        raw_snippet = text[:200] if text else ""
+        safe_snippet = raw_snippet.replace(matched_value, masked_value) if matched_value else raw_snippet
+        safe_match_context = match_context.replace(matched_value, masked_value) if matched_value else match_context
+
         event_data = {
             "patterns": pattern_names,
             "severity": severity,
             "categories": categories,
             "context": context,
-            "snippet": text[:200],
-            "matched_value": matched_value,
-            "match_context": match_context,
+            "snippet": safe_snippet,
+            "matched_value": masked_value,
+            "matched_hash": hash_value(matched_value),
+            "match_context": safe_match_context,
             "confidence": confidence,
             "likely_false_positive": likely_fp,
         }
@@ -1721,6 +1760,36 @@ class DashboardHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         pass  # Suppress default logging
 
+    def _check_auth(self, path: str, params: dict) -> bool:
+        """Return True when the request is authorized.
+
+        Unauthenticated paths: the dashboard HTML itself (so users can bookmark
+        localhost:9081 and paste their token), favicon, and CORS preflight.
+        Everything under /api/ requires a valid token — either via
+        ``?token=...`` query param or ``Authorization: Bearer ...`` header.
+        """
+        # HTML/static routes are open so the page can load and prompt for a token.
+        if path == "/" or path.endswith(".html") or path == "/favicon.ico":
+            return True
+        # Loopback-only: DISABLE_DASHBOARD_AUTH=1 lets tests opt out.
+        if os.environ.get("DISABLE_DASHBOARD_AUTH") == "1":
+            return True
+        presented = ""
+        if params.get("token"):
+            presented = params.get("token", [""])[0]
+        if not presented:
+            auth_header = self.headers.get("Authorization", "")
+            if auth_header.startswith("Bearer "):
+                presented = auth_header[7:]
+        if not presented:
+            return False
+        try:
+            from claude_monitoring.security import verify_token
+
+            return verify_token(presented)
+        except Exception:
+            return False
+
     def do_GET(self):
         parsed = urlparse(self.path)
         path = parsed.path
@@ -1781,6 +1850,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 params["id"] = [remainder]
                 path = "/api/session"
 
+        if not self._check_auth(path, params):
+            self._send_json(
+                {"error": "unauthorized", "hint": "include ?token=... from ~/claude_watch_output/.dashboard_token"}, 401
+            )
+            return
+
         handler = routes.get(path)
         if handler:
             try:
@@ -1798,6 +1873,15 @@ class DashboardHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         parsed = urlparse(self.path)
         path = parsed.path
+        params = parse_qs(parsed.query)
+
+        # /api/browser/ingest comes from the Chrome extension which cannot
+        # easily attach a token — the extension runs in a separate origin and
+        # loopback-only makes this an acceptable trade-off. Same for the
+        # heartbeat endpoint added in Section 6.
+        if path not in ("/api/browser/ingest", "/api/browser/heartbeat") and not self._check_auth(path, params):
+            self._send_json({"error": "unauthorized"}, 401)
+            return
 
         post_routes = {
             "/api/alerts/dismiss": self._api_alerts_dismiss,
@@ -1919,12 +2003,14 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 )
                 stored += 1
                 # Push to live feed
-                push_live_event({
-                    "timestamp": timestamp,
-                    "session_id": "browser_" + (conv_id or ""),
-                    "event_type": "browser_ai",
-                    "summary": f"{service}: {ev_type.replace('_',' ')} — {(text or '')[:60]}",
-                })
+                push_live_event(
+                    {
+                        "timestamp": timestamp,
+                        "session_id": "browser_" + (conv_id or ""),
+                        "event_type": "browser_ai",
+                        "summary": f"{service}: {ev_type.replace('_', ' ')} — {(text or '')[:60]}",
+                    }
+                )
             except Exception:
                 continue
 
@@ -1935,18 +2021,23 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     alerts += len(matches)
                     session_id = "browser_" + (conv_id or "unknown")
                     matched_value = matches[0].get("matched_value", "") if matches else ""
-                    severity = min((m.get("severity", "medium") for m in matches), key=lambda s: {"critical": 0, "high": 1, "medium": 2, "low": 3}.get(s, 99))
+                    severity = min(
+                        (m.get("severity", "medium") for m in matches),
+                        key=lambda s: {"critical": 0, "high": 1, "medium": 2, "low": 3}.get(s, 99),
+                    )
                     confidence = "high" if ev_type == "user_prompt" else "medium"
-                    data_json = json.dumps({
-                        "patterns": [m["name"] for m in matches],
-                        "severity": severity,
-                        "categories": list(set(m.get("category", "credential") for m in matches)),
-                        "context": f"browser_{ev_type}",
-                        "snippet": text[:200],
-                        "matched_value": matched_value,
-                        "confidence": confidence,
-                        "likely_false_positive": False,
-                    })
+                    data_json = json.dumps(
+                        {
+                            "patterns": [m["name"] for m in matches],
+                            "severity": severity,
+                            "categories": list(set(m.get("category", "credential") for m in matches)),
+                            "context": f"browser_{ev_type}",
+                            "snippet": text[:200],
+                            "matched_value": matched_value,
+                            "confidence": confidence,
+                            "likely_false_positive": False,
+                        }
+                    )
                     dedup_key = f"{session_id}|{timestamp}|{[m['name'] for m in matches]}"
                     dedup_hash = hashlib.sha256(dedup_key.encode()).hexdigest()[:16]
                     try:
@@ -2052,7 +2143,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 s["alert_counts"] = sevs
                 score = sum(sevs.get(k, 0) * v for k, v in risk_weights.items())
                 s["risk_score"] = round(score, 1)
-                s["risk_level"] = "critical" if score >= 20 else "high" if score >= 10 else "medium" if score >= 3 else "low"
+                s["risk_level"] = (
+                    "critical" if score >= 20 else "high" if score >= 10 else "medium" if score >= 3 else "low"
+                )
 
         # Optionally include browser sessions
         include_browser = params.get("include_browser", ["false"])[0].lower() == "true"
@@ -2516,7 +2609,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     "id": r["id"],
                     "timestamp": r["timestamp"],
                     "session_id": r["session_id"],
-                    "session_title": JSONLSessionWatcher._clean_title(r["title"]) if r["title"] else (r["session_id"] or "")[:8],
+                    "session_title": JSONLSessionWatcher._clean_title(r["title"])
+                    if r["title"]
+                    else (r["session_id"] or "")[:8],
                     "cwd": r["cwd"],
                     "patterns": data.get("patterns", []),
                     "severity": sev,
@@ -2988,7 +3083,15 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
         sort_col = params.get("sort", ["timestamp"])[0]
         sort_dir = params.get("dir", ["desc"])[0].upper()
-        allowed_sorts = {"timestamp", "model", "input_tokens", "output_tokens", "latency_ms", "http_status", "destination_service"}
+        allowed_sorts = {
+            "timestamp",
+            "model",
+            "input_tokens",
+            "output_tokens",
+            "latency_ms",
+            "http_status",
+            "destination_service",
+        }
         if sort_col not in allowed_sorts:
             sort_col = "timestamp"
         if sort_dir not in ("ASC", "DESC"):
@@ -3447,9 +3550,13 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     SUM(CASE WHEN risk_score >= 4 THEN 1 ELSE 0 END) as risk_flagged
                 FROM agent_dependencies d WHERE {where}"""  # nosec B608
         st = db.execute(stats_sql, bind).fetchone()
-        by_manager = {r[0]: r[1] for r in db.execute(
-            f"SELECT package_manager, COUNT(*) FROM agent_dependencies d WHERE {where} GROUP BY package_manager",  # nosec B608
-            bind).fetchall()}
+        by_manager = {
+            r[0]: r[1]
+            for r in db.execute(
+                f"SELECT package_manager, COUNT(*) FROM agent_dependencies d WHERE {where} GROUP BY package_manager",  # nosec B608
+                bind,
+            ).fetchall()
+        }
 
         if view == "grouped":
             sql = f"""SELECT package_name, package_manager, category, registry_url,
@@ -3483,17 +3590,20 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     vulns = [dict(v) for v in vuln_rows]
                     max_cvss = max((v["cvss_score"] or 0) for v in vulns)
                     rd["vulnerabilities"] = {
-                        "count": len(vulns), "scanned": True,
+                        "count": len(vulns),
+                        "scanned": True,
                         "max_severity": max((v["severity"] or "unknown") for v in vulns),
-                        "max_cvss": max_cvss, "vulns": vulns,
+                        "max_cvss": max_cvss,
+                        "vulns": vulns,
                     }
                 else:
-                    has_scan = db.execute(
-                        "SELECT 1 FROM scan_history LIMIT 1"
-                    ).fetchone()
+                    has_scan = db.execute("SELECT 1 FROM scan_history LIMIT 1").fetchone()
                     rd["vulnerabilities"] = {
-                        "count": 0, "scanned": has_scan is not None,
-                        "max_severity": None, "max_cvss": None, "vulns": [],
+                        "count": 0,
+                        "scanned": has_scan is not None,
+                        "max_severity": None,
+                        "max_cvss": None,
+                        "vulns": [],
                     }
                 installs.append(rd)
         else:
@@ -3504,15 +3614,19 @@ class DashboardHandler(BaseHTTPRequestHandler):
             rows = db.execute(sql, bind + [limit]).fetchall()
             installs = [dict(r) for r in rows]
 
-        self._send_json({
-            "stats": {
-                "total_installs": st[0] or 0, "unique_packages": st[1] or 0,
-                "unpinned_count": st[2] or 0, "risk_flagged_count": st[3] or 0,
-                "by_manager": by_manager,
-            },
-            "installs": installs,
-            "view": view,
-        })
+        self._send_json(
+            {
+                "stats": {
+                    "total_installs": st[0] or 0,
+                    "unique_packages": st[1] or 0,
+                    "unpinned_count": st[2] or 0,
+                    "risk_flagged_count": st[3] or 0,
+                    "by_manager": by_manager,
+                },
+                "installs": installs,
+                "view": view,
+            }
+        )
 
     def _api_supply_chain_environment(self, params):
         """Full environment package inventory with vuln + agent cross-reference."""
@@ -3538,13 +3652,24 @@ class DashboardHandler(BaseHTTPRequestHandler):
         rows = db.execute(sql, bind).fetchall()
 
         total = db.execute(f"SELECT COUNT(*) FROM environment_packages ep WHERE {where}", bind).fetchone()[0]  # nosec B608
-        vuln_count = db.execute("SELECT COUNT(DISTINCT package_name) FROM environment_packages ep WHERE package_name IN (SELECT package_name FROM package_vulnerabilities)").fetchone()[0]
-        agent_count = db.execute("SELECT COUNT(DISTINCT package_name) FROM environment_packages WHERE package_name IN (SELECT package_name FROM agent_dependencies WHERE category='package')").fetchone()[0]
+        vuln_count = db.execute(
+            "SELECT COUNT(DISTINCT package_name) FROM environment_packages ep WHERE package_name IN (SELECT package_name FROM package_vulnerabilities)"
+        ).fetchone()[0]
+        agent_count = db.execute(
+            "SELECT COUNT(DISTINCT package_name) FROM environment_packages WHERE package_name IN (SELECT package_name FROM agent_dependencies WHERE category='package')"
+        ).fetchone()[0]
 
-        self._send_json({
-            "stats": {"total": total, "vulnerable": vuln_count, "agent_installed": agent_count, "clean": total - vuln_count},
-            "packages": [dict(r) for r in rows],
-        })
+        self._send_json(
+            {
+                "stats": {
+                    "total": total,
+                    "vulnerable": vuln_count,
+                    "agent_installed": agent_count,
+                    "clean": total - vuln_count,
+                },
+                "packages": [dict(r) for r in rows],
+            }
+        )
 
     def _api_supply_chain_registry(self, params):
         """Fetch or return cached registry metadata for a package."""
@@ -3607,10 +3732,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
         rows = db.execute(
             "SELECT * FROM package_watchlist ORDER BY CASE priority WHEN 'critical' THEN 0 WHEN 'high' THEN 1 ELSE 2 END, package_name LIMIT 100"
         ).fetchall()
-        self._send_json({
-            "counts": counts,
-            "watchlist": [dict(r) for r in rows],
-        })
+        self._send_json(
+            {
+                "counts": counts,
+                "watchlist": [dict(r) for r in rows],
+            }
+        )
 
     def _api_supply_chain_intel_status(self, params):
         """Threat intelligence source status."""
@@ -3620,17 +3747,19 @@ class DashboardHandler(BaseHTTPRequestHandler):
         urlhaus_count = db.execute("SELECT COUNT(*) FROM threat_iocs WHERE source='urlhaus'").fetchone()[0]
         last_scan = db.execute("SELECT timestamp FROM scan_history ORDER BY id DESC LIMIT 1").fetchone()
         registry_cached = db.execute("SELECT COUNT(*) FROM package_registry_cache").fetchone()[0]
-        self._send_json({
-            "sources": [
-                {"name": "OSV.dev", "active": True, "description": "15K+ malicious packages"},
-                {"name": "pip-audit", "active": True, "description": "Local Python vuln scan"},
-                {"name": "ThreatFox", "active": threatfox_count > 0, "iocs": threatfox_count},
-                {"name": "URLhaus", "active": urlhaus_count > 0, "iocs": urlhaus_count},
-                {"name": "Registry metadata", "active": True, "cached": registry_cached},
-            ],
-            "total_iocs": ioc_count,
-            "last_scan": last_scan[0] if last_scan else None,
-        })
+        self._send_json(
+            {
+                "sources": [
+                    {"name": "OSV.dev", "active": True, "description": "15K+ malicious packages"},
+                    {"name": "pip-audit", "active": True, "description": "Local Python vuln scan"},
+                    {"name": "ThreatFox", "active": threatfox_count > 0, "iocs": threatfox_count},
+                    {"name": "URLhaus", "active": urlhaus_count > 0, "iocs": urlhaus_count},
+                    {"name": "Registry metadata", "active": True, "cached": registry_cached},
+                ],
+                "total_iocs": ioc_count,
+                "last_scan": last_scan[0] if last_scan else None,
+            }
+        )
 
     def _api_supply_chain_scan(self, params):
         """GET: return scan status (alias for scan-status)."""
@@ -3653,11 +3782,13 @@ class DashboardHandler(BaseHTTPRequestHandler):
         row = db.execute("SELECT * FROM scan_history ORDER BY id DESC LIMIT 1").fetchone()
         vuln_count = db.execute("SELECT COUNT(DISTINCT vuln_id) FROM package_vulnerabilities").fetchone()[0]
         pkg_count = db.execute("SELECT COUNT(DISTINCT package_name) FROM package_vulnerabilities").fetchone()[0]
-        self._send_json({
-            "last_scan": dict(row) if row else None,
-            "total_vulns": vuln_count,
-            "packages_with_vulns": pkg_count,
-        })
+        self._send_json(
+            {
+                "last_scan": dict(row) if row else None,
+                "total_vulns": vuln_count,
+                "packages_with_vulns": pkg_count,
+            }
+        )
 
     def _api_supply_chain_detail(self, params):
         """Individual install events for a specific package (click-to-expand)."""
@@ -3793,11 +3924,38 @@ def start_monitoring(cp_url=None, cp_api_key=None):
     db_conn.close()
     print(f"\n  Database: {DB_PATH}")
 
+    # Security hardening (Sections 2/4): enforce permissions, ensure dashboard
+    # token, purge old sensitive-data plaintext. Never fatal — the monitor
+    # must still start even if one check fails.
+    try:
+        from claude_monitoring.security import (
+            enforce_permissions,
+            ensure_dashboard_token,
+            purge_old_sensitive_data,
+        )
+
+        fixed = enforce_permissions()
+        if fixed:
+            print(f"  Permissions tightened: {', '.join(fixed)}")
+        dashboard_token = ensure_dashboard_token()
+        purge_conn = get_thread_db()
+        try:
+            scrubbed = purge_old_sensitive_data(purge_conn)
+            if scrubbed:
+                print(f"  Purged plaintext from {scrubbed} old sensitive alerts")
+        finally:
+            purge_conn.close()
+    except Exception as exc:
+        print(f"  WARNING: security hardening incomplete: {exc}")
+        dashboard_token = None
+
     # Verify dedup integrity on startup
     check_db = get_thread_db()
     try:
         count = check_db.execute("SELECT COUNT(*) FROM events").fetchone()[0]
-        distinct = check_db.execute("SELECT COUNT(DISTINCT dedup_hash) FROM events WHERE dedup_hash IS NOT NULL").fetchone()[0]
+        distinct = check_db.execute(
+            "SELECT COUNT(DISTINCT dedup_hash) FROM events WHERE dedup_hash IS NOT NULL"
+        ).fetchone()[0]
         if count > 0 and distinct > 0 and count != distinct:
             dupes = count - distinct
             print(f"  Dedup check: found {dupes} duplicate events, cleaning up...")
@@ -3895,7 +4053,11 @@ def start_monitoring(cp_url=None, cp_api_key=None):
     server = ReusableHTTPServer((get_bind_address(), DASHBOARD_PORT), DashboardHandler)
     server_thread = threading.Thread(target=server.serve_forever, daemon=True, name="Dashboard")
     server_thread.start()
-    print(f"\n  Dashboard: http://localhost:{DASHBOARD_PORT}")
+    if dashboard_token:
+        print(f"\n  Dashboard: http://localhost:{DASHBOARD_PORT}?token={dashboard_token}")
+        print("  (Bookmark this URL — the token is remembered by the browser.)")
+    else:
+        print(f"\n  Dashboard: http://localhost:{DASHBOARD_PORT}")
     print("\n  Press Ctrl+C to stop")
     print("=" * 62)
 
@@ -3928,7 +4090,8 @@ def start_monitoring(cp_url=None, cp_api_key=None):
         try:
             subprocess.run(
                 ["networksetup", "-setsecurewebproxystate", "Wi-Fi", "off"],
-                capture_output=True, timeout=5,
+                capture_output=True,
+                timeout=5,
             )
         except Exception:
             pass
@@ -4064,7 +4227,9 @@ def main():
     parser.add_argument("--port", type=int, default=DASHBOARD_PORT, help=f"Dashboard port (default: {DASHBOARD_PORT})")
     parser.add_argument("--init-config", action="store_true", help="Generate default config.toml")
     parser.add_argument("--with-proxy", action="store_true", help="Also start HTTPS proxy for deep API capture")
-    parser.add_argument("--enable-system-proxy", action="store_true", help="Enable macOS system proxy (AI domains only)")
+    parser.add_argument(
+        "--enable-system-proxy", action="store_true", help="Enable macOS system proxy (AI domains only)"
+    )
     parser.add_argument("--disable-system-proxy", action="store_true", help="Disable macOS system proxy")
     parser.add_argument("--status", action="store_true", help="Show runtime status (monitor, proxy, cert, security)")
     parser.add_argument("--status-json", action="store_true", help="Show runtime status as JSON (for scripts)")

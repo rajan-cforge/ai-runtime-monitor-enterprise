@@ -90,11 +90,12 @@ def _is_monitor_running(port: int | None = None) -> bool:
 
 
 def _is_db_encrypted() -> bool:
+    """True when sqlcipher3 is installed AND used by the DB layer."""
     try:
-        import sqlcipher3  # noqa: F401
+        from claude_monitoring.db import HAS_SQLCIPHER
 
-        return True
-    except ImportError:
+        return bool(HAS_SQLCIPHER)
+    except Exception:
         return False
 
 
@@ -196,7 +197,10 @@ def show_status() -> int:
     print(f"    Monitor:        {_fmt_check(monitor_running, 'Running', 'Stopped')}")
     print(f"    Dashboard:      {dashboard_url}")
     print(
-        "    Database:       " + _fmt_check(db_encrypted, "Encrypted (SQLCipher)", "Unencrypted (install sqlcipher3)")
+        "    Database:       "
+        + _fmt_check(
+            db_encrypted, "Encrypted (SQLCipher)", "Available after: pip install 'ai-runtime-monitor[security]'"
+        )
     )
     print()
     print("  Proxy:")

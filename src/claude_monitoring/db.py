@@ -3,11 +3,55 @@
 """Database layer for AI Runtime Monitor.
 
 Handles SQLite initialization, schema management, and thread-safe connections.
+
+Encryption at rest is OPTIONAL. If ``sqlcipher3-binary`` is installed
+(``pip install ai-runtime-monitor[security]``), the database is encrypted
+transparently with a key derived from the host. Otherwise we fall back to
+plain sqlite3 + chmod 600 + FileVault. The code path is identical either
+way so enabling encryption is a single ``pip install`` away.
 """
 
+import hashlib
+import os
+import socket
 import sqlite3
 
 from claude_monitoring.config import get_db_path, get_output_dir
+
+try:
+    import sqlcipher3 as _sqlcipher  # type: ignore[import-not-found]
+
+    HAS_SQLCIPHER = True
+except ImportError:
+    _sqlcipher = None  # type: ignore[assignment]
+    HAS_SQLCIPHER = False
+
+
+def _get_db_encryption_key() -> str:
+    """Derive a deterministic encryption key from machine-local identifiers.
+
+    This is NOT a password — it's a key tied to (machine, user) so the DB
+    can be decrypted on the host that created it but not trivially opened
+    on another machine. For a true user-supplied passphrase, we'd wrap this
+    with OS keychain integration, which is future work.
+    """
+    import uuid
+
+    machine_id = str(uuid.getnode())
+    hostname = socket.gethostname()
+    username = os.getenv("USER", "unknown")
+    material = f"{machine_id}:{hostname}:{username}:ai-runtime-monitor-v1"
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()
+
+
+def _connect(db_path: str, check_same_thread: bool = False):
+    """Open a connection, using SQLCipher when available."""
+    if HAS_SQLCIPHER:
+        conn = _sqlcipher.connect(db_path, check_same_thread=check_same_thread)
+        key = _get_db_encryption_key()
+        conn.execute(f"PRAGMA key = '{key}'")
+        return conn
+    return sqlite3.connect(db_path, check_same_thread=check_same_thread)
 
 
 def init_db(db_path=None):
@@ -23,7 +67,11 @@ def init_db(db_path=None):
         db_path = get_db_path()
 
     get_output_dir().mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(db_path), check_same_thread=False)
+    conn = _connect(str(db_path), check_same_thread=False)
+    try:
+        os.chmod(str(db_path), 0o600)
+    except Exception:
+        pass
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
     c = conn.cursor()
@@ -343,7 +391,7 @@ def get_thread_db(db_path=None):
     if db_path is None:
         db_path = get_db_path()
 
-    conn = sqlite3.connect(str(db_path), check_same_thread=False)
+    conn = _connect(str(db_path), check_same_thread=False)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
     conn.row_factory = sqlite3.Row

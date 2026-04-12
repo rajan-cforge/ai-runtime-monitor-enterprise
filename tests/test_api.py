@@ -256,8 +256,13 @@ def _setup_test_db(tmp_path):
 
 
 @pytest.fixture()
-def api_server(tmp_path):
-    """Start a real HTTP server on a random port for testing."""
+def api_server(tmp_path, monkeypatch):
+    """Start a real HTTP server on a random port for testing.
+
+    Auth is disabled for tests via DISABLE_DASHBOARD_AUTH=1 — the dashboard
+    token feature is exercised separately by test_security_hardening.py.
+    """
+    monkeypatch.setenv("DISABLE_DASHBOARD_AUTH", "1")
     db_path, output_dir = _setup_test_db(tmp_path)
 
     with (
