@@ -218,7 +218,10 @@ class TestShowStatus:
         assert rc == 0
         assert "Extension:" in output
         assert "claude.ai" in output
-        assert "Custom (AI domains only)" in output
+        # The custom CA section now shows the CN from get_ca_info(),
+        # but since _has_custom_ca() is mocked True without an actual
+        # cert on disk, get_ca_info() returns None → "details unavailable"
+        assert "Custom" in output
 
 
 class TestShowStatusJson:

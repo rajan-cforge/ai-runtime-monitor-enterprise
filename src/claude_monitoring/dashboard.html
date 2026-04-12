@@ -2434,8 +2434,10 @@ function renderTrafficTable() {
     var status = isProxy ? String(rawStatus) : (rawStatus ? String(rawStatus) : '200');
     var service = c.destination_service || c.service || '-';
     var latencyStr = isProxy ? rawLatency.toFixed(0) + 'ms' : '\u2014';
-    var sourceLabel = isProxy ? 'Live' : 'Log';
-    var sourceTip = isProxy ? 'Captured via HTTPS proxy' : 'Reconstructed from session logs';
+    var isBrowserProxy = (c.source === 'browser_proxy');
+    var sourceLabel = isBrowserProxy ? 'WEB' : (isProxy ? 'API' : 'Log');
+    var sourceTip = isBrowserProxy ? 'Browser AI metadata (no content parsed)'
+      : (isProxy ? 'API call captured via HTTPS proxy' : 'Reconstructed from session logs');
     var tools = c.tool_calls;
     if (typeof tools === 'string') { try { tools = JSON.parse(tools); } catch(e) { tools = []; } }
     if (!Array.isArray(tools)) tools = [];
@@ -2445,7 +2447,7 @@ function renderTrafficTable() {
 
     const statusColor = status.startsWith('2') || status === 'ok' ? 'var(--green)' : status === 'error' || status.startsWith('4') || status.startsWith('5') ? 'var(--red)' : 'var(--text2)';
     const hasSensitive = sensitive.length > 0;
-    const srcColor = isProxy ? 'var(--cyan)' : 'var(--text2)';
+    const srcColor = isBrowserProxy ? 'var(--orange)' : (isProxy ? 'var(--cyan)' : 'var(--text2)');
     const mainRow = '<tr class="expandable" onclick="toggleTrafficDetail(' + idx + ')">'
       + '<td>' + fmtTimestamp(c.timestamp) + '</td>'
       + '<td>' + esc(service) + '</td>'
