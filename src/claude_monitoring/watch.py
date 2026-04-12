@@ -947,11 +947,31 @@ echo "   Run: claude"
     # already been generated. Falls back to mitmproxy's default CA otherwise —
     # watch.py must still work on a pristine install so mitmdump can generate
     # the initial cert that the setup wizard then imports.
+    #
+    # CRITICAL: always sync the mitmproxy confdir from the canonical CA files
+    # on every launch. A stale confdir (e.g. from a test run with a different
+    # hostname) causes ERR_CERT_AUTHORITY_INVALID because the leaf certs are
+    # signed by a CA that's not in the keychain.
     try:
-        from claude_monitoring.security import get_ca_cert_path, get_mitmproxy_confdir
+        from claude_monitoring.security import get_ca_cert_path, get_ca_key_path, get_mitmproxy_confdir
 
-        if get_ca_cert_path().exists():
-            cmd.extend(["--set", f"confdir={get_mitmproxy_confdir()}"])
+        ca_cert = get_ca_cert_path()
+        ca_key = get_ca_key_path()
+        if ca_cert.exists() and ca_key.exists():
+            confdir = get_mitmproxy_confdir()
+            confdir.mkdir(parents=True, exist_ok=True)
+            # Rebuild confdir from canonical cert+key every time
+            combined = ca_key.read_bytes() + ca_cert.read_bytes()
+            (confdir / "mitmproxy-ca.pem").write_bytes(combined)
+            (confdir / "mitmproxy-ca-cert.pem").write_bytes(ca_cert.read_bytes())
+            # Delete any cached leaf certs so mitmproxy regenerates them
+            for f in confdir.glob("mitmproxy-ca-cert.*"):
+                if f.suffix not in (".pem",):
+                    f.unlink(missing_ok=True)
+            for f in confdir.glob("mitmproxy-dhparam*"):
+                f.unlink(missing_ok=True)
+            os.chmod(str(confdir / "mitmproxy-ca.pem"), 0o600)
+            cmd.extend(["--set", f"confdir={confdir}"])
     except Exception:
         pass
 
