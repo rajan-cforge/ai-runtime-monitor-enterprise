@@ -23,14 +23,18 @@ class TestRegistryMetadata:
         from claude_monitoring.threat_intel import fetch_pypi_metadata
 
         mock_resp = MagicMock()
-        mock_resp.read.return_value = json.dumps({
-            "info": {
-                "summary": "HTTP library", "author": "Kenneth Reitz",
-                "license": "Apache 2.0", "home_page": "https://requests.readthedocs.io",
-                "project_urls": {"Source": "https://github.com/psf/requests"},
-            },
-            "releases": {"2.31.0": [{"upload_time_iso_8601": "2023-05-22T00:00:00Z"}]},
-        }).encode()
+        mock_resp.read.return_value = json.dumps(
+            {
+                "info": {
+                    "summary": "HTTP library",
+                    "author": "Kenneth Reitz",
+                    "license": "Apache 2.0",
+                    "home_page": "https://requests.readthedocs.io",
+                    "project_urls": {"Source": "https://github.com/psf/requests"},
+                },
+                "releases": {"2.31.0": [{"upload_time_iso_8601": "2023-05-22T00:00:00Z"}]},
+            }
+        ).encode()
         mock_urlopen.return_value = mock_resp
         meta = fetch_pypi_metadata("requests")
         assert meta is not None
@@ -43,13 +47,17 @@ class TestRegistryMetadata:
         from claude_monitoring.threat_intel import fetch_npm_metadata
 
         mock_resp = MagicMock()
-        mock_resp.read.return_value = json.dumps({
-            "description": "", "author": {"name": "attacker"},
-            "license": "", "repository": {},
-            "time": {"created": "2026-04-05T00:00:00Z"},
-            "dist-tags": {"latest": "1.0.0"},
-            "versions": {"1.0.0": {"scripts": {"postinstall": "node exploit.js"}}},
-        }).encode()
+        mock_resp.read.return_value = json.dumps(
+            {
+                "description": "",
+                "author": {"name": "attacker"},
+                "license": "",
+                "repository": {},
+                "time": {"created": "2026-04-05T00:00:00Z"},
+                "dist-tags": {"latest": "1.0.0"},
+                "versions": {"1.0.0": {"scripts": {"postinstall": "node exploit.js"}}},
+            }
+        ).encode()
         mock_urlopen.return_value = mock_resp
         meta = fetch_npm_metadata("evil-pkg")
         assert meta is not None
@@ -66,11 +74,16 @@ class TestRegistryMetadata:
 
 class TestRegistryRisk:
     def test_new_package_high_risk(self):
+        from datetime import datetime, timedelta, timezone
+
         from claude_monitoring.threat_intel import assess_registry_risk
 
+        # Was hardcoded to 2026-04-05 — now relative so the test doesn't
+        # become a time bomb when "now" drifts past 7 days from that date.
         meta = {
-            "first_published": "2026-04-05T00:00:00+00:00",
-            "has_description": False, "has_repository": False,
+            "first_published": (datetime.now(timezone.utc) - timedelta(days=2)).isoformat(),
+            "has_description": False,
+            "has_repository": False,
             "has_install_scripts": True,
         }
         score, reasons = assess_registry_risk("evil", "npm", meta)
@@ -83,7 +96,8 @@ class TestRegistryRisk:
 
         meta = {
             "first_published": (datetime.now(timezone.utc) - timedelta(hours=6)).isoformat(),
-            "has_description": True, "has_repository": True,
+            "has_description": True,
+            "has_repository": True,
         }
         score, reasons = assess_registry_risk("x", "npm", meta)
         assert score >= 4  # < 24h ago
@@ -93,7 +107,8 @@ class TestRegistryRisk:
 
         meta = {
             "first_published": "2020-01-01T00:00:00+00:00",
-            "has_description": True, "has_repository": True,
+            "has_description": True,
+            "has_repository": True,
         }
         score, reasons = assess_registry_risk("requests", "pip", meta)
         assert score == 0
@@ -125,17 +140,27 @@ class TestThreatFoxFeed:
         from claude_monitoring.threat_intel import fetch_threatfox_iocs
 
         mock_resp = MagicMock()
-        mock_resp.read.return_value = json.dumps({
-            "query_status": "ok",
-            "data": [
-                {"ioc": "185.173.38.99:443", "ioc_type": "ip:port",
-                 "threat_type": "payload_delivery", "malware_printable": "npm-malware",
-                 "confidence_level": 75},
-                {"ioc": "evil.com", "ioc_type": "domain",
-                 "threat_type": "c2", "malware_printable": "cobalt_strike",
-                 "confidence_level": 90},
-            ],
-        }).encode()
+        mock_resp.read.return_value = json.dumps(
+            {
+                "query_status": "ok",
+                "data": [
+                    {
+                        "ioc": "185.173.38.99:443",
+                        "ioc_type": "ip:port",
+                        "threat_type": "payload_delivery",
+                        "malware_printable": "npm-malware",
+                        "confidence_level": 75,
+                    },
+                    {
+                        "ioc": "evil.com",
+                        "ioc_type": "domain",
+                        "threat_type": "c2",
+                        "malware_printable": "cobalt_strike",
+                        "confidence_level": 90,
+                    },
+                ],
+            }
+        ).encode()
         mock_urlopen.return_value = mock_resp
         result = fetch_threatfox_iocs()
         assert "185.173.38.99" in result["ips"]
@@ -154,7 +179,13 @@ class TestIOCMatching:
     def test_ip_match(self, db):
         from claude_monitoring.threat_intel import check_connection_against_iocs, store_iocs
 
-        store_iocs(db, {"ips": {"185.173.38.99": {"threat_type": "c2", "malware": "npm-malware", "confidence": 75}}, "domains": {}})
+        store_iocs(
+            db,
+            {
+                "ips": {"185.173.38.99": {"threat_type": "c2", "malware": "npm-malware", "confidence": 75}},
+                "domains": {},
+            },
+        )
         result = check_connection_against_iocs("185.173.38.99", db)
         assert result is not None
         assert result["ioc_value"] == "185.173.38.99"
@@ -162,14 +193,18 @@ class TestIOCMatching:
     def test_domain_match(self, db):
         from claude_monitoring.threat_intel import check_connection_against_iocs, store_iocs
 
-        store_iocs(db, {"ips": {}, "domains": {"evil.com": {"threat_type": "c2", "malware": "cobalt", "confidence": 90}}})
+        store_iocs(
+            db, {"ips": {}, "domains": {"evil.com": {"threat_type": "c2", "malware": "cobalt", "confidence": 90}}}
+        )
         result = check_connection_against_iocs("evil.com", db)
         assert result is not None
 
     def test_subdomain_match(self, db):
         from claude_monitoring.threat_intel import check_connection_against_iocs, store_iocs
 
-        store_iocs(db, {"ips": {}, "domains": {"evil.com": {"threat_type": "c2", "malware": "cobalt", "confidence": 90}}})
+        store_iocs(
+            db, {"ips": {}, "domains": {"evil.com": {"threat_type": "c2", "malware": "cobalt", "confidence": 90}}}
+        )
         result = check_connection_against_iocs("sub.evil.com", db)
         assert result is not None
 
@@ -196,12 +231,18 @@ class TestURLhaus:
         from claude_monitoring.threat_intel import fetch_urlhaus_iocs
 
         mock_resp = MagicMock()
-        mock_resp.read.return_value = json.dumps({
-            "urls": [
-                {"url": "http://evil.example.com/malware.exe", "threat": "malware_download",
-                 "tags": ["emotet"], "date_added": "2026-04-05"},
-            ],
-        }).encode()
+        mock_resp.read.return_value = json.dumps(
+            {
+                "urls": [
+                    {
+                        "url": "http://evil.example.com/malware.exe",
+                        "threat": "malware_download",
+                        "tags": ["emotet"],
+                        "date_added": "2026-04-05",
+                    },
+                ],
+            }
+        ).encode()
         mock_urlopen.return_value = mock_resp
         count = fetch_urlhaus_iocs(db)
         assert count == 1
@@ -228,8 +269,11 @@ class TestCorrelation:
         )
         db.commit()
         result = correlate_install_to_connection(
-            "sess1", "2026-04-05T10:00:05Z", "185.1.2.3",
-            {"malware_family": "npm-malware"}, db,
+            "sess1",
+            "2026-04-05T10:00:05Z",
+            "185.1.2.3",
+            {"malware_family": "npm-malware"},
+            db,
         )
         assert result is not None
         assert result["correlated"] is True
@@ -245,7 +289,11 @@ class TestCorrelation:
         )
         db.commit()
         result = correlate_install_to_connection(
-            "sess1", "2026-04-05T10:05:00Z", "185.1.2.3", {}, db,
+            "sess1",
+            "2026-04-05T10:05:00Z",
+            "185.1.2.3",
+            {},
+            db,
         )
         assert result is None
 
@@ -259,6 +307,10 @@ class TestCorrelation:
         )
         db.commit()
         result = correlate_install_to_connection(
-            "sess2", "2026-04-05T10:00:05Z", "185.1.2.3", {}, db,
+            "sess2",
+            "2026-04-05T10:00:05Z",
+            "185.1.2.3",
+            {},
+            db,
         )
         assert result is None

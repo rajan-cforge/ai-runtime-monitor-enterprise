@@ -28,18 +28,14 @@ class TestConfidenceScoring:
     def test_tool_result_is_high(self):
         from claude_monitoring.monitor import JSONLSessionWatcher
 
-        conf = JSONLSessionWatcher._calculate_confidence(
-            "tool_result", "aws_key", "AKIAXXXXXXXXXXXXXXXX", "key output"
-        )
+        conf = JSONLSessionWatcher._calculate_confidence("tool_result", "aws_key", "AKIAXXXXXXXXXXXXXXXX", "key output")
         assert conf == "high"
 
     def test_assistant_discussing_keys_is_low(self):
         from claude_monitoring.monitor import JSONLSessionWatcher
 
         text = "maskSecrets() redacts AWS keys like AKIAUSEL...JAVB from the dashboard"
-        conf = JSONLSessionWatcher._calculate_confidence(
-            "assistant_response", "aws_key", "AKIAUSELFJENWMJ2JAVB", text
-        )
+        conf = JSONLSessionWatcher._calculate_confidence("assistant_response", "aws_key", "AKIAUSELFJENWMJ2JAVB", text)
         assert conf == "low"
 
     def test_assistant_default_is_low(self):
@@ -54,35 +50,27 @@ class TestConfidenceScoring:
         from claude_monitoring.monitor import JSONLSessionWatcher
 
         text = 'git commit -m "fix: mask secrets in dashboard AKIAUSEL..."'
-        conf = JSONLSessionWatcher._calculate_confidence(
-            "tool:Bash", "aws_key", "AKIAUSEL", text
-        )
+        conf = JSONLSessionWatcher._calculate_confidence("tool:Bash", "aws_key", "AKIAUSEL", text)
         assert conf == "low"
 
     def test_sql_cleanup_is_low(self):
         from claude_monitoring.monitor import JSONLSessionWatcher
 
         text = "DELETE FROM events WHERE data_json LIKE '%AKIA%'"
-        conf = JSONLSessionWatcher._calculate_confidence(
-            "tool:Bash", "aws_key", "AKIA", text
-        )
+        conf = JSONLSessionWatcher._calculate_confidence("tool:Bash", "aws_key", "AKIA", text)
         assert conf == "low"
 
     def test_real_key_in_aws_command_is_high(self):
         from claude_monitoring.monitor import JSONLSessionWatcher
 
         text = "aws iam delete-access-key --access-key-id AKIAUSELFJENWMJ2JAVB"
-        conf = JSONLSessionWatcher._calculate_confidence(
-            "tool:Bash", "aws_key", "AKIAUSELFJENWMJ2JAVB", text
-        )
+        conf = JSONLSessionWatcher._calculate_confidence("tool:Bash", "aws_key", "AKIAUSELFJENWMJ2JAVB", text)
         assert conf == "high"
 
     def test_tool_read_is_medium(self):
         from claude_monitoring.monitor import JSONLSessionWatcher
 
-        conf = JSONLSessionWatcher._calculate_confidence(
-            "tool:Read", "aws_key", "AKIAXXXX", "file contents"
-        )
+        conf = JSONLSessionWatcher._calculate_confidence("tool:Read", "aws_key", "AKIAXXXX", "file contents")
         assert conf == "medium"
 
 
@@ -120,13 +108,13 @@ class TestMatchedValueCapture:
         w = JSONLSessionWatcher()
         w.db = db
         # Ensure session exists
-        db.execute(
-            "INSERT INTO sessions (session_id, start_time) VALUES ('test-mv', 'now')"
-        )
+        db.execute("INSERT INTO sessions (session_id, start_time) VALUES ('test-mv', 'now')")
         db.commit()
         w._check_sensitive(
             "Here is AKIAUSELFJENWMJ2JAVB the key",
-            "test-mv", "2026-04-04T00:00:00Z", "tool_result",
+            "test-mv",
+            "2026-04-04T00:00:00Z",
+            "tool_result",
         )
         db.commit()
         row = db.execute(
@@ -135,7 +123,15 @@ class TestMatchedValueCapture:
         if row:
             data = json.loads(row["data_json"])
             assert "matched_value" in data
-            assert "AKIAUSEL" in data["matched_value"]
+            # Section 4c: matched values are masked at write time. The first
+            # four chars are preserved (visible in display) and the rest is
+            # asterisked. We must NEVER store the raw credential.
+            assert data["matched_value"].startswith("AKIA")
+            assert "*" in data["matched_value"]
+            assert "JAVB" in data["matched_value"]
+            # The raw value must not appear anywhere in the stored payload
+            assert "AKIAUSELFJENWMJ2JAVB" not in row["data_json"]
+            assert "matched_hash" in data and len(data["matched_hash"]) == 16
             assert "confidence" in data
 
 

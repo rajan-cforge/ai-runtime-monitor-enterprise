@@ -542,6 +542,53 @@ body { background:var(--bg); color:var(--text); font-family:-apple-system,BlinkM
 
 <script>
 const API = '';
+
+// ─── Dashboard auth token (Section 4b) ─────────────────────────
+// The monitor prints an authenticated URL on startup:
+//   http://localhost:9081?token=<random>
+// We extract the token, persist it in localStorage so bookmarks work,
+// and clean it out of the address bar so it doesn't end up in screenshots.
+// Then we monkey-patch fetch so every existing /api/ call gets the token
+// attached automatically — no per-callsite changes needed.
+(function() {
+  const fromUrl = new URLSearchParams(window.location.search).get('token');
+  if (fromUrl) {
+    localStorage.setItem('ai_monitor_token', fromUrl);
+    try { history.replaceState({}, '', window.location.pathname); } catch(e) {}
+  }
+  const token = localStorage.getItem('ai_monitor_token') || '';
+  window.AI_MONITOR_TOKEN = token;
+
+  const _origFetch = window.fetch.bind(window);
+  window.fetch = function(resource, init) {
+    try {
+      let url = typeof resource === 'string' ? resource : (resource && resource.url) || '';
+      // Only attach to same-origin API calls
+      const isApi = url.indexOf('/api/') >= 0 || url.startsWith('/api/');
+      if (isApi && token) {
+        const sep = url.indexOf('?') >= 0 ? '&' : '?';
+        const newUrl = url + sep + 'token=' + encodeURIComponent(token);
+        if (typeof resource === 'string') {
+          resource = newUrl;
+        } else {
+          resource = new Request(newUrl, resource);
+        }
+      }
+    } catch(e) {}
+    return _origFetch(resource, init).then(function(resp) {
+      if (resp.status === 401) {
+        localStorage.removeItem('ai_monitor_token');
+        document.body.innerHTML = '<div style="padding:60px;text-align:center;color:#c9d1d9;font-family:sans-serif">'
+          + '<h1>Authentication required</h1>'
+          + '<p>Your dashboard token is missing or invalid.</p>'
+          + '<p>Restart the monitor and open the URL it prints — it contains a fresh token.</p>'
+          + '<pre style="background:#161b22;padding:12px;border-radius:6px;display:inline-block;text-align:left">ai-monitor --start</pre></div>';
+      }
+      return resp;
+    });
+  };
+})();
+
 let lastFeedTs = '';
 let charts = {};
 let currentPlanInfo = {};
@@ -1778,7 +1825,9 @@ async function loadAlerts(customOffset) {
           + '<button class="dismiss-btn" onclick="event.stopPropagation();dismissAlert('+a.id+',this,\'investigated\')">Investigated</button>'
           + '<button class="dismiss-btn" onclick="event.stopPropagation();dismissAlert('+a.id+',this,\'accepted_risk\')">Accept risk</button>'
           + '</span>';
-      const matchedHtml = a.matched_value ? '<div style="font-size:12px;margin-top:4px">Matched: <code style="background:var(--surface2);padding:2px 4px;border-radius:3px">' + esc(maskSecrets(a.matched_value)) + '</code> <button class="dismiss-btn" style="font-size:10px" onclick="event.stopPropagation();toggleReveal(this,' + a.id + ')">Reveal</button></div>' : '';
+      // Section 4c: the backend now stores only masked + hashed values, never
+      // the raw credential. No Reveal button — masking is not reversible.
+      const matchedHtml = a.matched_value ? '<div style="font-size:12px;margin-top:4px">Matched: <code style="background:var(--surface2);padding:2px 4px;border-radius:3px">' + esc(a.matched_value) + '</code></div>' : '';
       return '<div class="alert-item'+dismissedClass+'" style="border-left-color:'+borderColor+'" data-alert-id="'+a.id+'">'
         + '<div class="alert-header">'
         + '<span class="alert-patterns"><span class="badge" style="background:' + (sevColors[sev]||'#8b949e') + '22;color:'+(sevColors[sev]||'#8b949e')+';margin-right:6px">'
@@ -1835,16 +1884,8 @@ function renderSnippet(raw) {
   if (s.length > 400) s = s.substring(0, 400) + '...';
   return maskSecrets(s);
 }
-function toggleReveal(btn, alertId) {
-  var snippet = btn.previousSibling;
-  if (btn.textContent === 'Reveal') {
-    snippet.textContent = (window._alertSnippets || {})[alertId] || '';
-    btn.textContent = 'Hide';
-  } else {
-    snippet.textContent = snippet.dataset.masked;
-    btn.textContent = 'Reveal';
-  }
-}
+// toggleReveal removed: the backend no longer stores plaintext snippets,
+// so there is nothing to reveal. Masking happens at write time (Section 4c).
 function filterAlertsByPattern(p) {
   alertPatternFilter = p;
   loadAlerts();

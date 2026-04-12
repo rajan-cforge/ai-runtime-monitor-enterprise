@@ -855,6 +855,18 @@ echo "   Run: claude"
         "--quiet",
     ]
 
+    # Use the branded custom CA (Name-Constrained to AI domains) if it has
+    # already been generated. Falls back to mitmproxy's default CA otherwise —
+    # watch.py must still work on a pristine install so mitmdump can generate
+    # the initial cert that the setup wizard then imports.
+    try:
+        from claude_monitoring.security import get_ca_cert_path, get_mitmproxy_confdir
+
+        if get_ca_cert_path().exists():
+            cmd.extend(["--set", f"confdir={get_mitmproxy_confdir()}"])
+    except Exception:
+        pass
+
     try:
         os.execvp("mitmdump", cmd)  # replace this process
     except FileNotFoundError:
