@@ -169,6 +169,18 @@ def _check_extension_heartbeat() -> dict | None:
         return None
 
 
+def _get_ca_info_safe() -> dict | None:
+    """Return CA info dict or None — never crash."""
+    if not _has_custom_ca():
+        return None
+    try:
+        from claude_monitoring.security import get_ca_info
+
+        return get_ca_info()
+    except Exception:
+        return None
+
+
 def _fmt_check(ok: bool, ok_text: str, bad_text: str) -> str:
     return f"✅ {ok_text}" if ok else f"❌ {bad_text}"
 
@@ -222,7 +234,25 @@ def show_status() -> int:
     print("    Ollama:           ✅ Process + Network")
     print()
     print("  Security:")
-    print(f"    CA type:        {'Custom (AI domains only)' if custom_ca else 'Default mitmproxy'}")
+    if custom_ca:
+        try:
+            from claude_monitoring.security import get_ca_info
+
+            ca_info = get_ca_info()
+        except Exception:
+            ca_info = None
+        if ca_info:
+            print(f"    CA type:        Custom ({ca_info['common_name']})")
+            n_domains = len(ca_info.get("permitted_domains", []))
+            print(f"    CA constraints: {n_domains} AI domains only")
+            expiry = ca_info.get("not_after", "unknown")
+            if isinstance(expiry, str) and len(expiry) > 10:
+                expiry = expiry[:10]
+            print(f"    CA expiry:      {expiry}")
+        else:
+            print("    CA type:        Custom (details unavailable)")
+    else:
+        print("    CA type:        Default mitmproxy")
     print("    DB encryption:  " + ("✅ SQLCipher AES-256" if db_encrypted else "⚠ Unencrypted (install sqlcipher3)"))
     print("    File perms:     " + ("✅ 600/700 enforced" if perms_ok else "⚠ Needs fixing"))
     print("    Dashboard auth: " + ("✅ Token required" if has_token else "⚠ No auth"))
@@ -248,6 +278,7 @@ def show_status_json() -> int:
         "system_proxy_configured": _is_system_proxy_configured(),
         "cert_trusted": _is_cert_trusted(),
         "custom_ca": _has_custom_ca(),
+        "ca_info": _get_ca_info_safe(),
         "db_encrypted": _is_db_encrypted(),
         "permissions_ok": _check_permissions(),
         "dashboard_token": _has_dashboard_token(),

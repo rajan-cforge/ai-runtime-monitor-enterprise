@@ -219,6 +219,13 @@ def init_db(db_path=None):
         except sqlite3.OperationalError:
             pass
 
+    # Add source column to api_calls — distinguishes browser_proxy metadata
+    # from full API call captures (Section 5)
+    try:
+        c.execute("ALTER TABLE api_calls ADD COLUMN source TEXT DEFAULT 'proxy'")
+    except sqlite3.OperationalError:
+        pass
+
     c.execute("""CREATE TABLE IF NOT EXISTS alert_dismissals (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         event_id INTEGER NOT NULL UNIQUE,
@@ -439,8 +446,8 @@ def insert_api_call(db_path, record):
                 system_prompt_chars, last_user_msg_preview, assistant_msg_preview,
                 tool_calls, tool_call_count, bash_commands, files_read, files_written,
                 urls_fetched, sensitive_patterns, sensitive_pattern_count,
-                stop_reason, request_id
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                stop_reason, request_id, source
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 record.get("timestamp", ""),
                 record.get("session_id", ""),
@@ -475,6 +482,7 @@ def insert_api_call(db_path, record):
                 record.get("sensitive_pattern_count", 0),
                 record.get("stop_reason", ""),
                 record.get("request_id", ""),
+                record.get("source", "proxy"),
             ),
         )
         conn.commit()
