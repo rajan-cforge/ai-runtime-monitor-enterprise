@@ -286,7 +286,16 @@ def show_status() -> int:
     print("    Data retention: 30 days (auto-purge)")
 
     # Phase 1: reliability section — heartbeat age + crash count
-    if monitor_running or hb_age is not None or crash_n > 0:
+    # Phase 2: also surfaces the rotating log file path + size.
+    log_path_exists = False
+    try:
+        from claude_monitoring.lifecycle import get_log_path
+
+        log_path_exists = get_log_path().exists()
+    except Exception:
+        pass
+
+    if monitor_running or hb_age is not None or crash_n > 0 or log_path_exists:
         print()
         print("  Reliability:")
         if monitor_running and hb_age is not None:
@@ -300,6 +309,15 @@ def show_status() -> int:
             print(f"    Recent crashes: ⚠ {crash_n} in last 7 days")
         else:
             print("    Recent crashes: ✅ none in last 7 days")
+        try:
+            from claude_monitoring.lifecycle import get_log_path
+
+            log_path = get_log_path()
+            if log_path.exists():
+                size_mb = log_path.stat().st_size / (1024 * 1024)
+                print(f"    Log file:       {log_path} ({size_mb:.1f}MB)")
+        except Exception:
+            pass
 
     if ext:
         print()

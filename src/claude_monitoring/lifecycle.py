@@ -22,15 +22,96 @@ from __future__ import annotations
 
 import errno
 import json
+import logging
 import os
 import signal
 import subprocess
 import sys
 import time
 from datetime import datetime, timezone
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 from claude_monitoring.config import get_output_dir, get_proxy_port
+
+# ─────────────────────────────────────────────────────────────
+# Logging — rotating file logger (Phase 2)
+# ─────────────────────────────────────────────────────────────
+
+LOG_MAX_BYTES = 50 * 1024 * 1024  # 50 MB
+LOG_BACKUP_COUNT = 5
+_LOGGER_CACHE: logging.Logger | None = None
+
+
+def get_log_dir() -> Path:
+    return get_output_dir() / "logs"
+
+
+def get_log_path() -> Path:
+    return get_log_dir() / "monitor.log"
+
+
+def get_logger() -> logging.Logger:
+    """Return a singleton logger that writes to ~/claude_watch_output/logs/monitor.log
+    with rotation (50MB × 5 = 250MB max). Safe to call multiple times."""
+    global _LOGGER_CACHE
+    if _LOGGER_CACHE is not None:
+        return _LOGGER_CACHE
+    log_dir = get_log_dir()
+    log_dir.mkdir(parents=True, exist_ok=True)
+    logger = logging.getLogger("ai-runtime-monitor")
+    logger.setLevel(logging.INFO)
+    # Don't add duplicate handlers if get_logger() is called twice
+    if not logger.handlers:
+        handler = RotatingFileHandler(
+            str(get_log_path()),
+            maxBytes=LOG_MAX_BYTES,
+            backupCount=LOG_BACKUP_COUNT,
+        )
+        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
+        logger.addHandler(handler)
+    _LOGGER_CACHE = logger
+    return logger
+
+
+class _StreamToLogger:
+    """File-like wrapper that redirects writes to a logger.
+
+    Used in --daemon mode so existing print() calls end up in the log file
+    without rewriting every call site.
+    """
+
+    def __init__(self, logger: logging.Logger, level: int = logging.INFO):
+        self._logger = logger
+        self._level = level
+        self._buffer = ""
+
+    def write(self, data: str) -> int:
+        if not isinstance(data, str):
+            data = str(data)
+        self._buffer += data
+        while "\n" in self._buffer:
+            line, self._buffer = self._buffer.split("\n", 1)
+            if line.strip():
+                self._logger.log(self._level, line.rstrip())
+        return len(data)
+
+    def flush(self) -> None:
+        if self._buffer.strip():
+            self._logger.log(self._level, self._buffer.rstrip())
+            self._buffer = ""
+
+
+def redirect_stdio_to_log() -> None:
+    """Redirect sys.stdout and sys.stderr to the rotating log file.
+
+    Call this at the start of main() when --daemon is set. All existing
+    print() and traceback output will end up in the log.
+    """
+    logger = get_logger()
+    sys.stdout = _StreamToLogger(logger, logging.INFO)  # type: ignore[assignment]
+    sys.stderr = _StreamToLogger(logger, logging.ERROR)  # type: ignore[assignment]
+
 
 # ─────────────────────────────────────────────────────────────
 # Paths
@@ -207,6 +288,12 @@ def log_crash_event(reason: str, details: str = "") -> None:
     This is best-effort — if the DB is unavailable we silently skip.
     Called by `_detect_stale_state` whenever it finds wreckage.
     """
+    # Phase 2: also emit to the rotating log file so crashes are visible
+    # in `ai-monitor --logs` even if the DB is unreachable.
+    try:
+        get_logger().error("crash: %s %s", reason, details)
+    except Exception:
+        pass
     try:
         from claude_monitoring.db import get_thread_db
 
