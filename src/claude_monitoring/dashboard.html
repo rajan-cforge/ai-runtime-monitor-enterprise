@@ -1086,6 +1086,17 @@ async function pollFeed() {
     const sessionEventTypes = new Set(['user_prompt','assistant_response','thinking','tool_use','tool_result','token_usage','sensitive_data','mcp_call','bash_progress','system_event']);
 
     for (const ev of d.events) {
+      // Derive label from event_type. Fall back to content inspection ONLY if
+      // event_type is missing — never infer label from summary substrings when
+      // a canonical event_type is present. This fixes a bug where browser
+      // captures were all labeled "BROWSER AI" regardless of whether the
+      // captured text was a user prompt or assistant response.
+      if (!ev.event_type) {
+        var s = (ev.summary || '').toLowerCase();
+        if (/\bassistant\b|\bresponse\b/.test(s)) ev.event_type = 'assistant_response';
+        else if (/\buser\b|\bprompt\b/.test(s)) ev.event_type = 'user_prompt';
+        else ev.event_type = 'system_event';
+      }
       if (!showTokens && ev.event_type === 'token_usage') continue;
       if (typeFilter && ev.event_type !== typeFilter) continue;
       if (!typeFilter && sessionsOnly && !sessionEventTypes.has(ev.event_type)) continue;

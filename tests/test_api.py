@@ -1010,6 +1010,120 @@ class TestDashboardAPI:
             urlopen(req)
         assert exc_info.value.code == 400
 
+    def test_browser_ingest_feed_label_user_prompt(self, api_server):
+        """POST /api/browser/ingest with type=user_prompt must land in the
+        Live Feed with event_type='user_prompt' (NOT the generic 'browser_ai'),
+        so the dashboard label renders as USER PROMPT."""
+        from claude_monitoring import monitor as mon
+
+        with mon.live_feed_lock:
+            mon.live_feed.clear()
+            mon._live_feed_seen.clear()
+
+        events = [
+            {
+                "service": "ChatGPT",
+                "url": "https://chatgpt.com/c/label-test-1",
+                "type": "user_prompt",
+                "text": "what is the capital of france",
+                "timestamp": "2026-02-01T12:00:00Z",
+                "conversation_id": "label-test-1",
+            },
+        ]
+        req = Request(
+            f"{api_server}/api/browser/ingest",
+            data=json.dumps({"events": events}).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        resp = urlopen(req)
+        assert resp.status == 200
+        assert json.loads(resp.read())["stored"] == 1
+
+        feed_resp = urlopen(f"{api_server}/api/feed?limit=50")
+        feed = json.loads(feed_resp.read())["events"]
+        matching = [e for e in feed if e.get("session_id") == "browser_label-test-1"]
+        assert matching, "browser event did not make it into live feed"
+        assert matching[-1]["event_type"] == "user_prompt"
+
+    def test_browser_ingest_feed_label_assistant_response(self, api_server):
+        """POST /api/browser/ingest with type=assistant_response must land in
+        the Live Feed with event_type='assistant_response' so the dashboard
+        renders ASSISTANT RESPONSE — not USER PROMPT and not BROWSER AI."""
+        from claude_monitoring import monitor as mon
+
+        with mon.live_feed_lock:
+            mon.live_feed.clear()
+            mon._live_feed_seen.clear()
+
+        events = [
+            {
+                "service": "Claude Web",
+                "url": "https://claude.ai/chat/label-test-2",
+                "type": "assistant_response",
+                "text": "Paris is the capital of France.",
+                "timestamp": "2026-02-01T12:00:01Z",
+                "conversation_id": "label-test-2",
+            },
+        ]
+        req = Request(
+            f"{api_server}/api/browser/ingest",
+            data=json.dumps({"events": events}).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        urlopen(req)
+
+        feed_resp = urlopen(f"{api_server}/api/feed?limit=50")
+        feed = json.loads(feed_resp.read())["events"]
+        matching = [e for e in feed if e.get("session_id") == "browser_label-test-2"]
+        assert matching
+        assert matching[-1]["event_type"] == "assistant_response"
+
+    def test_browser_ingest_feed_mixed_labels(self, api_server):
+        """A single ingest batch of user_prompt + assistant_response should
+        produce two DISTINCT feed entries with the right labels — this is the
+        regression case for the 'both show BROWSER AI' bug."""
+        from claude_monitoring import monitor as mon
+
+        with mon.live_feed_lock:
+            mon.live_feed.clear()
+            mon._live_feed_seen.clear()
+
+        events = [
+            {
+                "service": "ChatGPT",
+                "url": "https://chatgpt.com/c/mixed",
+                "type": "user_prompt",
+                "text": "tell me a joke please",
+                "timestamp": "2026-02-01T13:00:00Z",
+                "conversation_id": "mixed",
+            },
+            {
+                "service": "ChatGPT",
+                "url": "https://chatgpt.com/c/mixed",
+                "type": "assistant_response",
+                "text": "Why did the chicken cross the road? To get to the other side.",
+                "timestamp": "2026-02-01T13:00:02Z",
+                "conversation_id": "mixed",
+            },
+        ]
+        req = Request(
+            f"{api_server}/api/browser/ingest",
+            data=json.dumps({"events": events}).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        urlopen(req)
+
+        feed_resp = urlopen(f"{api_server}/api/feed?limit=50")
+        feed = json.loads(feed_resp.read())["events"]
+        types = [e["event_type"] for e in feed if e.get("session_id") == "browser_mixed"]
+        assert "user_prompt" in types
+        assert "assistant_response" in types
+        # And neither got the generic browser_ai label.
+        assert "browser_ai" not in types
+
     def test_browser_ingest_missing_fields(self, api_server):
         events = [
             {"text": "no service or type"},
