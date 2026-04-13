@@ -2099,13 +2099,26 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     (service, url, title, conv_id, timestamp, ev_type, text[:5000] if text else None, content_hash),
                 )
                 stored += 1
-                # Push to live feed
+                # Push to live feed.
+                # Normalize event_type so the Live Feed label is derived from the
+                # canonical type (user_prompt / assistant_response) rather than
+                # lumping everything under "browser_ai" — that caused the Live Feed
+                # to show identical labels for prompts and responses captured via
+                # the browser extension.
+                if ev_type in ("user_prompt", "user", "prompt"):
+                    feed_event_type = "user_prompt"
+                elif ev_type in ("assistant_response", "assistant", "response"):
+                    feed_event_type = "assistant_response"
+                else:
+                    feed_event_type = "browser_ai"
                 push_live_event(
                     {
                         "timestamp": timestamp,
                         "session_id": "browser_" + (conv_id or ""),
-                        "event_type": "browser_ai",
-                        "summary": f"{service}: {ev_type.replace('_', ' ')} — {(text or '')[:60]}",
+                        "event_type": feed_event_type,
+                        "source": "browser",
+                        "service": service,
+                        "summary": f"{service}: {(text or '')[:80]}",
                     }
                 )
             except Exception:
