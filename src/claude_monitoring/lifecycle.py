@@ -563,3 +563,192 @@ class ProxyManager:
     def reset_restart_count(self) -> None:
         """Call periodically from a healthy state to allow future recovery."""
         self._restart_count = 0
+
+
+# ─────────────────────────────────────────────────────────────
+# LaunchAgent service management (Phase 3)
+# ─────────────────────────────────────────────────────────────
+
+LAUNCH_AGENT_LABEL = "com.gocloudforge.ai-runtime-monitor"
+
+
+def get_plist_path() -> Path:
+    """The LaunchAgent plist path. Lives in ~/Library/LaunchAgents/ which
+    is where per-user LaunchAgents are loaded from at login."""
+    return Path.home() / "Library" / "LaunchAgents" / f"{LAUNCH_AGENT_LABEL}.plist"
+
+
+def generate_plist(
+    python_path: str,
+    with_proxy: bool = True,
+) -> str:
+    """Build the LaunchAgent plist XML.
+
+    KeepAlive + SuccessfulExit=false means launchd restarts us on crash
+    but respects a clean --stop. ThrottleInterval=10 prevents crash loops
+    from eating CPU. RunAtLoad=true starts on login.
+    """
+    log_dir = get_log_dir()
+    log_dir.mkdir(parents=True, exist_ok=True)
+    program_args = [python_path, "-m", "claude_monitoring.monitor", "--start"]
+    if with_proxy:
+        program_args.append("--with-proxy")
+    program_args.append("--daemon")
+
+    args_xml = "\n        ".join(f"<string>{a}</string>" for a in program_args)
+    return f"""<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>{LAUNCH_AGENT_LABEL}</string>
+    <key>ProgramArguments</key>
+    <array>
+        {args_xml}
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+    <key>ProcessType</key>
+    <string>Background</string>
+    <key>StandardOutPath</key>
+    <string>{log_dir}/service-stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>{log_dir}/service-stderr.log</string>
+    <key>WorkingDirectory</key>
+    <string>{Path.home()}</string>
+</dict>
+</plist>
+"""
+
+
+def install_service(with_system_proxy: bool = False) -> tuple[bool, str]:
+    """Write the LaunchAgent plist and load it via launchctl.
+
+    Returns (success, message). If with_system_proxy is True, stores a
+    preference so the service's --start path enables the system proxy
+    on startup.
+    """
+    import sys as _sys
+
+    plist_path = get_plist_path()
+    plist_path.parent.mkdir(parents=True, exist_ok=True)
+    plist_content = generate_plist(python_path=_sys.executable)
+    plist_path.write_text(plist_content)
+
+    # Persist the user's preference about system proxy auto-enable
+    prefs = read_preferences()
+    prefs["auto_enable_system_proxy"] = bool(with_system_proxy)
+    write_preferences(prefs)
+
+    # Unload first in case an older version is already loaded, then load
+    try:
+        subprocess.run(
+            ["launchctl", "unload", str(plist_path)],
+            capture_output=True,
+            timeout=10,
+        )
+    except Exception:
+        pass
+    try:
+        result = subprocess.run(
+            ["launchctl", "load", str(plist_path)],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode != 0:
+            return False, f"launchctl load failed: {result.stderr.strip()}"
+    except Exception as exc:
+        return False, f"launchctl load error: {exc}"
+    return True, f"Service installed at {plist_path}"
+
+
+def uninstall_service() -> tuple[bool, str]:
+    """Unload the LaunchAgent and remove its plist.
+
+    Also disables the system proxy (since the service owned it).
+    """
+    plist_path = get_plist_path()
+    if not plist_path.exists():
+        disable_system_proxy()
+        return True, "Service was not installed"
+    try:
+        subprocess.run(
+            ["launchctl", "unload", str(plist_path)],
+            capture_output=True,
+            timeout=10,
+        )
+    except Exception:
+        pass
+    try:
+        plist_path.unlink()
+    except OSError:
+        pass
+    disable_system_proxy()
+    return True, "Service uninstalled"
+
+
+def is_service_installed() -> bool:
+    return get_plist_path().exists()
+
+
+def is_service_loaded() -> bool:
+    """True if launchctl lists our label as loaded."""
+    try:
+        result = subprocess.run(
+            ["launchctl", "list", LAUNCH_AGENT_LABEL],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
+def get_service_state() -> dict:
+    """Return service state dict: installed, loaded, pid, last_exit_code.
+
+    Reads `launchctl list <label>` plist-style output. Best-effort — any
+    error returns a safe default.
+    """
+    state: dict = {
+        "installed": is_service_installed(),
+        "loaded": False,
+        "pid": None,
+        "last_exit_code": None,
+    }
+    if not state["installed"]:
+        return state
+    try:
+        result = subprocess.run(
+            ["launchctl", "list", LAUNCH_AGENT_LABEL],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode == 0:
+            state["loaded"] = True
+            # Parse the awkward launchctl list output
+            for line in result.stdout.splitlines():
+                line = line.strip().rstrip(";")
+                if '"PID"' in line and "=" in line:
+                    try:
+                        state["pid"] = int(line.split("=", 1)[1].strip())
+                    except ValueError:
+                        pass
+                elif '"LastExitStatus"' in line and "=" in line:
+                    try:
+                        state["last_exit_code"] = int(line.split("=", 1)[1].strip())
+                    except ValueError:
+                        pass
+    except Exception:
+        pass
+    return state

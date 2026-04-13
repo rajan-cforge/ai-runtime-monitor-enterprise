@@ -4415,6 +4415,14 @@ def main():
     parser.add_argument("--cp-api-key", type=str, default="", help="Control plane API key")
     parser.add_argument("--logs", action="store_true", help="Tail the monitor log file (Ctrl+C to exit)")
     parser.add_argument("--daemon", action="store_true", help="Run in daemon mode (no prompts, stdout→log)")
+    parser.add_argument("--install-service", action="store_true", help="Install as a macOS LaunchAgent (runs at login)")
+    parser.add_argument("--uninstall-service", action="store_true", help="Uninstall the LaunchAgent")
+    parser.add_argument(
+        "--with-system-proxy",
+        action="store_true",
+        help="Modifier for --install-service: auto-enable system proxy on start",
+    )
+    parser.add_argument("--restart", action="store_true", help="Stop + start the monitor (clean restart)")
 
     args = parser.parse_args()
 
@@ -4493,6 +4501,51 @@ def main():
         ProxyManager().stop(disable_proxy=True)
         print("✅ Proxy stopped and system proxy disabled")
         sys.exit(0)
+    elif args.install_service:
+        from claude_monitoring.lifecycle import install_service
+
+        ok, msg = install_service(with_system_proxy=args.with_system_proxy)
+        print(("✅ " if ok else "❌ ") + msg)
+        if ok:
+            print("The monitor will start on every login.")
+            print("View logs:    ai-monitor --logs")
+            print("Check status: ai-monitor --status")
+            print("Uninstall:    ai-monitor --uninstall-service")
+        sys.exit(0 if ok else 1)
+    elif args.uninstall_service:
+        from claude_monitoring.lifecycle import uninstall_service
+
+        ok, msg = uninstall_service()
+        print(("✅ " if ok else "❌ ") + msg)
+        sys.exit(0 if ok else 1)
+    elif args.restart:
+        # Phase 3: stop + start in one command. Used by operators after
+        # config changes or to recover from a wedged state.
+        from claude_monitoring.lifecycle import (
+            ProxyManager,
+            get_monitor_pid_file,
+            is_pid_alive,
+            read_pid_file,
+        )
+
+        mpid = read_pid_file(get_monitor_pid_file())
+        if mpid and is_pid_alive(mpid):
+            print(f"Stopping monitor (PID {mpid})...")
+            try:
+                os.kill(mpid, signal.SIGTERM)
+            except OSError:
+                pass
+        ProxyManager().stop(disable_proxy=True)
+        # Wait briefly for the old monitor to shut down
+        for _ in range(30):
+            if not (mpid and is_pid_alive(mpid)):
+                break
+            time.sleep(0.2)
+        print("Restarting monitor...")
+        os.execvp(
+            sys.executable,
+            [sys.executable, "-m", "claude_monitoring.monitor", "--start", "--with-proxy"],
+        )
     elif args.scan:
         one_shot_scan()
     elif args.logs:
@@ -4531,6 +4584,27 @@ def main():
             for fix in stale_fixes:
                 print(f"    • {fix}")
             print()
+
+        # Phase 3: service mode honors the user's auto_enable_system_proxy pref.
+        # This is how the user opts into "system proxy on every boot" — set
+        # via `ai-monitor --install-service --with-system-proxy`.
+        if args.daemon:
+            from claude_monitoring.lifecycle import read_preferences
+
+            prefs = read_preferences()
+            if prefs.get("auto_enable_system_proxy"):
+                from claude_monitoring.config import get_proxy_port
+
+                subprocess.run(
+                    [
+                        "networksetup",
+                        "-setsecurewebproxy",
+                        "Wi-Fi",
+                        "127.0.0.1",
+                        str(get_proxy_port()),
+                    ],
+                    capture_output=True,
+                )
 
         # Section 8: first-run wizard. Skipped if .setup_complete already
         # exists. Users can re-run anytime via `ai-monitor --setup`.
