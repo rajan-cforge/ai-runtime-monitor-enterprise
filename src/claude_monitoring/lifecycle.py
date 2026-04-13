@@ -466,6 +466,17 @@ class ProxyManager:
     def __init__(self, log_path: Path | None = None):
         self._proc: subprocess.Popen | None = None
         self._restart_count = 0
+        # Default log path: ~/claude_watch_output/logs/mitmproxy.log
+        # Capturing mitmdump's stderr is essential for debugging crash loops
+        # like the one we hit under launchd (where mitmdump can fail to find
+        # its binary, confdir, or port and die silently).
+        if log_path is None:
+            try:
+                log_dir = get_output_dir() / "logs"
+                log_dir.mkdir(parents=True, exist_ok=True)
+                log_path = log_dir / "mitmproxy.log"
+            except Exception:
+                pass
         self._log_path = log_path
         self._stopped = False  # set True by explicit stop()
 
@@ -484,10 +495,24 @@ class ProxyManager:
             return True
 
         cmd = [sys.executable, "-m", "claude_monitoring.watch", "--start"]
-        stdout = stderr = subprocess.DEVNULL
-        if self._log_path:
-            log_fh = open(self._log_path, "ab")
-            stdout = stderr = log_fh  # type: ignore[assignment]
+        stdout: int | object = subprocess.DEVNULL
+        stderr: int | object = subprocess.DEVNULL
+        if self._log_path is not None:
+            try:
+                log_fh = open(self._log_path, "ab")
+                stdout = log_fh
+                stderr = log_fh
+            except OSError:
+                pass
+
+        # Build a clean env that includes the venv bin dir. Under launchd,
+        # PATH may not include the venv, which causes `os.execvp("mitmdump")`
+        # inside watch.py to fail with FileNotFoundError — exactly the silent
+        # death we saw in the restart loop.
+        env = os.environ.copy()
+        venv_bin = str(Path(sys.executable).parent)
+        if venv_bin not in env.get("PATH", ""):
+            env["PATH"] = venv_bin + ":" + env.get("PATH", "")
 
         try:
             self._proc = subprocess.Popen(  # noqa: S603
@@ -495,6 +520,7 @@ class ProxyManager:
                 stdout=stdout,
                 stderr=stderr,
                 start_new_session=True,  # new process group
+                env=env,
             )
             write_pid_file(get_proxy_pid_file(), self._proc.pid)
             self._stopped = False
