@@ -9,6 +9,7 @@ tests never touch real system proxy state.
 
 from __future__ import annotations
 
+import logging
 import os
 import signal
 from unittest.mock import MagicMock, patch
@@ -24,7 +25,24 @@ def tmp_output_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(lifecycle, "get_output_dir", lambda: tmp_path)
     # config helpers also need redirect if imported elsewhere
     monkeypatch.setattr("claude_monitoring.config.get_output_dir", lambda: tmp_path)
-    return tmp_path
+    # Phase 2: reset the singleton logger so each test gets a fresh
+    # RotatingFileHandler pointing at the tmp_path log directory.
+    lifecycle._LOGGER_CACHE = None
+    named = logging.getLogger("ai-runtime-monitor")
+    for h in list(named.handlers):
+        try:
+            h.close()
+        except Exception:
+            pass
+        named.removeHandler(h)
+    yield tmp_path
+    lifecycle._LOGGER_CACHE = None
+    for h in list(named.handlers):
+        try:
+            h.close()
+        except Exception:
+            pass
+        named.removeHandler(h)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -437,3 +455,60 @@ class TestProxyManager:
         pm._restart_count = 2
         pm.reset_restart_count()
         assert pm._restart_count == 0
+
+
+# ─────────────────────────────────────────────────────────────
+# Phase 2: rotating log file + stdio redirect
+# ─────────────────────────────────────────────────────────────
+
+
+class TestLogging:
+    def test_log_dir_created(self, tmp_output_dir):
+        lifecycle.get_logger()
+        assert lifecycle.get_log_dir().exists()
+
+    def test_logger_writes_to_file(self, tmp_output_dir):
+        lifecycle._LOGGER_CACHE = None
+        logger = lifecycle.get_logger()
+        logger.info("test message 12345")
+        for h in logger.handlers:
+            h.flush()
+        content = lifecycle.get_log_path().read_text()
+        assert "test message 12345" in content
+
+    def test_logger_is_singleton(self, tmp_output_dir):
+        lifecycle._LOGGER_CACHE = None
+        a = lifecycle.get_logger()
+        b = lifecycle.get_logger()
+        assert a is b
+        assert len(a.handlers) == 1  # not duplicated
+
+    def test_stream_to_logger_redirect(self, tmp_output_dir):
+        lifecycle._LOGGER_CACHE = None
+        logger = lifecycle.get_logger()
+        stream = lifecycle._StreamToLogger(logger)
+        stream.write("line one\n")
+        stream.write("line two\n")
+        stream.flush()
+        for h in logger.handlers:
+            h.flush()
+        content = lifecycle.get_log_path().read_text()
+        assert "line one" in content
+        assert "line two" in content
+
+    def test_redirect_stdio_to_log(self, tmp_output_dir, monkeypatch):
+        import sys
+
+        lifecycle._LOGGER_CACHE = None
+        orig_stdout = sys.stdout
+        try:
+            lifecycle.redirect_stdio_to_log()
+            print("daemon mode test")
+            sys.stdout.flush()
+        finally:
+            sys.stdout = orig_stdout
+        logger = logging.getLogger("ai-runtime-monitor")
+        for h in logger.handlers:
+            h.flush()
+        content = lifecycle.get_log_path().read_text()
+        assert "daemon mode test" in content

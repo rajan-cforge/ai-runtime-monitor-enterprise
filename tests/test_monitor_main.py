@@ -583,6 +583,18 @@ class TestMainArgumentParsing:
                 mock_install.assert_called_once()
                 mock_start.assert_not_called()
 
+    def test_logs_command_missing_file(self, tmp_path, monkeypatch, capsys):
+        """--logs with no existing log file should print a hint and exit 0."""
+        monkeypatch.setattr("claude_monitoring.lifecycle.get_output_dir", lambda: tmp_path)
+        from claude_monitoring.monitor import main
+
+        with patch("sys.argv", ["ai-monitor", "--logs"]):
+            with pytest.raises(SystemExit) as exc:
+                main()
+        assert exc.value.code == 0
+        out = capsys.readouterr().out
+        assert "No log file yet" in out
+
 
 class TestUpdatePort:
     """Tests for the _update_port helper."""

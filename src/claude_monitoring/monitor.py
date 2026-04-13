@@ -4413,6 +4413,8 @@ def main():
     parser.add_argument("--stop", action="store_true", help="Stop a running monitor + proxy cleanly (uses PID file)")
     parser.add_argument("--control-plane", type=str, default="", help="Control plane URL (e.g. http://localhost:9090)")
     parser.add_argument("--cp-api-key", type=str, default="", help="Control plane API key")
+    parser.add_argument("--logs", action="store_true", help="Tail the monitor log file (Ctrl+C to exit)")
+    parser.add_argument("--daemon", action="store_true", help="Run in daemon mode (no prompts, stdout→log)")
 
     args = parser.parse_args()
 
@@ -4493,7 +4495,31 @@ def main():
         sys.exit(0)
     elif args.scan:
         one_shot_scan()
+    elif args.logs:
+        # Phase 2: tail the rotating log file so operators can see what
+        # a daemon-mode monitor is doing without hunting through the FS.
+        from claude_monitoring.lifecycle import get_log_path
+
+        log_path = get_log_path()
+        if not log_path.exists():
+            print(f"No log file yet at {log_path}")
+            print("Start the monitor with: ai-monitor --start --with-proxy")
+            sys.exit(0)
+        print(f"Tailing {log_path} (Ctrl+C to exit)\n")
+        try:
+            subprocess.run(["tail", "-f", str(log_path)])
+        except KeyboardInterrupt:
+            pass
+        sys.exit(0)
     elif args.start:
+        # Phase 2: in --daemon mode, redirect stdout/stderr to the log
+        # file BEFORE anything else so every print() below lands in the
+        # log rather than a detached TTY.
+        if args.daemon:
+            from claude_monitoring.lifecycle import redirect_stdio_to_log
+
+            redirect_stdio_to_log()
+
         # Phase 1: stale state detection runs BEFORE anything else.
         # Load-bearing defense against orphaned mitmdump + stuck system
         # proxy from a previous crashed run. See lifecycle.detect_stale_state.
@@ -4512,6 +4538,11 @@ def main():
             from claude_monitoring.wizard import is_first_run, run_setup_wizard
 
             if is_first_run():
+                if args.daemon:
+                    from claude_monitoring.lifecycle import get_logger
+
+                    get_logger().error("daemon mode cannot run the interactive wizard — run ai-monitor --setup first")
+                    sys.exit(2)
                 if not run_setup_wizard():
                     sys.exit(1)
         except Exception as exc:
