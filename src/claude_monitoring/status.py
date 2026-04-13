@@ -206,6 +206,32 @@ def show_status() -> int:
     dashboard_url = f"http://localhost:{get_dashboard_port()}"
 
     print("AI Runtime Monitor — Status")
+
+    # Phase 1: prominent warning for the exact failure mode that caused
+    # last night's incident — proxy running but monitor dead, which
+    # means the user's network is being MITM'd with no observation.
+    if proxy_running and not monitor_running:
+        print()
+        print("  ⚠ STALE STATE DETECTED")
+        print("    mitmproxy is running but the monitor is not.")
+        print("    Your network may be routing through an orphaned proxy.")
+        print("    Fix: ai-monitor --stop && ai-monitor --start --with-proxy")
+
+    # Phase 1: heartbeat + crash count — surface the data that tells
+    # the user "something crashed recently" so they don't have to find
+    # out the hard way.
+    try:
+        from claude_monitoring.lifecycle import (
+            heartbeat_age_seconds,
+            recent_crash_count,
+        )
+
+        hb_age = heartbeat_age_seconds()
+        crash_n = recent_crash_count(days=7)
+    except Exception:
+        hb_age = None
+        crash_n = 0
+
     print()
     print("  Core:")
     print(f"    Monitor:        {_fmt_check(monitor_running, 'Running', 'Stopped')}")
@@ -258,6 +284,22 @@ def show_status() -> int:
     print("    File perms:     " + ("✅ 600/700 enforced" if perms_ok else "⚠ Needs fixing"))
     print("    Dashboard auth: " + ("✅ Token required" if has_token else "⚠ No auth"))
     print("    Data retention: 30 days (auto-purge)")
+
+    # Phase 1: reliability section — heartbeat age + crash count
+    if monitor_running or hb_age is not None or crash_n > 0:
+        print()
+        print("  Reliability:")
+        if monitor_running and hb_age is not None:
+            if hb_age < 60:
+                print(f"    Heartbeat:      ✅ {int(hb_age)}s ago")
+            elif hb_age < 300:
+                print(f"    Heartbeat:      ⚠ {int(hb_age)}s ago (watchdog slow)")
+            else:
+                print(f"    Heartbeat:      ❌ {int(hb_age / 60)}m ago (watchdog stuck)")
+        if crash_n > 0:
+            print(f"    Recent crashes: ⚠ {crash_n} in last 7 days")
+        else:
+            print("    Recent crashes: ✅ none in last 7 days")
 
     if ext:
         print()
