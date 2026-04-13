@@ -232,6 +232,32 @@ def show_status() -> int:
         hb_age = None
         crash_n = 0
 
+    # Phase 3: surface LaunchAgent service state. When installed, this is
+    # the most important info on the screen so it goes ABOVE Core.
+    try:
+        from claude_monitoring.lifecycle import LAUNCH_AGENT_LABEL, get_service_state
+
+        svc = get_service_state()
+    except Exception:
+        svc = {"installed": False, "loaded": False, "pid": None, "last_exit_code": None}
+        LAUNCH_AGENT_LABEL = "com.gocloudforge.ai-runtime-monitor"  # type: ignore[assignment]
+
+    if svc.get("installed"):
+        print()
+        print("  Service:")
+        print(f"    LaunchAgent:    ✅ Installed ({LAUNCH_AGENT_LABEL})")
+        if svc.get("loaded"):
+            pid = svc.get("pid")
+            if pid:
+                print(f"    State:          ✅ Running (PID {pid})")
+            else:
+                print("    State:          ⚠ Loaded but not running")
+        else:
+            print("    State:          ❌ Not loaded (run: launchctl load ~/Library/LaunchAgents/...)")
+        last_exit = svc.get("last_exit_code")
+        if last_exit is not None and last_exit != 0:
+            print(f"    Last exit code: ⚠ {last_exit}")
+
     print()
     print("  Core:")
     print(f"    Monitor:        {_fmt_check(monitor_running, 'Running', 'Stopped')}")

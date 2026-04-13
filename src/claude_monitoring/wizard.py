@@ -243,6 +243,16 @@ def run_setup_wizard(force: bool = False) -> bool:
     except Exception:
         pass
 
+    # Phase 3: nudge users toward the LaunchAgent install path. We don't
+    # add a 5th wizard step — installing the service should be a deliberate
+    # decision, not a default.
+    print()
+    print("  💡 Next steps:")
+    print("     Run at login:  ai-monitor --install-service")
+    print("     View logs:     ai-monitor --logs")
+    print("     Check status:  ai-monitor --status")
+    print()
+
     # Final summary
     print()
     print(_SEPARATOR)
