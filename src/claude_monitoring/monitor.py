@@ -4016,6 +4016,32 @@ def start_monitoring(cp_url=None, cp_api_key=None):
     print("  AI Runtime Monitor — CrowdStrike-Style Full Visibility")
     print("=" * 62)
 
+    # Phase 1: write monitor.pid + register atexit cleanup FIRST.
+    # atexit is best-effort (won't run on SIGKILL/OOM) but still catches
+    # Ctrl+C and normal exits. The real defense against crash-leaked
+    # state is detect_stale_state() on the next --start.
+    import atexit
+
+    from claude_monitoring.lifecycle import (
+        get_monitor_pid_file,
+        remove_pid_file,
+        write_heartbeat,
+        write_pid_file,
+    )
+
+    write_pid_file(get_monitor_pid_file(), os.getpid())
+
+    def _atexit_cleanup():
+        remove_pid_file(get_monitor_pid_file())
+        pm = globals().get("_PROXY_MANAGER")
+        if pm is not None:
+            try:
+                pm.stop(disable_proxy=True)
+            except Exception:
+                pass
+
+    atexit.register(_atexit_cleanup)
+
     # Check dependencies
     missing = []
     if not psutil:
@@ -4194,17 +4220,54 @@ def start_monitoring(cp_url=None, cp_api_key=None):
     # Keep main thread alive
     stop_event = threading.Event()
 
+    # Phase 1: Watchdog thread. Polls ProxyManager every 30s. If mitmdump
+    # died, disables system proxy and attempts restart (exponential backoff,
+    # max 3 attempts). Writes heartbeat file every tick so external observers
+    # (--status, other processes) can tell whether we're healthy or hung.
+    def _watchdog_loop():
+        while not stop_event.is_set():
+            write_heartbeat()
+            pm = globals().get("_PROXY_MANAGER")
+            if pm is not None and not pm.is_alive():
+                print("\n  ⚠ Watchdog: mitmdump died — disabling system proxy")
+                try:
+                    from claude_monitoring.lifecycle import disable_system_proxy
+
+                    disable_system_proxy()
+                except Exception:
+                    pass
+                if pm.restart():
+                    print("  ✅ Watchdog: mitmdump restarted")
+                    pm.reset_restart_count()
+                else:
+                    print("  ❌ Watchdog: max restart attempts reached — giving up")
+            stop_event.wait(30)
+
+    watchdog_thread = threading.Thread(target=_watchdog_loop, daemon=True, name="Watchdog")
+    watchdog_thread.start()
+
     def signal_handler(sig, frame):
         print("\n\n  Shutting down...")
-        # Auto-disable system proxy on shutdown (safety net)
-        try:
-            subprocess.run(
-                ["networksetup", "-setsecurewebproxystate", "Wi-Fi", "off"],
-                capture_output=True,
-                timeout=5,
-            )
-        except Exception:
-            pass
+        # Phase 1: use ProxyManager for clean shutdown — it kills mitmdump
+        # AND disables the system proxy. Fallback to direct networksetup
+        # if no ProxyManager is registered (e.g. --start without --with-proxy).
+        pm = globals().get("_PROXY_MANAGER")
+        if pm is not None:
+            try:
+                pm.stop(disable_proxy=True)
+            except Exception:
+                pass
+        else:
+            try:
+                subprocess.run(
+                    ["networksetup", "-setsecurewebproxystate", "Wi-Fi", "off"],
+                    capture_output=True,
+                    timeout=5,
+                )
+            except Exception:
+                pass
+        # Remove PID file so --status doesn't report stale state
+        remove_pid_file(get_monitor_pid_file())
         jsonl_watcher.stop()
         proc_scanner.stop()
         net_monitor.stop()
@@ -4347,6 +4410,7 @@ def main():
     parser.add_argument("--cleanup", action="store_true", help="Remove duplicate captures, empty sessions, etc.")
     parser.add_argument("--dry-run", action="store_true", help="Modifier for --cleanup: preview without changes")
     parser.add_argument("--purge", action="store_true", help="Permanently uninstall and delete all monitoring data")
+    parser.add_argument("--stop", action="store_true", help="Stop a running monitor + proxy cleanly (uses PID file)")
     parser.add_argument("--control-plane", type=str, default="", help="Control plane URL (e.g. http://localhost:9090)")
     parser.add_argument("--cp-api-key", type=str, default="", help="Control plane API key")
 
@@ -4404,9 +4468,44 @@ def main():
         from claude_monitoring.wizard import run_purge
 
         sys.exit(0 if run_purge() else 1)
+    elif args.stop:
+        # Phase 1: clean shutdown via PID file.
+        from claude_monitoring.lifecycle import (
+            ProxyManager,
+            get_monitor_pid_file,
+            is_pid_alive,
+            read_pid_file,
+        )
+
+        monitor_pid = read_pid_file(get_monitor_pid_file())
+        if monitor_pid and is_pid_alive(monitor_pid):
+            print(f"Stopping monitor (PID {monitor_pid})...")
+            try:
+                os.kill(monitor_pid, signal.SIGTERM)
+                print("✅ Monitor stop signal sent")
+            except OSError as exc:
+                print(f"⚠ Could not signal monitor: {exc}")
+        else:
+            print("Monitor is not running (no live PID file)")
+        # Belt-and-suspenders: also kill any orphan mitmdump + disable proxy
+        ProxyManager().stop(disable_proxy=True)
+        print("✅ Proxy stopped and system proxy disabled")
+        sys.exit(0)
     elif args.scan:
         one_shot_scan()
     elif args.start:
+        # Phase 1: stale state detection runs BEFORE anything else.
+        # Load-bearing defense against orphaned mitmdump + stuck system
+        # proxy from a previous crashed run. See lifecycle.detect_stale_state.
+        from claude_monitoring.lifecycle import detect_stale_state
+
+        stale_fixes = detect_stale_state()
+        if stale_fixes:
+            print("\n  ⚠ Cleaning up stale state from previous run:")
+            for fix in stale_fixes:
+                print(f"    • {fix}")
+            print()
+
         # Section 8: first-run wizard. Skipped if .setup_complete already
         # exists. Users can re-run anytime via `ai-monitor --setup`.
         try:
@@ -4420,12 +4519,14 @@ def main():
 
         if args.with_proxy:
             from claude_monitoring.config import get_proxy_port
+            from claude_monitoring.lifecycle import ProxyManager
 
-            subprocess.Popen(
-                [sys.executable, "-m", "claude_monitoring.watch", "--start"],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-            )
+            # Phase 1: ProxyManager owns the mitmdump subprocess lifecycle.
+            # It tracks the PID, gets health-checked by the watchdog, and
+            # gets cleanly stopped on shutdown (disables system proxy too).
+            _pm = ProxyManager()
+            _pm.start()
+            globals()["_PROXY_MANAGER"] = _pm
             print(f"Proxy started on port {get_proxy_port()} (AI domains only — selective SSL inspection)")
             print(f"To enable: export HTTPS_PROXY=http://127.0.0.1:{get_proxy_port()}")
             print("For desktop apps: ai-monitor --enable-system-proxy")
