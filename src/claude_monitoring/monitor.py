@@ -1530,6 +1530,13 @@ class ProcessScanner:
                         except Exception:
                             pass
 
+                    # Bug 1: ensure a synthetic "desktop AI app" session exists
+                    # in the sessions table so Session Explorer's Desktop Apps
+                    # filter has something to show. The session is keyed by
+                    # app name (not PID) so restarts don't create duplicates.
+                    # Runs on every scan tick so last_activity stays fresh.
+                    self._ensure_desktop_session(proc_data["name"], proc_data["cmdline"], pid)
+
                 except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
                     continue
 
@@ -1558,6 +1565,56 @@ class ProcessScanner:
             )
 
         return found
+
+    # Bug 1: desktop-app → session synthesis.
+    # Desktop AI apps (ChatGPT.app, Claude Desktop, Cursor) don't have
+    # JSONL files, so nothing creates a row in the sessions table for
+    # them. We detect them here by process name and upsert a session
+    # keyed by a stable "desktop_<agent>" id (NOT by PID, so restarts
+    # don't create duplicates). The session's last_activity is bumped
+    # on every process scan so it stays live in the dashboard.
+    _DESKTOP_AI_APPS = (
+        # (substring match, agent_type, display title)
+        ("ChatGPT", "chatgpt_desktop", "ChatGPT Desktop App"),
+        ("Claude Helper", "claude_desktop", "Claude Desktop App"),
+        ("Claude Desktop", "claude_desktop", "Claude Desktop App"),
+        ("Cursor Helper", "cursor_desktop", "Cursor"),
+        ("Cursor", "cursor_desktop", "Cursor"),
+    )
+
+    def _ensure_desktop_session(self, process_name: str, cmdline: str, pid: int) -> None:
+        """Upsert a synthetic session row for a detected desktop AI app.
+
+        Matches are by process-name substring because the real process
+        names vary (``ChatGPT``, ``ChatGPTHelper``, ``Claude Helper
+        (Renderer)``, ``Cursor Helper (Plugin)``, etc). The first match
+        wins. The session_id is ``desktop_<agent>`` — no PID suffix —
+        so that restarts of the same app map to the same row and don't
+        fragment the user's history.
+        """
+        name_lower = (process_name or "").lower()
+        # Skip the app launcher itself ("Claude" alone matches too broadly;
+        # prefer helper processes which are always present when the app is
+        # actually running and doing work).
+        for needle, agent_type, title in self._DESKTOP_AI_APPS:
+            if needle.lower() not in name_lower:
+                continue
+            session_id = "desktop_" + agent_type
+            now = now_iso()
+            try:
+                self.db.execute(
+                    """INSERT INTO sessions
+                       (session_id, agent_type, title, start_time, last_activity,
+                        total_turns, total_input_tokens, total_output_tokens, model)
+                       VALUES (?, ?, ?, ?, ?, 0, 0, 0, ?)
+                       ON CONFLICT(session_id) DO UPDATE SET
+                           last_activity = excluded.last_activity""",
+                    (session_id, agent_type, title, now, now, agent_type),
+                )
+                self.db.commit()
+            except Exception:
+                pass
+            return  # first match wins — don't double-count Claude Helper as both Claude and Cursor
 
     def run_loop(self):
         """Continuous scanning loop."""
@@ -2508,68 +2565,53 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     }
                 )
 
-        # Bug 1: synthesize "desktop" sessions from api_calls. Desktop apps
-        # (ChatGPT.app, Claude Desktop, Cursor) hit api.openai.com /
-        # api.anthropic.com / api.cursor.sh through the system proxy, but
-        # there's no row in the sessions table for them — they're not
-        # JSONL-based like Claude Code. We group api_calls by destination
-        # service and synthesize a logical session per service so the
-        # "Desktop Apps" filter has something to show.
-        include_desktop = include_browser or source_filter in ("all", "desktop")
-        if include_desktop:
-            desktop_services = {
-                "anthropic_api": {"title": "Claude Desktop", "agent_type": "claude_desktop"},
-                "openai_api": {"title": "ChatGPT Desktop", "agent_type": "chatgpt_desktop"},
-                "cursor_api": {"title": "Cursor", "agent_type": "cursor_desktop"},
-            }
-            try:
-                for svc, meta in desktop_services.items():
-                    row = db.execute(
-                        """SELECT
-                             MIN(timestamp) as start_time,
-                             MAX(timestamp) as last_activity,
-                             COUNT(*) as call_count,
-                             COALESCE(SUM(input_tokens), 0) as in_tok,
-                             COALESCE(SUM(output_tokens), 0) as out_tok
-                           FROM api_calls
-                           WHERE destination_service = ?
-                             AND (session_id IS NULL OR session_id = '' OR session_id LIKE 'desktop%%')""",
-                        (svc,),
-                    ).fetchone()
-                    if not row or not row["start_time"]:
-                        continue
-                    # Also reject if Claude Code already owns these calls
-                    # (filter by NULL session_id / desktop-prefixed session ids)
-                    call_count = row["call_count"] or 0
-                    if call_count == 0:
-                        continue
-                    sessions.append(
-                        {
-                            "session_id": "desktop_" + svc,
-                            "source": "desktop",
-                            "start_time": row["start_time"],
-                            "last_activity": row["last_activity"],
-                            "title": meta["title"],
-                            "model": svc,
-                            "service": svc,
-                            "cwd": "",
-                            "total_input_tokens": row["in_tok"] or 0,
-                            "total_output_tokens": row["out_tok"] or 0,
-                            "total_turns": call_count,
-                            "total_duration": 0,
-                            "alert_count": 0,
-                            "agent_type": meta["agent_type"],
-                        }
-                    )
-            except Exception:
-                pass  # never break the sessions endpoint because of desktop synthesis
+        # Bug 1: Desktop AI apps (ChatGPT.app, Claude Desktop, Cursor) are
+        # written to the sessions table by ProcessScanner._ensure_desktop_session
+        # with agent_type in ('chatgpt_desktop','claude_desktop','cursor_desktop').
+        # We tag those sessions with source='desktop' and enrich them with
+        # live api_call stats so the detail panel can show real traffic.
+        DESKTOP_AGENT_TYPES = {"chatgpt_desktop", "claude_desktop", "cursor_desktop"}
+        AGENT_TO_SERVICES = {
+            "chatgpt_desktop": ("chatgpt_web", "openai_api"),
+            "claude_desktop": ("claude_web", "anthropic_api"),
+            "cursor_desktop": ("cursor_api",),
+        }
+        for s in sessions:
+            if s.get("agent_type") in DESKTOP_AGENT_TYPES:
+                s["source"] = "desktop"
+                # Enrich with api_calls aggregates for the relevant services
+                services = AGENT_TO_SERVICES.get(s["agent_type"], ())
+                if services:
+                    try:
+                        placeholders = ",".join(["?"] * len(services))
+                        row = db.execute(
+                            f"""SELECT COUNT(*) as n,
+                                       COALESCE(SUM(input_tokens),0) as in_tok,
+                                       COALESCE(SUM(output_tokens),0) as out_tok,
+                                       MIN(timestamp) as first_ts,
+                                       MAX(timestamp) as last_ts
+                                FROM api_calls
+                                WHERE destination_service IN ({placeholders})""",  # nosec B608
+                            list(services),
+                        ).fetchone()
+                        if row and row["n"]:
+                            s["total_turns"] = row["n"]
+                            s["total_input_tokens"] = row["in_tok"] or 0
+                            s["total_output_tokens"] = row["out_tok"] or 0
+                            # Only update activity if we have newer data
+                            if row["last_ts"] and (not s.get("last_activity") or row["last_ts"] > s["last_activity"]):
+                                s["last_activity"] = row["last_ts"]
+                            if row["first_ts"] and (not s.get("start_time") or row["first_ts"] < s["start_time"]):
+                                s["start_time"] = row["first_ts"]
+                    except Exception:
+                        pass
 
         # Filter by source if requested
         if source_filter and source_filter not in ("all", ""):
             sessions = [s for s in sessions if s.get("source") == source_filter]
 
         # Re-sort mixed list
-        if include_browser or include_desktop or source_filter == "all":
+        if include_browser or source_filter in ("all", "desktop"):
             sort_key = {"recent": "last_activity", "newest": "start_time"}.get(sort, "last_activity")
             sessions.sort(key=lambda s: s.get(sort_key, "") or "", reverse=True)
 
