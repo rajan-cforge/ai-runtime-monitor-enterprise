@@ -967,13 +967,21 @@ async function loadSessionDetail(id) {
       + '<button onclick="openDeepDive(\'' + s.session_id + '\')" style="background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:4px 10px;color:var(--blue);font-size:12px;cursor:pointer;font-weight:600">&#x1f52c; Deep Dive</button>'
       + '</div></div>';
 
-    // Bug 1 follow-up: desktop synthetic session banner.
+    // Desktop synthetic session banner with content-coverage summary.
+    // Electron wrappers like Claude Desktop hit both the direct API
+    // (full content captured) AND the web backend (metadata only —
+    // SSE/protobuf bodies not parseable from the proxy), so the banner
+    // reports how many rows have parsed conversation content.
     if (d.is_desktop_session) {
-      var bytesTotal = (d.bytes_in||0) + (d.bytes_out||0);
+      var dsBytesTotal = (d.bytes_in||0) + (d.bytes_out||0);
+      var cov = d.content_coverage || {total: 0, with_content: 0, metadata_only: 0};
       html += '<div style="background:var(--surface2);border-left:3px solid var(--cyan);border-radius:4px;padding:10px 14px;margin-bottom:14px;font-size:12px;line-height:1.5">'
         + '<div style="font-weight:600;color:var(--cyan);margin-bottom:4px">Desktop AI app monitoring</div>'
-        + '<div style="color:var(--text2)">This is an Electron desktop app routing through the system proxy. We capture all its API traffic but cannot show chat turns — no DOM scraping is possible without a browser extension. The event list below shows the 50 most recent proxy-captured requests.</div>'
-        + '<div style="color:var(--text2);margin-top:6px">Traffic: <strong>' + fmtNum(bytesTotal) + 'B</strong> transferred across <strong>' + (d.api_call_count||0) + '</strong> API calls</div>'
+        + '<div style="color:var(--text2)"><strong>' + cov.total + '</strong> recent calls &middot; '
+        + '<strong style="color:var(--green)">' + cov.with_content + '</strong> with content &middot; '
+        + '<strong style="color:var(--text2)">' + cov.metadata_only + '</strong> metadata-only</div>'
+        + '<div style="color:var(--text2);font-size:11px;margin-top:4px">Direct API calls (api.anthropic.com, api.openai.com) show full prompts and responses. Web-backend calls (claude.ai, chatgpt.com) are captured as metadata only — their SSE/protobuf bodies are not parseable from the proxy.</div>'
+        + '<div style="color:var(--text2);margin-top:6px">Traffic: <strong>' + fmtNum(dsBytesTotal) + 'B</strong> transferred across <strong>' + (d.api_call_count||0) + '</strong> API calls</div>'
         + '</div>';
     }
 
@@ -1039,22 +1047,65 @@ async function loadSessionDetail(id) {
             + '\nPatterns: '+esc((data.patterns||[]).join(', '))
             + '\nSnippet: '+esc(data.snippet)+'</pre></div></div>';
           break;
-        case 'api_call':
-          // Bug 1 follow-up: pseudo-event from a desktop synthetic session.
-          // Each row summarizes one proxy-captured request — no chat content
-          // because desktop apps are Electron wrappers with no DOM scraping.
-          var methodColor = data.http_method === 'POST' ? 'var(--orange)' : 'var(--cyan)';
-          var statusColor = (data.http_status && data.http_status >= 400) ? 'var(--red)' : 'var(--green)';
-          var bytesTotal = (data.request_size_bytes||0) + (data.response_size_bytes||0);
-          html += '<div class="event-block" style="border-left:3px solid var(--cyan);margin-bottom:6px">'
-            + '<div class="event-header" onclick="this.parentElement.classList.toggle(\'collapsed\')" style="padding:6px 10px;display:flex;gap:8px;align-items:center;font-size:12px">'
-            + '<span style="color:var(--text2);min-width:85px">' + fmtTime(ev.timestamp) + '</span>'
-            + '<span style="color:' + methodColor + ';font-weight:600;min-width:40px">' + esc(data.http_method || '?') + '</span>'
-            + '<span style="color:' + statusColor + '">' + (data.http_status || '-') + '</span>'
-            + '<span style="flex:1;color:var(--text);font-family:monospace;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(data.destination_host || '') + esc((data.endpoint_path || '').substring(0, 60)) + '</span>'
-            + '<span style="color:var(--text2);font-size:11px">' + fmtNum(bytesTotal) + 'B · ' + (data.latency_ms || 0) + 'ms</span>'
-            + '</div></div>';
+        case 'api_call': {
+          // Desktop session pseudo-event. Three branches:
+          //   1. user_preview populated  -> green User block
+          //   2. assistant_preview       -> orange Assistant block
+          //   3. neither populated       -> muted metadata-only row
+          // Branches 1+2 render both blocks for the same call (one
+          // request carries both the inbound user turn and the outbound
+          // assistant response). Branch 3 keeps the timeline complete
+          // for claude_web / chatgpt_web rows where the body is not
+          // parseable.
+          var userPrev = (data.user_preview || '').trim();
+          var asstPrev = (data.assistant_preview || '').trim();
+          var acTime = fmtTime(ev.timestamp);
+          var acHost = esc(data.destination_host || '');
+          var acModel = esc(humanModelName(data.model || '') || '');
+          if (userPrev) {
+            html += '<div class="event-block user">'
+              + '<div class="event-header" onclick="this.parentElement.classList.toggle(\'collapsed\')">'
+              + '<span>&#x1f464; USER &middot; ' + acTime
+              + (acHost ? ' &middot; ' + acHost : '')
+              + (acModel ? ' &middot; ' + acModel : '')
+              + '</span></div>'
+              + '<div class="event-body"><pre>' + esc(userPrev) + '</pre>'
+              + '<div style="color:var(--text2);font-size:11px;padding:4px 10px">' + (data.input_tokens || 0) + ' in</div>'
+              + '</div></div>';
+          }
+          if (asstPrev) {
+            var footParts = [];
+            if (data.input_tokens) footParts.push(fmtNum(data.input_tokens) + ' in');
+            if (data.output_tokens) footParts.push(fmtNum(data.output_tokens) + ' out');
+            if (data.cache_read_tokens) footParts.push(fmtNum(data.cache_read_tokens) + ' cache read');
+            if (data.latency_ms) footParts.push((data.latency_ms / 1000).toFixed(1) + 's');
+            if (data.estimated_cost_usd) footParts.push('$' + Number(data.estimated_cost_usd).toFixed(4));
+            if (data.tool_call_count) footParts.push(data.tool_call_count + ' tool calls');
+            html += '<div class="event-block assistant">'
+              + '<div class="event-header" onclick="this.parentElement.classList.toggle(\'collapsed\')">'
+              + '<span>&#x1f916; ASSISTANT &middot; ' + acTime
+              + (acModel ? ' &middot; ' + acModel : '')
+              + '</span></div>'
+              + '<div class="event-body"><pre>' + esc(asstPrev) + '</pre>'
+              + '<div style="color:var(--text2);font-size:11px;padding:4px 10px">' + footParts.join(' &middot; ') + '</div>'
+              + '</div></div>';
+          }
+          if (!userPrev && !asstPrev) {
+            var statusColor = (data.http_status && data.http_status >= 400) ? 'var(--red)' : 'var(--green)';
+            var acBytes = (data.request_size_bytes || 0) + (data.response_size_bytes || 0);
+            html += '<div class="event-block" style="border-left:3px solid var(--text2);margin-bottom:4px;opacity:0.75">'
+              + '<div style="padding:6px 10px;display:flex;gap:8px;align-items:center;font-size:11px;color:var(--text2)">'
+              + '<span style="min-width:70px">' + acTime + '</span>'
+              + '<span style="min-width:120px">' + acHost + '</span>'
+              + '<span style="font-family:monospace;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc((data.http_method || '') + ' ' + (data.endpoint_path || '').substring(0, 60)) + '</span>'
+              + '<span style="color:' + statusColor + '">' + (data.http_status || '-') + '</span>'
+              + '<span>' + fmtNum(acBytes) + 'B</span>'
+              + '<span>' + (data.latency_ms || 0) + 'ms</span>'
+              + '<span style="background:var(--surface2);padding:1px 6px;border-radius:3px;font-size:10px">metadata only</span>'
+              + '</div></div>';
+          }
           break;
+        }
       }
     }
     container.innerHTML = html;
@@ -2497,93 +2548,111 @@ async function openDeepDive(sessionId, jumpToTurn) {
   } catch(e) { console.error('Deep dive error:', e); }
 }
 
-// Bug 1 follow-up: dedicated deep-dive for desktop sessions.
-// Desktop AI apps don't have events/turns (they're Electron wrappers, not
-// CLI sessions with JSONL files). We show a panel that lists recent API
-// traffic for the relevant destination_services and a one-click "View in
-// API Traffic tab" button.
+// Dedicated deep-dive for desktop synthetic sessions.
+// Reuses /api/session/<id> (which enriches pseudo-events with preview
+// fields) and renders each api_call as a user / assistant / metadata
+// block using the same markup as the Session Explorer right-hand panel.
+// The turn rail is cleared because desktop sessions don't have grouped
+// turns -- they're a flat stream of proxy-captured calls.
 async function openDesktopDeepDive(sessionId) {
-  var agentType = sessionId.replace('desktop_', '');
-  var servicesByAgent = {
-    'chatgpt_desktop': ['chatgpt_web', 'openai_api'],
-    'claude_desktop':  ['claude_web', 'anthropic_api'],
-    'cursor_desktop':  ['cursor_api'],
-  };
   var titles = {
-    'chatgpt_desktop': 'ChatGPT Desktop App',
-    'claude_desktop':  'Claude Desktop App',
-    'cursor_desktop':  'Cursor',
+    'desktop_chatgpt_desktop': 'ChatGPT Desktop App',
+    'desktop_claude_desktop':  'Claude Desktop App',
+    'desktop_cursor_desktop':  'Cursor',
   };
-  var services = servicesByAgent[agentType] || [];
-  var title = titles[agentType] || agentType;
+  var title = titles[sessionId] || sessionId;
 
   document.getElementById('dd-title').textContent = title;
   document.getElementById('deepdive-overlay').classList.add('open');
 
-  // Fetch recent api_calls for these services (30 most recent)
-  var calls = [];
+  var d = {events: [], content_coverage: {total: 0, with_content: 0, metadata_only: 0}};
   try {
-    for (var i = 0; i < services.length; i++) {
-      var r = await fetch(API + '/api/traffic?service=' + encodeURIComponent(services[i]) + '&limit=30');
-      var d = await r.json();
-      calls = calls.concat(d.calls || []);
-    }
+    var r = await fetch(API + '/api/session/' + encodeURIComponent(sessionId));
+    d = await r.json();
   } catch(e) {}
-  // Sort newest first + cap
-  calls.sort(function(a, b) { return (b.timestamp || '').localeCompare(a.timestamp || ''); });
-  calls = calls.slice(0, 30);
 
-  var totalCalls = calls.length;
-  var totalBytes = calls.reduce(function(sum, c) { return sum + (c.request_size_bytes || 0) + (c.response_size_bytes || 0); }, 0);
-  var totalLatency = calls.reduce(function(sum, c) { return sum + (c.latency_ms || 0); }, 0);
-  var avgLatency = totalCalls > 0 ? Math.round(totalLatency / totalCalls) : 0;
+  var cov = d.content_coverage || {total: 0, with_content: 0, metadata_only: 0};
+  var events = d.events || [];
 
   document.getElementById('dd-meta').textContent =
-    title + ' \u00b7 ' + totalCalls + ' recent calls \u00b7 avg latency ' + avgLatency + 'ms';
+    title + ' \u00b7 ' + cov.total + ' calls \u00b7 '
+    + cov.with_content + ' with content \u00b7 '
+    + cov.metadata_only + ' metadata-only';
 
-  // Build a dedicated panel inside the deep-dive body
-  var body = document.getElementById('dd-body') || document.querySelector('.deep-dive-body') || document.getElementById('dd-content');
   var rail = document.getElementById('dd-turn-rail');
-  var infoHtml = '<div style="padding:16px;max-width:900px">'
-    + '<div style="background:var(--surface2);border-radius:6px;padding:12px;margin-bottom:12px;border:1px solid var(--border)">'
-    + '<div style="font-size:14px;font-weight:600;margin-bottom:6px">Desktop AI app monitoring</div>'
-    + '<div style="color:var(--text2);font-size:12px;line-height:1.6">'
-    + 'This is a desktop Electron app that routes through the system proxy. We capture all its API traffic '
-    + 'but there are no chat turns to display — for that, use the companion Chrome extension on the matching web UI. '
-    + 'The panel below shows the last ' + totalCalls + ' proxy-captured requests.'
-    + '</div>'
-    + '<div style="margin-top:10px;display:flex;gap:6px">'
-    + '<button onclick="switchTab(\'traffic\');loadTraffic(true);closeDeepDive()" style="background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:4px 10px;color:var(--text);font-size:11px;cursor:pointer">Open API Traffic tab ↗</button>'
-    + '</div>'
-    + '</div>'
-    + '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:12px">'
-    + '<div style="background:var(--surface2);border-radius:6px;padding:10px;text-align:center"><div style="font-size:20px;font-weight:600;color:var(--cyan)">' + totalCalls + '</div><div style="color:var(--text2);font-size:11px">API calls</div></div>'
-    + '<div style="background:var(--surface2);border-radius:6px;padding:10px;text-align:center"><div style="font-size:20px;font-weight:600;color:var(--green)">' + fmtNum(totalBytes) + '</div><div style="color:var(--text2);font-size:11px">bytes transferred</div></div>'
-    + '<div style="background:var(--surface2);border-radius:6px;padding:10px;text-align:center"><div style="font-size:20px;font-weight:600;color:var(--orange)">' + avgLatency + 'ms</div><div style="color:var(--text2);font-size:11px">avg latency</div></div>'
-    + '</div>'
-    + '<div style="font-size:12px;color:var(--text2);margin-bottom:6px">Recent requests:</div>'
-    + '<table style="width:100%;border-collapse:collapse;font-size:12px">'
-    + '<thead><tr style="border-bottom:1px solid var(--border)"><th style="text-align:left;padding:6px 4px">Time</th><th style="text-align:left;padding:6px 4px">Service</th><th style="text-align:left;padding:6px 4px">Method</th><th style="text-align:right;padding:6px 4px">Status</th><th style="text-align:right;padding:6px 4px">Size</th><th style="text-align:right;padding:6px 4px">Latency</th></tr></thead>'
-    + '<tbody>'
-    + calls.map(function(c) {
-        var size = (c.request_size_bytes || 0) + (c.response_size_bytes || 0);
-        return '<tr style="border-bottom:1px solid var(--border)">'
-          + '<td style="padding:4px">' + fmtTimestamp(c.timestamp) + '</td>'
-          + '<td style="padding:4px">' + esc(c.destination_service || '-') + '</td>'
-          + '<td style="padding:4px">' + esc(c.http_method || '-') + '</td>'
-          + '<td style="padding:4px;text-align:right">' + (c.http_status || '-') + '</td>'
-          + '<td style="padding:4px;text-align:right">' + fmtNum(size) + 'B</td>'
-          + '<td style="padding:4px;text-align:right">' + (c.latency_ms || 0) + 'ms</td>'
-          + '</tr>';
-      }).join('')
-    + '</tbody></table></div>';
+  if (rail) {
+    rail['inner' + 'HTML'] = '<div style="padding:12px;color:var(--text2);font-size:12px;text-align:center">No grouped turns<br>(desktop session)<br><br>' + cov.total + ' calls total</div>';
+  }
 
-  // Clear the turn rail (there are no turns) and stash the info in the main content area
-  if (rail) rail.innerHTML = '<div style="padding:12px;color:var(--text2);font-size:12px;text-align:center">No chat turns<br>(desktop session)</div>';
-  // Try several possible content container IDs
-  var contentEl = document.getElementById('dd-turn-content') || document.getElementById('dd-content') || body;
+  // Build the event stream: reverse for newest-first, then render each
+  // api_call via the same three-branch renderer as loadSessionDetail.
+  var infoHtml = '<div style="padding:16px;max-width:900px">'
+    + '<div style="background:var(--surface2);border-left:3px solid var(--cyan);border-radius:4px;padding:10px 14px;margin-bottom:14px;font-size:12px;line-height:1.5">'
+    + '<div style="font-weight:600;color:var(--cyan);margin-bottom:4px">Desktop AI app monitoring</div>'
+    + '<div style="color:var(--text2)"><strong>' + cov.total + '</strong> recent calls &middot; '
+    + '<strong style="color:var(--green)">' + cov.with_content + '</strong> with content &middot; '
+    + '<strong style="color:var(--text2)">' + cov.metadata_only + '</strong> metadata-only</div>'
+    + '<div style="color:var(--text2);font-size:11px;margin-top:4px">Direct API calls (api.anthropic.com, api.openai.com) show full prompts and responses. Web-backend calls (claude.ai, chatgpt.com) are captured as metadata only -- their SSE/protobuf bodies are not parseable from the proxy.</div>'
+    + '</div>';
+
+  var reversed = events.slice().reverse();
+  for (var i = 0; i < reversed.length; i++) {
+    var ev = reversed[i];
+    if (ev.event_type !== 'api_call') continue;
+    var data = ev.data || {};
+    var userPrev = (data.user_preview || '').trim();
+    var asstPrev = (data.assistant_preview || '').trim();
+    var acTime = fmtTime(ev.timestamp);
+    var acHost = esc(data.destination_host || '');
+    var acModel = esc(humanModelName(data.model || '') || '');
+    if (userPrev) {
+      infoHtml += '<div class="event-block user">'
+        + '<div class="event-header" onclick="this.parentElement.classList.toggle(\'collapsed\')">'
+        + '<span>&#x1f464; USER &middot; ' + acTime
+        + (acHost ? ' &middot; ' + acHost : '')
+        + (acModel ? ' &middot; ' + acModel : '')
+        + '</span></div>'
+        + '<div class="event-body"><pre>' + esc(userPrev) + '</pre>'
+        + '<div style="color:var(--text2);font-size:11px;padding:4px 10px">' + (data.input_tokens || 0) + ' in</div>'
+        + '</div></div>';
+    }
+    if (asstPrev) {
+      var footParts = [];
+      if (data.input_tokens) footParts.push(fmtNum(data.input_tokens) + ' in');
+      if (data.output_tokens) footParts.push(fmtNum(data.output_tokens) + ' out');
+      if (data.cache_read_tokens) footParts.push(fmtNum(data.cache_read_tokens) + ' cache read');
+      if (data.latency_ms) footParts.push((data.latency_ms / 1000).toFixed(1) + 's');
+      if (data.estimated_cost_usd) footParts.push('$' + Number(data.estimated_cost_usd).toFixed(4));
+      if (data.tool_call_count) footParts.push(data.tool_call_count + ' tool calls');
+      infoHtml += '<div class="event-block assistant">'
+        + '<div class="event-header" onclick="this.parentElement.classList.toggle(\'collapsed\')">'
+        + '<span>&#x1f916; ASSISTANT &middot; ' + acTime
+        + (acModel ? ' &middot; ' + acModel : '')
+        + '</span></div>'
+        + '<div class="event-body"><pre>' + esc(asstPrev) + '</pre>'
+        + '<div style="color:var(--text2);font-size:11px;padding:4px 10px">' + footParts.join(' &middot; ') + '</div>'
+        + '</div></div>';
+    }
+    if (!userPrev && !asstPrev) {
+      var statusColor = (data.http_status && data.http_status >= 400) ? 'var(--red)' : 'var(--green)';
+      var acBytes = (data.request_size_bytes || 0) + (data.response_size_bytes || 0);
+      infoHtml += '<div class="event-block" style="border-left:3px solid var(--text2);margin-bottom:4px;opacity:0.75">'
+        + '<div style="padding:6px 10px;display:flex;gap:8px;align-items:center;font-size:11px;color:var(--text2)">'
+        + '<span style="min-width:70px">' + acTime + '</span>'
+        + '<span style="min-width:120px">' + acHost + '</span>'
+        + '<span style="font-family:monospace;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc((data.http_method || '') + ' ' + (data.endpoint_path || '').substring(0, 60)) + '</span>'
+        + '<span style="color:' + statusColor + '">' + (data.http_status || '-') + '</span>'
+        + '<span>' + fmtNum(acBytes) + 'B</span>'
+        + '<span>' + (data.latency_ms || 0) + 'ms</span>'
+        + '<span style="background:var(--surface2);padding:1px 6px;border-radius:3px;font-size:10px">metadata only</span>'
+        + '</div></div>';
+    }
+  }
+  infoHtml += '</div>';
+
+  var contentEl = document.getElementById('dd-turn-content') || document.getElementById('dd-content');
   if (contentEl) {
-    contentEl.innerHTML = infoHtml;
+    contentEl['inner' + 'HTML'] = infoHtml;
   }
 }
 

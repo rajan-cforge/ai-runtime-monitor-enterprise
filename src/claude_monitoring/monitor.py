@@ -2728,19 +2728,30 @@ class DashboardHandler(BaseHTTPRequestHandler):
                         enrichments["total_cost"] = agg["total_cost"] or 0
                         enrichments["api_call_count"] = agg["call_count"]
 
-                    # Synthesize pseudo-events from the 50 most recent api_calls
+                    # Synthesize pseudo-events from the 200 most recent api_calls
+                    # and expose preview fields so the dashboard can render
+                    # them as conversation turns (user / assistant blocks)
+                    # instead of metadata-only rows.
                     recent = db.execute(
                         f"""SELECT timestamp, destination_host, destination_service,
                                    endpoint_path, http_method, http_status, model,
                                    input_tokens, output_tokens, latency_ms,
-                                   request_size_bytes, response_size_bytes
+                                   request_size_bytes, response_size_bytes,
+                                   last_user_msg_preview, assistant_msg_preview,
+                                   cache_read_tokens, cache_write_tokens,
+                                   estimated_cost_usd, tool_call_count
                            FROM api_calls
                            WHERE destination_service IN ({placeholders})
-                           ORDER BY id DESC LIMIT 50""",  # nosec B608
+                           ORDER BY id DESC LIMIT 200""",  # nosec B608
                         list(services),
                     ).fetchall()
+                    with_content = 0
                     for r in recent:
                         rd = dict(r)
+                        user_prev = (rd.get("last_user_msg_preview") or "").strip()
+                        asst_prev = (rd.get("assistant_msg_preview") or "").strip()
+                        if user_prev or asst_prev:
+                            with_content += 1
                         event_list.append(
                             {
                                 "id": 0,
@@ -2756,12 +2767,23 @@ class DashboardHandler(BaseHTTPRequestHandler):
                                     "model": rd.get("model"),
                                     "input_tokens": rd.get("input_tokens"),
                                     "output_tokens": rd.get("output_tokens"),
+                                    "cache_read_tokens": rd.get("cache_read_tokens"),
+                                    "cache_write_tokens": rd.get("cache_write_tokens"),
                                     "latency_ms": rd.get("latency_ms"),
                                     "request_size_bytes": rd.get("request_size_bytes"),
                                     "response_size_bytes": rd.get("response_size_bytes"),
+                                    "estimated_cost_usd": rd.get("estimated_cost_usd"),
+                                    "tool_call_count": rd.get("tool_call_count") or 0,
+                                    "user_preview": user_prev,
+                                    "assistant_preview": asst_prev,
                                 },
                             }
                         )
+                    enrichments["content_coverage"] = {
+                        "total": len(recent),
+                        "with_content": with_content,
+                        "metadata_only": len(recent) - with_content,
+                    }
                 except Exception:
                     pass
                 enrichments["is_desktop_session"] = True
