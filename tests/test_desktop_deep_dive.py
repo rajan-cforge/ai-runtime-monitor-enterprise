@@ -1,20 +1,18 @@
 # Copyright 2026 GoCloudForge, Inc. All rights reserved.
-"""Tests for desktop session detail enrichment.
+"""Tests for desktop session activity summary enrichment.
 
-The Session Explorer right-hand panel and the Deep Dive modal for
-desktop synthetic sessions (``desktop_claude_desktop``,
-``desktop_chatgpt_desktop``, ``desktop_cursor_desktop``) render proxy-
-captured conversation content from ``api_calls``. The enrichment
-pipeline lives in ``_api_session_detail`` at
-``src/claude_monitoring/monitor.py`` — these tests hit the live HTTP
-endpoint and verify that:
+Desktop synthetic sessions (``desktop_claude_desktop``,
+``desktop_chatgpt_desktop``, ``desktop_cursor_desktop``) surface
+aggregated network activity instead of conversation content — the
+proxy captures every request/response envelope for these apps but
+cannot parse SSE/protobuf bodies, so content capture is the browser
+extension's job, not the proxy's.
 
-- Preview fields (user + assistant) round-trip from the DB
-- Token / cost / cache / tool-call fields are propagated
-- Empty-preview rows (claude_web / chatgpt_web) are still returned so
-  the dashboard can show a muted metadata-only row
-- ``content_coverage`` counts are accurate
-- Non-desktop sessions are unchanged (regression)
+These tests verify that ``_api_session_detail`` returns the
+``activity_summary`` dict (totals, daily breakdown, peak hour, top
+hosts) and the ``traffic_captured`` flag used by the dashboard to
+branch between "show the summary" and "show the configure-proxy
+hint" (Cursor path).
 """
 
 from __future__ import annotations
@@ -22,7 +20,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from http.server import HTTPServer
 from urllib.request import urlopen
 
@@ -33,11 +31,7 @@ from claude_monitoring.db import init_db
 
 @pytest.fixture()
 def desktop_server(tmp_path, monkeypatch):
-    """Spin up a DashboardHandler with a fresh DB.
-
-    Matches the pattern from test_supply_chain_ux.py: disable auth,
-    rewire the DB path, start a real HTTPServer on an ephemeral port.
-    """
+    """Spin up a DashboardHandler with a fresh DB."""
     monkeypatch.setenv("DISABLE_DASHBOARD_AUTH", "1")
     db_path = tmp_path / "monitor.db"
     init_db(db_path).close()
@@ -65,7 +59,6 @@ def _get_json(url: str) -> dict:
 
 
 def _seed_desktop_session(db_path, agent_type: str = "claude_desktop") -> str:
-    """Create the synthetic session row that desktop sessions use."""
     session_id = f"desktop_{agent_type}"
     conn = sqlite3.connect(str(db_path))
     conn.execute(
@@ -89,41 +82,22 @@ def _insert_api_call(
     db_path,
     service: str,
     *,
-    user_preview: str = "",
-    assistant_preview: str = "",
-    model: str = "claude-sonnet-4-5",
-    input_tokens: int = 100,
-    output_tokens: int = 50,
-    cache_read_tokens: int = 0,
-    cost: float = 0.01,
-    tool_call_count: int = 0,
-    host: str = "api.anthropic.com",
-    path: str = "/v1/messages",
+    host: str = "claude.ai",
+    timestamp: str | None = None,
+    req_bytes: int = 1500,
+    resp_bytes: int = 4000,
+    latency_ms: int = 200,
+    path: str = "/api/organizations/x/chat_conversations",
 ) -> None:
+    ts = timestamp or datetime.now(timezone.utc).isoformat()
     conn = sqlite3.connect(str(db_path))
     conn.execute(
         """INSERT INTO api_calls
            (timestamp, destination_host, destination_service, endpoint_path,
             http_method, http_status, model, input_tokens, output_tokens,
-            cache_read_tokens, cache_write_tokens, latency_ms,
-            request_size_bytes, response_size_bytes,
-            last_user_msg_preview, assistant_msg_preview,
-            estimated_cost_usd, tool_call_count)
-           VALUES (?, ?, ?, ?, 'POST', 200, ?, ?, ?, ?, 0, 1500, 2000, 4000, ?, ?, ?, ?)""",
-        (
-            datetime.now(timezone.utc).isoformat(),
-            host,
-            service,
-            path,
-            model,
-            input_tokens,
-            output_tokens,
-            cache_read_tokens,
-            user_preview,
-            assistant_preview,
-            cost,
-            tool_call_count,
-        ),
+            latency_ms, request_size_bytes, response_size_bytes)
+           VALUES (?, ?, ?, ?, 'POST', 200, '', 0, 0, ?, ?, ?)""",
+        (ts, host, service, path, latency_ms, req_bytes, resp_bytes),
     )
     conn.commit()
     conn.close()
@@ -134,87 +108,103 @@ def _insert_api_call(
 # ─────────────────────────────────────────────────────────────
 
 
-class TestDesktopSessionDetail:
-    def test_includes_preview_fields(self, desktop_server):
+class TestDesktopActivitySummary:
+    def test_claude_desktop_returns_activity_summary(self, desktop_server):
         base, db_path = desktop_server
         session_id = _seed_desktop_session(db_path, "claude_desktop")
-        _insert_api_call(
-            db_path,
-            "anthropic_api",
-            user_preview="Write a haiku about TLS",
-            assistant_preview="TLS flows through pipes, / encrypted whispers travel, / bytes safe in transit.",
-        )
+        for _ in range(5):
+            _insert_api_call(db_path, "claude_web", host="claude.ai")
 
         data = _get_json(f"{base}/api/session/{session_id}")
-        api_events = [e for e in data["events"] if e["event_type"] == "api_call"]
-        assert len(api_events) == 1
-        ev = api_events[0]
-        assert ev["data"]["user_preview"] == "Write a haiku about TLS"
-        assert "TLS flows" in ev["data"]["assistant_preview"]
         assert data["is_desktop_session"] is True
+        assert data["traffic_captured"] is True
+        summary = data["activity_summary"]
+        assert summary["total_calls"] == 5
+        assert summary["bytes_up"] == 5 * 1500
+        assert summary["bytes_down"] == 5 * 4000
+        assert summary["avg_latency_ms"] == 200
 
-    def test_metadata_only_row_still_returned(self, desktop_server):
+    def test_chatgpt_desktop_matches_chatgpt_hosts(self, desktop_server):
         base, db_path = desktop_server
-        session_id = _seed_desktop_session(db_path, "claude_desktop")
-        _insert_api_call(
-            db_path,
-            "claude_web",
-            user_preview="",
-            assistant_preview="",
-            host="claude.ai",
-            path="/api/organizations/x/chat_conversations",
-        )
+        session_id = _seed_desktop_session(db_path, "chatgpt_desktop")
+        _insert_api_call(db_path, "chatgpt_web", host="chatgpt.com")
+        _insert_api_call(db_path, "openai_api", host="api.openai.com")
 
         data = _get_json(f"{base}/api/session/{session_id}")
-        api_events = [e for e in data["events"] if e["event_type"] == "api_call"]
-        assert len(api_events) == 1
-        ev = api_events[0]
-        # Keys must be PRESENT (dashboard branches on them), not omitted
-        assert ev["data"]["user_preview"] == ""
-        assert ev["data"]["assistant_preview"] == ""
-        assert ev["data"]["destination_host"] == "claude.ai"
+        assert data["traffic_captured"] is True
+        assert data["activity_summary"]["total_calls"] == 2
 
-    def test_content_coverage_counts(self, desktop_server):
+    def test_cursor_desktop_no_traffic_sets_traffic_captured_false(self, desktop_server):
         base, db_path = desktop_server
-        session_id = _seed_desktop_session(db_path, "claude_desktop")
-        # 2 rows with content (anthropic_api), 3 rows without (claude_web)
-        _insert_api_call(db_path, "anthropic_api", user_preview="q1", assistant_preview="a1")
-        _insert_api_call(db_path, "anthropic_api", user_preview="q2", assistant_preview="a2")
-        _insert_api_call(db_path, "claude_web", host="claude.ai")
-        _insert_api_call(db_path, "claude_web", host="claude.ai")
-        _insert_api_call(db_path, "claude_web", host="claude.ai")
+        session_id = _seed_desktop_session(db_path, "cursor_desktop")
+        # No api_calls for cursor — real-world scenario where Cursor
+        # bypasses the system proxy entirely.
+        data = _get_json(f"{base}/api/session/{session_id}")
+        assert data["is_desktop_session"] is True
+        assert data["traffic_captured"] is False
+        assert data["activity_summary"]["total_calls"] == 0
+
+    def test_cursor_desktop_captures_cursor_hosts_when_present(self, desktop_server):
+        base, db_path = desktop_server
+        session_id = _seed_desktop_session(db_path, "cursor_desktop")
+        # Simulate Cursor configured with proxy — traffic to api2.cursor.sh
+        _insert_api_call(db_path, "unknown", host="api2.cursor.sh", path="/v1/completion")
 
         data = _get_json(f"{base}/api/session/{session_id}")
-        cov = data.get("content_coverage")
-        assert cov == {"total": 5, "with_content": 2, "metadata_only": 3}
+        assert data["traffic_captured"] is True
+        assert data["activity_summary"]["total_calls"] == 1
 
-    def test_propagates_tokens_and_cost(self, desktop_server):
+    def test_daily_breakdown_last_14_days(self, desktop_server):
         base, db_path = desktop_server
         session_id = _seed_desktop_session(db_path, "claude_desktop")
-        _insert_api_call(
-            db_path,
-            "anthropic_api",
-            user_preview="hi",
-            assistant_preview="hello",
-            input_tokens=2341,
-            output_tokens=847,
-            cache_read_tokens=12000,
-            cost=0.0142,
-            tool_call_count=2,
-        )
+        # Insert rows on 3 distinct days
+        now = datetime.now(timezone.utc)
+        for days_ago, count in [(0, 5), (1, 10), (2, 3)]:
+            ts = (now - timedelta(days=days_ago)).isoformat()
+            for _ in range(count):
+                _insert_api_call(db_path, "claude_web", host="claude.ai", timestamp=ts)
 
         data = _get_json(f"{base}/api/session/{session_id}")
-        ev = next(e for e in data["events"] if e["event_type"] == "api_call")
-        assert ev["data"]["input_tokens"] == 2341
-        assert ev["data"]["output_tokens"] == 847
-        assert ev["data"]["cache_read_tokens"] == 12000
-        assert ev["data"]["estimated_cost_usd"] == pytest.approx(0.0142)
-        assert ev["data"]["tool_call_count"] == 2
+        daily = data["activity_summary"]["daily"]
+        assert len(daily) == 3
+        # Newest first
+        assert daily[0]["calls"] == 5
+        assert daily[1]["calls"] == 10
+        assert daily[2]["calls"] == 3
 
-    def test_non_desktop_session_has_no_content_coverage(self, desktop_server):
+    def test_peak_hour_identifies_busiest_window(self, desktop_server):
         base, db_path = desktop_server
-        # A real (non-desktop) session — no synthetic events, no
-        # content_coverage key on the response.
+        session_id = _seed_desktop_session(db_path, "claude_desktop")
+        # 2 calls in hour A, 10 calls in hour B
+        for _ in range(2):
+            _insert_api_call(db_path, "claude_web", host="claude.ai", timestamp="2026-04-11T10:00:00+00:00")
+        for _ in range(10):
+            _insert_api_call(db_path, "claude_web", host="claude.ai", timestamp="2026-04-11T20:00:00+00:00")
+
+        data = _get_json(f"{base}/api/session/{session_id}")
+        peak = data["activity_summary"]["peak_hour"]
+        assert peak is not None
+        assert peak["calls"] == 10
+        assert peak["hour"].startswith("2026-04-11T20")
+
+    def test_top_hosts_returns_most_frequent(self, desktop_server):
+        base, db_path = desktop_server
+        session_id = _seed_desktop_session(db_path, "claude_desktop")
+        for _ in range(5):
+            _insert_api_call(db_path, "claude_web", host="claude.ai")
+        for _ in range(2):
+            _insert_api_call(db_path, "anthropic_api", host="api.anthropic.com")
+
+        data = _get_json(f"{base}/api/session/{session_id}")
+        hosts = data["activity_summary"]["top_hosts"]
+        assert len(hosts) == 2
+        assert hosts[0]["host"] == "claude.ai"
+        assert hosts[0]["calls"] == 5
+        assert hosts[1]["host"] == "api.anthropic.com"
+        assert hosts[1]["calls"] == 2
+
+    def test_non_desktop_session_has_no_activity_summary(self, desktop_server):
+        base, db_path = desktop_server
         conn = sqlite3.connect(str(db_path))
         conn.execute(
             """INSERT INTO sessions
@@ -231,4 +221,5 @@ class TestDesktopSessionDetail:
 
         data = _get_json(f"{base}/api/session/real-session-1")
         assert data.get("is_desktop_session") is not True
-        assert "content_coverage" not in data
+        assert "activity_summary" not in data
+        assert "traffic_captured" not in data

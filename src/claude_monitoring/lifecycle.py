@@ -207,6 +207,69 @@ def is_mitmproxy_process(pid: int) -> bool:
         return False
 
 
+def find_orphan_mitmproxy_on_port(port: int, *, exclude_pid: int | None = None) -> list[int]:
+    """Return PIDs of mitmproxy-like processes LISTENing on ``port``.
+
+    Excludes ``exclude_pid`` (our own mitmdump) so the watchdog doesn't
+    kill its own child. Used to clean up zombies from previous runs
+    that outlived their parent monitor and are still holding the proxy
+    port — the failure mode that caused the 30-second watchdog flap
+    (EADDRINUSE every restart attempt).
+
+    Fail-closed: returns empty list on any error.
+    """
+    try:
+        result = subprocess.run(
+            ["lsof", "-n", "-i", f":{port}", "-sTCP:LISTEN"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except Exception:
+        return []
+    pids: list[int] = []
+    for line in result.stdout.splitlines()[1:]:  # skip header
+        parts = line.split()
+        if len(parts) < 2:
+            continue
+        try:
+            pid = int(parts[1])
+        except ValueError:
+            continue
+        if exclude_pid is not None and pid == exclude_pid:
+            continue
+        if is_mitmproxy_process(pid):
+            pids.append(pid)
+    return pids
+
+
+def kill_orphan_mitmproxy(port: int, *, exclude_pid: int | None = None, timeout: float = 3.0) -> list[int]:
+    """SIGTERM (then SIGKILL) any orphan mitmproxy bound to ``port``.
+
+    Returns the list of PIDs that were killed — useful for logging
+    and tests. Waits up to ``timeout`` seconds for graceful shutdown
+    before escalating to SIGKILL.
+    """
+    victims = find_orphan_mitmproxy_on_port(port, exclude_pid=exclude_pid)
+    for pid in victims:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except OSError:
+            continue
+    if not victims:
+        return victims
+    deadline = time.time() + timeout
+    while time.time() < deadline and any(is_pid_alive(p) for p in victims):
+        time.sleep(0.1)
+    for pid in victims:
+        if is_pid_alive(pid):
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except OSError:
+                pass
+    return victims
+
+
 # ─────────────────────────────────────────────────────────────
 # Heartbeat
 # ─────────────────────────────────────────────────────────────
@@ -484,7 +547,12 @@ class ProxyManager:
         """Spawn mitmdump. Returns True on apparent success.
 
         If mitmdump is already running (detected via PID file), reuses
-        that instance rather than spawning a duplicate.
+        that instance rather than spawning a duplicate. Before spawning
+        a new one, kills any orphan mitmproxy holding the proxy port —
+        PID file tracking alone is insufficient because zombies from
+        previous monitor crashes may hold the port without a matching
+        PID file entry. This is the root cause of the 30-second watchdog
+        flap loop.
         """
         # If there's already a live mitmdump for us, adopt it instead of
         # spawning a duplicate. This makes --start idempotent after a
@@ -493,6 +561,15 @@ class ProxyManager:
         if existing and is_mitmproxy_process(existing):
             self._proc = None  # We don't own it directly but we track via PID
             return True
+
+        # Orphan cleanup: scan for any mitmproxy bound to our port that
+        # we don't own. Must run BEFORE the spawn attempt because the
+        # new mitmdump will fail with EADDRINUSE otherwise.
+        try:
+            proxy_port = get_proxy_port()
+            kill_orphan_mitmproxy(proxy_port, exclude_pid=None)
+        except Exception:
+            pass
 
         cmd = [sys.executable, "-m", "claude_monitoring.watch", "--start"]
         stdout: int | object = subprocess.DEVNULL
@@ -854,6 +931,17 @@ def restart_service() -> tuple[bool, str]:
     plist_path = get_plist_path()
     if not plist_path.exists():
         return False, "Service is not installed. Run: ai-monitor --install-service"
+
+    # kickstart only kills the direct LaunchAgent child (the monitor).
+    # Any mitmdump grandchildren that outlived the previous monitor
+    # will keep holding port 9080, making the restarted monitor spawn
+    # new mitmdumps that immediately die with EADDRINUSE. Nuke them
+    # first so the new monitor gets a clean port.
+    try:
+        proxy_port = get_proxy_port()
+        kill_orphan_mitmproxy(proxy_port, exclude_pid=None)
+    except Exception:
+        pass
 
     # kickstart needs the domain/target format: gui/<uid>/<label>
     try:

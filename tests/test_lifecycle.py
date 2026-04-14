@@ -348,6 +348,7 @@ class TestProxyManager:
         fake_proc.poll.return_value = None
 
         with (
+            patch("claude_monitoring.lifecycle.kill_orphan_mitmproxy", return_value=[]),
             patch("claude_monitoring.lifecycle.subprocess.Popen", return_value=fake_proc) as mock_popen,
             patch("claude_monitoring.lifecycle.read_pid_file", return_value=None),
         ):
@@ -455,6 +456,128 @@ class TestProxyManager:
         pm._restart_count = 2
         pm.reset_restart_count()
         assert pm._restart_count == 0
+
+    def test_start_kills_orphan_before_spawning(self, tmp_output_dir):
+        """When a zombie mitmdump holds the proxy port, start() must kill
+        it before spawning — otherwise the new mitmdump dies with
+        EADDRINUSE and the watchdog falls into a 30-second flap loop."""
+        pm = lifecycle.ProxyManager()
+        killed: list[int] = []
+
+        def fake_kill_orphans(port, exclude_pid=None, **kw):
+            killed.append(port)
+            return [98765]
+
+        fake_proc = MagicMock()
+        fake_proc.pid = 55555
+        fake_proc.poll.return_value = None
+
+        with (
+            patch("claude_monitoring.lifecycle.read_pid_file", return_value=None),
+            patch("claude_monitoring.lifecycle.kill_orphan_mitmproxy", side_effect=fake_kill_orphans) as mock_kill,
+            patch("claude_monitoring.lifecycle.subprocess.Popen", return_value=fake_proc),
+        ):
+            assert pm.start() is True
+
+        mock_kill.assert_called_once()
+        assert killed == [lifecycle.get_proxy_port()]
+
+
+class TestOrphanMitmproxyCleanup:
+    def test_find_orphan_parses_lsof_output(self, tmp_output_dir):
+        # lsof output: first line is header, subsequent lines are
+        # COMMAND PID USER FD TYPE DEVICE SIZE/OFF NODE NAME
+        sample = (
+            "COMMAND  PID       USER   FD   TYPE             DEVICE SIZE/OFF NODE NAME\n"
+            "Python  4682 rajanyadav    7u  IPv6 0xcf851315a5526bc9      0t0  TCP *:9080 (LISTEN)\n"
+        )
+        completed = MagicMock()
+        completed.stdout = sample
+
+        with (
+            patch("claude_monitoring.lifecycle.subprocess.run", return_value=completed),
+            patch("claude_monitoring.lifecycle.is_mitmproxy_process", return_value=True),
+        ):
+            pids = lifecycle.find_orphan_mitmproxy_on_port(9080)
+        assert pids == [4682]
+
+    def test_find_orphan_excludes_our_pid(self, tmp_output_dir):
+        sample = (
+            "COMMAND  PID       USER   FD   TYPE             DEVICE SIZE/OFF NODE NAME\n"
+            "Python  4682 rajanyadav    7u  IPv6 0xcf851315a5526bc9      0t0  TCP *:9080 (LISTEN)\n"
+        )
+        completed = MagicMock()
+        completed.stdout = sample
+        with (
+            patch("claude_monitoring.lifecycle.subprocess.run", return_value=completed),
+            patch("claude_monitoring.lifecycle.is_mitmproxy_process", return_value=True),
+        ):
+            pids = lifecycle.find_orphan_mitmproxy_on_port(9080, exclude_pid=4682)
+        assert pids == []
+
+    def test_find_orphan_ignores_non_mitmproxy_processes(self, tmp_output_dir):
+        sample = (
+            "COMMAND  PID       USER   FD   TYPE             DEVICE SIZE/OFF NODE NAME\n"
+            "someapp 1111 rajanyadav    7u  IPv6 0xcf851315a5526bc9      0t0  TCP *:9080 (LISTEN)\n"
+        )
+        completed = MagicMock()
+        completed.stdout = sample
+        with (
+            patch("claude_monitoring.lifecycle.subprocess.run", return_value=completed),
+            patch("claude_monitoring.lifecycle.is_mitmproxy_process", return_value=False),
+        ):
+            pids = lifecycle.find_orphan_mitmproxy_on_port(9080)
+        assert pids == []
+
+    def test_find_orphan_returns_empty_on_lsof_error(self, tmp_output_dir):
+        with patch("claude_monitoring.lifecycle.subprocess.run", side_effect=OSError("boom")):
+            assert lifecycle.find_orphan_mitmproxy_on_port(9080) == []
+
+    def test_kill_orphan_signals_victims_and_waits(self, tmp_output_dir):
+        victims_killed: list[tuple[int, int]] = []
+
+        def fake_kill(pid, sig):
+            victims_killed.append((pid, sig))
+
+        # is_pid_alive returns True once (first-pass wait), then False
+        alive_calls = [True, True, False, False]
+
+        def fake_alive(pid):
+            return alive_calls.pop(0) if alive_calls else False
+
+        with (
+            patch("claude_monitoring.lifecycle.find_orphan_mitmproxy_on_port", return_value=[4682]),
+            patch("claude_monitoring.lifecycle.os.kill", side_effect=fake_kill),
+            patch("claude_monitoring.lifecycle.is_pid_alive", side_effect=fake_alive),
+            patch("claude_monitoring.lifecycle.time.sleep"),
+        ):
+            killed = lifecycle.kill_orphan_mitmproxy(9080, timeout=0.5)
+
+        assert killed == [4682]
+        assert (4682, signal.SIGTERM) in victims_killed
+
+    def test_kill_orphan_escalates_to_sigkill(self, tmp_output_dir):
+        kill_signals: list[int] = []
+
+        def fake_kill(pid, sig):
+            kill_signals.append(sig)
+
+        with (
+            patch("claude_monitoring.lifecycle.find_orphan_mitmproxy_on_port", return_value=[4682]),
+            patch("claude_monitoring.lifecycle.os.kill", side_effect=fake_kill),
+            # Always alive → forces SIGKILL escalation
+            patch("claude_monitoring.lifecycle.is_pid_alive", return_value=True),
+            patch("claude_monitoring.lifecycle.time.sleep"),
+            patch("claude_monitoring.lifecycle.time.time", side_effect=[0, 0, 999, 999]),
+        ):
+            lifecycle.kill_orphan_mitmproxy(9080, timeout=0.1)
+
+        assert signal.SIGTERM in kill_signals
+        assert signal.SIGKILL in kill_signals
+
+    def test_kill_orphan_returns_empty_when_no_victims(self, tmp_output_dir):
+        with patch("claude_monitoring.lifecycle.find_orphan_mitmproxy_on_port", return_value=[]):
+            assert lifecycle.kill_orphan_mitmproxy(9080) == []
 
 
 # ─────────────────────────────────────────────────────────────

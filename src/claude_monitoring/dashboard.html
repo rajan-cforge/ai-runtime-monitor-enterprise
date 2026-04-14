@@ -938,6 +938,108 @@ async function loadSessions() {
 }
 
 // Load session detail
+
+// Renders the activity summary HTML block for a desktop synthetic session.
+// Called from both loadSessionDetail (right-hand panel) and openDesktopDeepDive
+// (modal). Single source of truth for the rendering so the two views stay in
+// sync. Input: the /api/session/<id> response dict with is_desktop_session,
+// activity_summary, traffic_captured, desktop_agent_type.
+function renderDesktopActivitySummary(d) {
+  var agentType = d.desktop_agent_type || 'unknown';
+  var appNames = {
+    'claude_desktop':  'Claude Desktop',
+    'chatgpt_desktop': 'ChatGPT Desktop',
+    'cursor_desktop':  'Cursor',
+  };
+  var appName = appNames[agentType] || 'Desktop app';
+  var summary = d.activity_summary || {total_calls: 0, bytes_up: 0, bytes_down: 0, avg_latency_ms: 0, daily: [], peak_hour: null, top_hosts: []};
+  var captured = d.traffic_captured !== false;
+
+  // Cursor-specific hint when no traffic was captured
+  if (!captured || summary.total_calls === 0) {
+    if (agentType === 'cursor_desktop') {
+      return '<div style="background:var(--surface2);border-left:3px solid var(--orange);border-radius:4px;padding:14px 18px;margin-bottom:14px;font-size:12px;line-height:1.6">'
+        + '<div style="font-weight:600;color:var(--orange);margin-bottom:6px">' + esc(appName) + ' detected — no API traffic captured</div>'
+        + '<div style="color:var(--text2)">Cursor is running, but we have not intercepted any of its API calls. Modern Cursor bypasses the macOS system proxy for its AI traffic. To capture Cursor:</div>'
+        + '<ol style="color:var(--text2);margin:8px 0 4px 18px;padding:0">'
+        + '<li>Open Cursor &rarr; Settings &rarr; Network</li>'
+        + '<li>Set <strong>HTTP Proxy</strong>: <code style="background:var(--surface);padding:1px 5px;border-radius:3px;font-family:monospace">http://127.0.0.1:9080</code></li>'
+        + '<li>Trust the AI Runtime Monitor CA certificate in Keychain</li>'
+        + '<li>Restart Cursor</li>'
+        + '</ol>'
+        + '<div style="color:var(--text2);font-size:11px;margin-top:6px">Shell env var (HTTPS_PROXY) does not work for Electron apps — they use Chromium\'s proxy resolver which ignores shell vars.</div>'
+        + '</div>';
+    }
+    return '<div style="background:var(--surface2);border-left:3px solid var(--text2);border-radius:4px;padding:12px 16px;margin-bottom:14px;font-size:12px;color:var(--text2)">'
+      + '<strong>' + esc(appName) + '</strong> detected, but no API traffic captured yet. Use the app to generate activity.'
+      + '</div>';
+  }
+
+  // Normal path — render the summary
+  var totalBytes = (summary.bytes_up || 0) + (summary.bytes_down || 0);
+  var peakLine = '';
+  if (summary.peak_hour) {
+    var peakHourStr = String(summary.peak_hour.hour || '').replace('T', ' ') + ':00';
+    peakLine = '<div style="color:var(--text2);margin-top:4px">Peak activity: <strong>' + esc(peakHourStr) + '</strong> (' + summary.peak_hour.calls + ' calls in 1 hour)</div>';
+  }
+  var activeSinceStr = summary.active_since ? fmtTime(summary.active_since).split(',')[0] : 'unknown';
+
+  var out = '<div style="background:var(--surface2);border-left:3px solid var(--cyan);border-radius:4px;padding:12px 16px;margin-bottom:14px;font-size:12px;line-height:1.5">'
+    + '<div style="font-weight:600;color:var(--cyan);margin-bottom:6px">' + esc(appName) + ' — Activity Monitoring</div>'
+    + '<div style="color:var(--text2);font-size:11px;margin-bottom:8px">Desktop apps use encrypted SSE/WebSocket channels that cannot be content-parsed. We capture every request envelope (timing, size, endpoint). For conversation text, use the Chrome extension on claude.ai / chatgpt.com in your browser.</div>'
+    // Stat grid: 4 columns
+    + '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:10px">'
+    + '<div style="background:var(--surface);border-radius:4px;padding:8px;text-align:center"><div style="font-size:18px;font-weight:600;color:var(--cyan)">' + fmtNum(summary.total_calls) + '</div><div style="color:var(--text2);font-size:10px">API calls</div></div>'
+    + '<div style="background:var(--surface);border-radius:4px;padding:8px;text-align:center"><div style="font-size:18px;font-weight:600;color:var(--green)">' + fmtBytes(totalBytes) + '</div><div style="color:var(--text2);font-size:10px">transferred</div></div>'
+    + '<div style="background:var(--surface);border-radius:4px;padding:8px;text-align:center"><div style="font-size:18px;font-weight:600;color:var(--orange)">' + summary.avg_latency_ms + 'ms</div><div style="color:var(--text2);font-size:10px">avg latency</div></div>'
+    + '<div style="background:var(--surface);border-radius:4px;padding:8px;text-align:center"><div style="font-size:18px;font-weight:600;color:var(--text)">' + fmtBytes(summary.bytes_up) + ' / ' + fmtBytes(summary.bytes_down) + '</div><div style="color:var(--text2);font-size:10px">sent / recv</div></div>'
+    + '</div>'
+    + '<div style="color:var(--text2)">Active since: <strong>' + esc(activeSinceStr) + '</strong></div>'
+    + peakLine;
+
+  // Daily breakdown
+  if (summary.daily && summary.daily.length) {
+    var maxCalls = 0;
+    for (var i = 0; i < summary.daily.length; i++) {
+      if (summary.daily[i].calls > maxCalls) maxCalls = summary.daily[i].calls;
+    }
+    out += '<div style="margin-top:10px;color:var(--text2);font-size:11px;margin-bottom:4px">Daily activity (last ' + summary.daily.length + ' days):</div>';
+    out += '<div style="font-family:monospace;font-size:11px">';
+    for (var j = 0; j < summary.daily.length; j++) {
+      var day = summary.daily[j];
+      var barWidth = maxCalls > 0 ? Math.round((day.calls / maxCalls) * 100) : 0;
+      out += '<div style="display:flex;gap:8px;align-items:center;margin-bottom:2px">'
+        + '<span style="min-width:78px;color:var(--text2)">' + esc(day.date) + '</span>'
+        + '<div style="flex:1;background:var(--surface);height:12px;border-radius:2px;overflow:hidden"><div style="width:' + barWidth + '%;height:100%;background:var(--cyan)"></div></div>'
+        + '<span style="min-width:50px;text-align:right;color:var(--text)">' + day.calls + ' calls</span>'
+        + '<span style="min-width:60px;text-align:right;color:var(--text2)">' + fmtBytes(day.bytes) + '</span>'
+        + '</div>';
+    }
+    out += '</div>';
+  }
+
+  // Top hosts
+  if (summary.top_hosts && summary.top_hosts.length) {
+    out += '<div style="margin-top:10px;color:var(--text2);font-size:11px;margin-bottom:4px">Top destinations:</div>';
+    out += '<div style="font-family:monospace;font-size:11px">';
+    for (var k = 0; k < summary.top_hosts.length; k++) {
+      var h = summary.top_hosts[k];
+      out += '<div style="display:flex;gap:8px;padding:2px 0"><span style="flex:1">' + esc(h.host) + '</span><span style="color:var(--text2)">' + h.calls + ' calls</span><span style="color:var(--text2);min-width:70px;text-align:right">' + fmtBytes(h.bytes) + '</span></div>';
+    }
+    out += '</div>';
+  }
+  out += '</div>';
+  return out;
+}
+
+// Pretty-print byte counts. Used by the desktop activity summary.
+function fmtBytes(n) {
+  if (!n || n < 1024) return (n || 0) + ' B';
+  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+  if (n < 1024 * 1024 * 1024) return (n / (1024 * 1024)).toFixed(1) + ' MB';
+  return (n / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
+}
+
 async function loadSessionDetail(id) {
   document.querySelectorAll('.session-item').forEach(el => el.classList.remove('active'));
   const item = document.querySelector('.session-item[data-id="'+id+'"]');
@@ -967,22 +1069,14 @@ async function loadSessionDetail(id) {
       + '<button onclick="openDeepDive(\'' + s.session_id + '\')" style="background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:4px 10px;color:var(--blue);font-size:12px;cursor:pointer;font-weight:600">&#x1f52c; Deep Dive</button>'
       + '</div></div>';
 
-    // Desktop synthetic session banner with content-coverage summary.
-    // Electron wrappers like Claude Desktop hit both the direct API
-    // (full content captured) AND the web backend (metadata only —
-    // SSE/protobuf bodies not parseable from the proxy), so the banner
-    // reports how many rows have parsed conversation content.
+    // Desktop synthetic session — render the activity summary instead
+    // of per-request events. The proxy cannot parse SSE/protobuf bodies
+    // from claude.ai / chatgpt.com, so conversation content capture is
+    // the browser extension's job. What we CAN surface — and what a SOC
+    // analyst actually wants — is network activity: totals, daily
+    // breakdown, peak hour, top hosts.
     if (d.is_desktop_session) {
-      var dsBytesTotal = (d.bytes_in||0) + (d.bytes_out||0);
-      var cov = d.content_coverage || {total: 0, with_content: 0, metadata_only: 0};
-      html += '<div style="background:var(--surface2);border-left:3px solid var(--cyan);border-radius:4px;padding:10px 14px;margin-bottom:14px;font-size:12px;line-height:1.5">'
-        + '<div style="font-weight:600;color:var(--cyan);margin-bottom:4px">Desktop AI app monitoring</div>'
-        + '<div style="color:var(--text2)"><strong>' + cov.total + '</strong> recent calls &middot; '
-        + '<strong style="color:var(--green)">' + cov.with_content + '</strong> with content &middot; '
-        + '<strong style="color:var(--text2)">' + cov.metadata_only + '</strong> metadata-only</div>'
-        + '<div style="color:var(--text2);font-size:11px;margin-top:4px">Direct API calls (api.anthropic.com, api.openai.com) show full prompts and responses. Web-backend calls (claude.ai, chatgpt.com) are captured as metadata only — their SSE/protobuf bodies are not parseable from the proxy.</div>'
-        + '<div style="color:var(--text2);margin-top:6px">Traffic: <strong>' + fmtNum(dsBytesTotal) + 'B</strong> transferred across <strong>' + (d.api_call_count||0) + '</strong> API calls</div>'
-        + '</div>';
+      html += renderDesktopActivitySummary(d);
     }
 
     // Reverse events: show most recent first
@@ -1047,65 +1141,9 @@ async function loadSessionDetail(id) {
             + '\nPatterns: '+esc((data.patterns||[]).join(', '))
             + '\nSnippet: '+esc(data.snippet)+'</pre></div></div>';
           break;
-        case 'api_call': {
-          // Desktop session pseudo-event. Three branches:
-          //   1. user_preview populated  -> green User block
-          //   2. assistant_preview       -> orange Assistant block
-          //   3. neither populated       -> muted metadata-only row
-          // Branches 1+2 render both blocks for the same call (one
-          // request carries both the inbound user turn and the outbound
-          // assistant response). Branch 3 keeps the timeline complete
-          // for claude_web / chatgpt_web rows where the body is not
-          // parseable.
-          var userPrev = (data.user_preview || '').trim();
-          var asstPrev = (data.assistant_preview || '').trim();
-          var acTime = fmtTime(ev.timestamp);
-          var acHost = esc(data.destination_host || '');
-          var acModel = esc(humanModelName(data.model || '') || '');
-          if (userPrev) {
-            html += '<div class="event-block user">'
-              + '<div class="event-header" onclick="this.parentElement.classList.toggle(\'collapsed\')">'
-              + '<span>&#x1f464; USER &middot; ' + acTime
-              + (acHost ? ' &middot; ' + acHost : '')
-              + (acModel ? ' &middot; ' + acModel : '')
-              + '</span></div>'
-              + '<div class="event-body"><pre>' + esc(userPrev) + '</pre>'
-              + '<div style="color:var(--text2);font-size:11px;padding:4px 10px">' + (data.input_tokens || 0) + ' in</div>'
-              + '</div></div>';
-          }
-          if (asstPrev) {
-            var footParts = [];
-            if (data.input_tokens) footParts.push(fmtNum(data.input_tokens) + ' in');
-            if (data.output_tokens) footParts.push(fmtNum(data.output_tokens) + ' out');
-            if (data.cache_read_tokens) footParts.push(fmtNum(data.cache_read_tokens) + ' cache read');
-            if (data.latency_ms) footParts.push((data.latency_ms / 1000).toFixed(1) + 's');
-            if (data.estimated_cost_usd) footParts.push('$' + Number(data.estimated_cost_usd).toFixed(4));
-            if (data.tool_call_count) footParts.push(data.tool_call_count + ' tool calls');
-            html += '<div class="event-block assistant">'
-              + '<div class="event-header" onclick="this.parentElement.classList.toggle(\'collapsed\')">'
-              + '<span>&#x1f916; ASSISTANT &middot; ' + acTime
-              + (acModel ? ' &middot; ' + acModel : '')
-              + '</span></div>'
-              + '<div class="event-body"><pre>' + esc(asstPrev) + '</pre>'
-              + '<div style="color:var(--text2);font-size:11px;padding:4px 10px">' + footParts.join(' &middot; ') + '</div>'
-              + '</div></div>';
-          }
-          if (!userPrev && !asstPrev) {
-            var statusColor = (data.http_status && data.http_status >= 400) ? 'var(--red)' : 'var(--green)';
-            var acBytes = (data.request_size_bytes || 0) + (data.response_size_bytes || 0);
-            html += '<div class="event-block" style="border-left:3px solid var(--text2);margin-bottom:4px;opacity:0.75">'
-              + '<div style="padding:6px 10px;display:flex;gap:8px;align-items:center;font-size:11px;color:var(--text2)">'
-              + '<span style="min-width:70px">' + acTime + '</span>'
-              + '<span style="min-width:120px">' + acHost + '</span>'
-              + '<span style="font-family:monospace;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc((data.http_method || '') + ' ' + (data.endpoint_path || '').substring(0, 60)) + '</span>'
-              + '<span style="color:' + statusColor + '">' + (data.http_status || '-') + '</span>'
-              + '<span>' + fmtNum(acBytes) + 'B</span>'
-              + '<span>' + (data.latency_ms || 0) + 'ms</span>'
-              + '<span style="background:var(--surface2);padding:1px 6px;border-radius:3px;font-size:10px">metadata only</span>'
-              + '</div></div>';
-          }
-          break;
-        }
+        // Note: desktop api_call pseudo-events were removed in favor of
+        // the aggregated activity_summary renderer — the backend no
+        // longer emits them for desktop sessions.
       }
     }
     container.innerHTML = html;
@@ -2548,12 +2586,10 @@ async function openDeepDive(sessionId, jumpToTurn) {
   } catch(e) { console.error('Deep dive error:', e); }
 }
 
-// Dedicated deep-dive for desktop synthetic sessions.
-// Reuses /api/session/<id> (which enriches pseudo-events with preview
-// fields) and renders each api_call as a user / assistant / metadata
-// block using the same markup as the Session Explorer right-hand panel.
-// The turn rail is cleared because desktop sessions don't have grouped
-// turns -- they're a flat stream of proxy-captured calls.
+// Desktop session Deep Dive — renders the same activity summary as the
+// inline right-hand panel, just in a modal with larger type. There are
+// no grouped turns to render because desktop apps only give us network
+// metadata, not conversation content.
 async function openDesktopDeepDive(sessionId) {
   var titles = {
     'desktop_chatgpt_desktop': 'ChatGPT Desktop App',
@@ -2565,97 +2601,28 @@ async function openDesktopDeepDive(sessionId) {
   document.getElementById('dd-title').textContent = title;
   document.getElementById('deepdive-overlay').classList.add('open');
 
-  var d = {events: [], content_coverage: {total: 0, with_content: 0, metadata_only: 0}};
+  var d = {is_desktop_session: true, traffic_captured: false, activity_summary: null, desktop_agent_type: sessionId.replace('desktop_', '')};
   try {
     var r = await fetch(API + '/api/session/' + encodeURIComponent(sessionId));
     d = await r.json();
   } catch(e) {}
 
-  var cov = d.content_coverage || {total: 0, with_content: 0, metadata_only: 0};
-  var events = d.events || [];
-
+  var summary = d.activity_summary || {total_calls: 0};
   document.getElementById('dd-meta').textContent =
-    title + ' \u00b7 ' + cov.total + ' calls \u00b7 '
-    + cov.with_content + ' with content \u00b7 '
-    + cov.metadata_only + ' metadata-only';
+    title + ' \u00b7 ' + (summary.total_calls || 0) + ' API calls captured';
 
   var rail = document.getElementById('dd-turn-rail');
   if (rail) {
-    rail['inner' + 'HTML'] = '<div style="padding:12px;color:var(--text2);font-size:12px;text-align:center">No grouped turns<br>(desktop session)<br><br>' + cov.total + ' calls total</div>';
+    rail['inner' + 'HTML'] = '<div style="padding:12px;color:var(--text2);font-size:12px;text-align:center">No grouped turns<br>(desktop session)<br><br>' + (summary.total_calls || 0) + ' calls tracked</div>';
   }
 
-  // Build the event stream: reverse for newest-first, then render each
-  // api_call via the same three-branch renderer as loadSessionDetail.
-  var infoHtml = '<div style="padding:16px;max-width:900px">'
-    + '<div style="background:var(--surface2);border-left:3px solid var(--cyan);border-radius:4px;padding:10px 14px;margin-bottom:14px;font-size:12px;line-height:1.5">'
-    + '<div style="font-weight:600;color:var(--cyan);margin-bottom:4px">Desktop AI app monitoring</div>'
-    + '<div style="color:var(--text2)"><strong>' + cov.total + '</strong> recent calls &middot; '
-    + '<strong style="color:var(--green)">' + cov.with_content + '</strong> with content &middot; '
-    + '<strong style="color:var(--text2)">' + cov.metadata_only + '</strong> metadata-only</div>'
-    + '<div style="color:var(--text2);font-size:11px;margin-top:4px">Direct API calls (api.anthropic.com, api.openai.com) show full prompts and responses. Web-backend calls (claude.ai, chatgpt.com) are captured as metadata only -- their SSE/protobuf bodies are not parseable from the proxy.</div>'
-    + '</div>';
-
-  var reversed = events.slice().reverse();
-  for (var i = 0; i < reversed.length; i++) {
-    var ev = reversed[i];
-    if (ev.event_type !== 'api_call') continue;
-    var data = ev.data || {};
-    var userPrev = (data.user_preview || '').trim();
-    var asstPrev = (data.assistant_preview || '').trim();
-    var acTime = fmtTime(ev.timestamp);
-    var acHost = esc(data.destination_host || '');
-    var acModel = esc(humanModelName(data.model || '') || '');
-    if (userPrev) {
-      infoHtml += '<div class="event-block user">'
-        + '<div class="event-header" onclick="this.parentElement.classList.toggle(\'collapsed\')">'
-        + '<span>&#x1f464; USER &middot; ' + acTime
-        + (acHost ? ' &middot; ' + acHost : '')
-        + (acModel ? ' &middot; ' + acModel : '')
-        + '</span></div>'
-        + '<div class="event-body"><pre>' + esc(userPrev) + '</pre>'
-        + '<div style="color:var(--text2);font-size:11px;padding:4px 10px">' + (data.input_tokens || 0) + ' in</div>'
-        + '</div></div>';
-    }
-    if (asstPrev) {
-      var footParts = [];
-      if (data.input_tokens) footParts.push(fmtNum(data.input_tokens) + ' in');
-      if (data.output_tokens) footParts.push(fmtNum(data.output_tokens) + ' out');
-      if (data.cache_read_tokens) footParts.push(fmtNum(data.cache_read_tokens) + ' cache read');
-      if (data.latency_ms) footParts.push((data.latency_ms / 1000).toFixed(1) + 's');
-      if (data.estimated_cost_usd) footParts.push('$' + Number(data.estimated_cost_usd).toFixed(4));
-      if (data.tool_call_count) footParts.push(data.tool_call_count + ' tool calls');
-      infoHtml += '<div class="event-block assistant">'
-        + '<div class="event-header" onclick="this.parentElement.classList.toggle(\'collapsed\')">'
-        + '<span>&#x1f916; ASSISTANT &middot; ' + acTime
-        + (acModel ? ' &middot; ' + acModel : '')
-        + '</span></div>'
-        + '<div class="event-body"><pre>' + esc(asstPrev) + '</pre>'
-        + '<div style="color:var(--text2);font-size:11px;padding:4px 10px">' + footParts.join(' &middot; ') + '</div>'
-        + '</div></div>';
-    }
-    if (!userPrev && !asstPrev) {
-      var statusColor = (data.http_status && data.http_status >= 400) ? 'var(--red)' : 'var(--green)';
-      var acBytes = (data.request_size_bytes || 0) + (data.response_size_bytes || 0);
-      infoHtml += '<div class="event-block" style="border-left:3px solid var(--text2);margin-bottom:4px;opacity:0.75">'
-        + '<div style="padding:6px 10px;display:flex;gap:8px;align-items:center;font-size:11px;color:var(--text2)">'
-        + '<span style="min-width:70px">' + acTime + '</span>'
-        + '<span style="min-width:120px">' + acHost + '</span>'
-        + '<span style="font-family:monospace;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc((data.http_method || '') + ' ' + (data.endpoint_path || '').substring(0, 60)) + '</span>'
-        + '<span style="color:' + statusColor + '">' + (data.http_status || '-') + '</span>'
-        + '<span>' + fmtNum(acBytes) + 'B</span>'
-        + '<span>' + (data.latency_ms || 0) + 'ms</span>'
-        + '<span style="background:var(--surface2);padding:1px 6px;border-radius:3px;font-size:10px">metadata only</span>'
-        + '</div></div>';
-    }
-  }
-  infoHtml += '</div>';
+  var html = '<div style="padding:16px;max-width:900px">' + renderDesktopActivitySummary(d) + '</div>';
 
   var contentEl = document.getElementById('dd-turn-content') || document.getElementById('dd-content');
   if (contentEl) {
-    contentEl['inner' + 'HTML'] = infoHtml;
+    contentEl['inner' + 'HTML'] = html;
   }
 }
-
 function closeDeepDive() {
   document.getElementById('deepdive-overlay').classList.remove('open');
 }
