@@ -135,6 +135,181 @@ _scan_state: dict = _new_scan_state()
 # ─────────────────────────────────────────────────────────────
 
 
+_SUPPLY_CHAIN_PATTERNS = {
+    "supply_chain_risk",
+    "vulnerable_package",
+    "typosquat",
+    "remote_exec_unpinned",
+    "malicious_package",
+}
+
+
+def _enrich_supply_chain_alert(db, session_id, data: dict) -> dict | None:
+    """Feature C: build a {package, manager, advisory_id, advisory_url,
+    investigation[]} dict for supply-chain alerts so the dashboard can
+    render the investigation card.
+
+    Returns None for non-supply-chain alerts (credentials, etc.) so the
+    existing flat card layout stays in place for them.
+
+    Cross-references:
+      - ``agent_dependencies`` for the most recent install in the same
+        session (so we know the package + manager + risk flags)
+      - ``package_vulnerabilities`` for the first linked advisory
+      - ``package_registry_cache`` for publish date / description /
+        download signals
+    """
+    patterns = set(data.get("patterns") or [])
+    if not patterns & _SUPPLY_CHAIN_PATTERNS:
+        return None
+
+    matched_value = (data.get("matched_value") or "").strip()
+    context = (data.get("context") or "").strip()
+
+    # Best-effort: find the most recent install in this session. If no
+    # session_id, fall back to most recent global install (rare).
+    dep_row = None
+    try:
+        if session_id:
+            dep_row = db.execute(
+                """SELECT package_name, package_manager, package_version,
+                          risk_flags, risk_score, timestamp
+                   FROM agent_dependencies
+                   WHERE session_id = ?
+                   ORDER BY id DESC LIMIT 1""",
+                (session_id,),
+            ).fetchone()
+        if not dep_row and matched_value:
+            # Try to match the alert's matched_value against a package name
+            dep_row = db.execute(
+                """SELECT package_name, package_manager, package_version,
+                          risk_flags, risk_score, timestamp
+                   FROM agent_dependencies
+                   WHERE package_name LIKE ?
+                   ORDER BY id DESC LIMIT 1""",
+                (f"%{matched_value[:40]}%",),
+            ).fetchone()
+    except Exception:
+        dep_row = None
+
+    if not dep_row:
+        return None
+
+    pkg_name = dep_row["package_name"] if hasattr(dep_row, "keys") else dep_row[0]
+    pkg_mgr = dep_row["package_manager"] if hasattr(dep_row, "keys") else dep_row[1]
+    risk_flags_json = dep_row["risk_flags"] if hasattr(dep_row, "keys") else dep_row[3]
+
+    try:
+        risk_flags = json.loads(risk_flags_json or "{}")
+    except Exception:
+        risk_flags = {}
+
+    # Find the first linked advisory (prefer OSV MAL- entries — those are
+    # the loudest malicious-package signals)
+    advisory_id = None
+    advisory_url = None
+    try:
+        vuln_rows = db.execute(
+            """SELECT vuln_id, source, severity FROM package_vulnerabilities
+               WHERE package_name = ?
+               ORDER BY
+                 CASE WHEN vuln_id LIKE 'MAL-%' THEN 0 ELSE 1 END,
+                 CASE severity
+                   WHEN 'malicious' THEN 0
+                   WHEN 'critical'  THEN 1
+                   WHEN 'high'      THEN 2
+                   WHEN 'medium'    THEN 3
+                   ELSE 4 END,
+                 id DESC""",
+            (pkg_name,),
+        ).fetchall()
+    except Exception:
+        vuln_rows = []
+
+    for v in vuln_rows:
+        vid = v["vuln_id"] if hasattr(v, "keys") else v[0]
+        if vid:
+            advisory_id = vid
+            if vid.startswith(("MAL-", "GHSA-", "CVE-", "PYSEC-", "GO-")):
+                advisory_url = f"https://osv.dev/vulnerability/{vid}"
+            else:
+                advisory_url = f"https://osv.dev/list?q={vid}"
+            break
+
+    if not advisory_url and pkg_name:
+        if pkg_mgr == "pip":
+            advisory_url = f"https://pypi.org/project/{pkg_name}/"
+        elif pkg_mgr == "npm":
+            advisory_url = f"https://www.npmjs.com/package/{pkg_name}"
+
+    # Build the investigation checklist
+    investigation: list[str] = []
+
+    # 1. Malicious advisory signal
+    if advisory_id and advisory_id.startswith("MAL-"):
+        investigation.append("Package flagged as malicious (OSV MAL- prefix)")
+    elif "malicious_package" in patterns:
+        investigation.append("Flagged as malicious by pattern detector")
+
+    # 2. Risk flags from the dependency row
+    reasons = risk_flags.get("reasons") or []
+    for reason in reasons:
+        # Risk flags are already human-readable strings from supply_chain.py
+        investigation.append(str(reason))
+
+    # 3. Registry metadata signals (0 downloads, no description, scope mismatch)
+    try:
+        cache_row = db.execute(
+            """SELECT metadata FROM package_registry_cache
+               WHERE package_name = ? AND manager = ?""",
+            (pkg_name, pkg_mgr),
+        ).fetchone()
+        if cache_row:
+            meta_json = cache_row["metadata"] if hasattr(cache_row, "keys") else cache_row[0]
+            try:
+                meta = json.loads(meta_json or "{}")
+            except Exception:
+                meta = {}
+            if not meta.get("has_description"):
+                investigation.append("No description or summary")
+            if not meta.get("has_repository"):
+                investigation.append("No repository URL")
+            if meta.get("has_install_scripts"):
+                investigation.append("Has install scripts (postinstall / preinstall)")
+    except Exception:
+        pass
+
+    # 4. Typosquat signal
+    if "typosquat" in patterns:
+        investigation.append("Name similar to a popular package (possible typosquat)")
+
+    # 5. Pattern-based fallbacks
+    if "remote_exec_unpinned" in patterns and not any("unpinned" in r.lower() for r in investigation):
+        investigation.append("Unpinned remote code execution (npx / curl | sh)")
+
+    # Dedup while preserving order
+    seen = set()
+    deduped = []
+    for item in investigation:
+        if item not in seen:
+            seen.add(item)
+            deduped.append(item)
+
+    # Compute a display label for the installer
+    installed_by = context or "unknown"
+    if installed_by.startswith("tool:"):
+        installed_by = installed_by[5:]
+
+    return {
+        "name": pkg_name,
+        "manager": pkg_mgr,
+        "advisory_id": advisory_id,
+        "advisory_url": advisory_url,
+        "installed_by": installed_by,
+        "investigation": deduped,
+    }
+
+
 def push_live_event(event):
     """Push event to the in-memory live feed, with dedup."""
     ts = event.get("timestamp", "")
@@ -2745,28 +2920,34 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 ).fetchone()
                 turn_count = tc_row[0] if tc_row else 0
 
-            alerts.append(
-                {
-                    "id": r["id"],
-                    "timestamp": r["timestamp"],
-                    "session_id": r["session_id"],
-                    "session_title": JSONLSessionWatcher._clean_title(r["title"])
-                    if r["title"]
-                    else (r["session_id"] or "")[:8],
-                    "cwd": r["cwd"],
-                    "patterns": data.get("patterns", []),
-                    "severity": sev,
-                    "categories": cats,
-                    "context": data.get("context", ""),
-                    "snippet": data.get("snippet", ""),
-                    "matched_value": data.get("matched_value", ""),
-                    "confidence": data.get("confidence", "medium"),
-                    "likely_false_positive": data.get("likely_false_positive", False),
-                    "repeat_count": data.get("repeat_count", 1),
-                    "turn_number": turn_count,
-                    "dismissed": dismissed,
-                }
-            )
+            # Feature C: enrich supply-chain alerts with package metadata
+            # so the dashboard can render the investigation card with
+            # advisory links, deep-jump buttons, and Copy Report.
+            package_info = _enrich_supply_chain_alert(db, r["session_id"], data)
+
+            alert_row = {
+                "id": r["id"],
+                "timestamp": r["timestamp"],
+                "session_id": r["session_id"],
+                "session_title": JSONLSessionWatcher._clean_title(r["title"])
+                if r["title"]
+                else (r["session_id"] or "")[:8],
+                "cwd": r["cwd"],
+                "patterns": data.get("patterns", []),
+                "severity": sev,
+                "categories": cats,
+                "context": data.get("context", ""),
+                "snippet": data.get("snippet", ""),
+                "matched_value": data.get("matched_value", ""),
+                "confidence": data.get("confidence", "medium"),
+                "likely_false_positive": data.get("likely_false_positive", False),
+                "repeat_count": data.get("repeat_count", 1),
+                "turn_number": turn_count,
+                "dismissed": dismissed,
+            }
+            if package_info is not None:
+                alert_row["package"] = package_info
+            alerts.append(alert_row)
         self._send_json(
             {
                 "alerts": alerts,

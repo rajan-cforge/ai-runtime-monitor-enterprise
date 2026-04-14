@@ -356,3 +356,160 @@ class TestAsyncScanProgress:
         assert "osv" in rows
         assert rows["pip-audit"]["last_success"] is not None
         assert rows["osv"]["last_success"] is not None
+
+
+# ─────────────────────────────────────────────────────────────
+# Feature C — alert investigation enrichment
+# ─────────────────────────────────────────────────────────────
+
+
+def _seed_malicious_alert(db_path, session_id="demo-1", pattern="vulnerable_package"):
+    """Insert the rows needed to exercise _enrich_supply_chain_alert."""
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+    conn.execute(
+        "INSERT INTO sessions (session_id, start_time, model, agent_type, title, last_activity) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (session_id, "2026-04-14T00:00:00Z", "claude-opus-4", "claude_code", "Demo", "2026-04-14T00:10:00Z"),
+    )
+    conn.execute(
+        "INSERT INTO agent_dependencies (timestamp, session_id, agent_type, action, package_manager, "
+        " package_name, package_version, pinned, risk_flags, risk_score, category) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            "2026-04-14T00:05:00Z",
+            session_id,
+            "claude_code",
+            "install",
+            "npm",
+            "strapi-plugin-cron",
+            "1.0.0",
+            0,
+            json.dumps({"reasons": ["Scope mismatch (strapi-plugin-* without @strapi)"]}),
+            8,
+            "package",
+        ),
+    )
+    conn.execute(
+        "INSERT INTO package_vulnerabilities (scan_timestamp, package_name, package_version, "
+        " ecosystem, vuln_id, severity, source, description) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            "2026-04-14T00:06:00Z",
+            "strapi-plugin-cron",
+            "1.0.0",
+            "npm",
+            "MAL-2024-7153",
+            "malicious",
+            "osv",
+            "Malicious package impersonating @strapi plugins",
+        ),
+    )
+    conn.execute(
+        "INSERT INTO package_registry_cache (package_name, manager, fetch_timestamp, metadata) VALUES (?, ?, ?, ?)",
+        (
+            "strapi-plugin-cron",
+            "npm",
+            "2026-04-14T00:06:30Z",
+            json.dumps(
+                {
+                    "has_description": False,
+                    "has_repository": False,
+                    "has_install_scripts": True,
+                }
+            ),
+        ),
+    )
+    conn.execute(
+        "INSERT INTO events (timestamp, session_id, event_type, source_layer, data_json) "
+        "VALUES (?, ?, 'sensitive_data', 'supply_chain', ?)",
+        (
+            "2026-04-14T00:07:00Z",
+            session_id,
+            json.dumps(
+                {
+                    "patterns": [pattern],
+                    "severity": "critical",
+                    "categories": ["credential"],
+                    "context": "supply_chain_scan",
+                    "snippet": "strapi-plugin-cron detected as malicious",
+                    "matched_value": "strapi-plugin-cron",
+                    "confidence": "high",
+                }
+            ),
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+
+def _seed_non_supply_chain_alert(db_path):
+    conn = sqlite3.connect(str(db_path))
+    conn.execute(
+        "INSERT INTO events (timestamp, session_id, event_type, source_layer, data_json) "
+        "VALUES (?, ?, 'sensitive_data', 'jsonl', ?)",
+        (
+            "2026-04-14T00:00:00Z",
+            None,
+            json.dumps(
+                {
+                    "patterns": ["aws_key"],
+                    "severity": "critical",
+                    "categories": ["credential"],
+                    "context": "tool_result",
+                    "snippet": "matched",
+                    "matched_value": "AKIA************XXXX",
+                    "confidence": "high",
+                }
+            ),
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+
+class TestAlertEnrichment:
+    def test_includes_package_for_supply_chain_pattern(self, sc_server):
+        base, db_path = sc_server
+        _seed_malicious_alert(db_path)
+        data = _get_json(f"{base}/api/alerts?confidence=medium%2B")
+        alerts = data["alerts"]
+        assert len(alerts) == 1
+        a = alerts[0]
+        assert "package" in a
+        assert a["package"]["name"] == "strapi-plugin-cron"
+        assert a["package"]["manager"] == "npm"
+        assert a["package"]["advisory_id"] == "MAL-2024-7153"
+        assert a["package"]["advisory_url"] == "https://osv.dev/vulnerability/MAL-2024-7153"
+
+    def test_advisory_url_uses_osv_for_mal_prefix(self, sc_server):
+        base, db_path = sc_server
+        _seed_malicious_alert(db_path)
+        data = _get_json(f"{base}/api/alerts?confidence=medium%2B")
+        assert "osv.dev/vulnerability/MAL-2024-7153" in data["alerts"][0]["package"]["advisory_url"]
+
+    def test_investigation_includes_malicious_flag(self, sc_server):
+        base, db_path = sc_server
+        _seed_malicious_alert(db_path)
+        data = _get_json(f"{base}/api/alerts?confidence=medium%2B")
+        investigation = data["alerts"][0]["package"]["investigation"]
+        # Must include the MAL- flag AND the risk_flags reasons AND the registry signals
+        assert any("malicious" in item.lower() for item in investigation)
+        assert any("scope mismatch" in item.lower() for item in investigation)
+        assert any("description" in item.lower() for item in investigation)
+        assert any("install scripts" in item.lower() for item in investigation)
+
+    def test_omits_package_for_non_supply_chain(self, sc_server):
+        base, db_path = sc_server
+        _seed_non_supply_chain_alert(db_path)
+        data = _get_json(f"{base}/api/alerts?confidence=medium%2B")
+        assert len(data["alerts"]) == 1
+        assert "package" not in data["alerts"][0]
+
+    def test_investigation_includes_typosquat_for_typosquat_pattern(self, sc_server):
+        base, db_path = sc_server
+        _seed_malicious_alert(db_path, session_id="typo-1", pattern="typosquat")
+        data = _get_json(f"{base}/api/alerts?confidence=medium%2B")
+        assert len(data["alerts"]) == 1
+        investigation = data["alerts"][0]["package"]["investigation"]
+        assert any("typosquat" in item.lower() for item in investigation)

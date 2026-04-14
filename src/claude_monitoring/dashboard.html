@@ -1916,6 +1916,91 @@ function renderScanProgressPanel(state) {
     + rows
     + '</div>';
 }
+// Feature C: jump from an alert card to the Supply Chain tab and
+// expand the referenced package. If the package isn't in the current
+// filter, clear all filters, put the name in the search box, reload,
+// and then auto-expand the row matching (package_name, package_manager).
+async function scJumpToPackage(pkgName, mgr) {
+  switchTab('supply-chain');
+  // Reset filters so the package is guaranteed to appear
+  _scManagerFilter = '';
+  _scRiskOnly = false;
+  _scUnpinnedOnly = false;
+  _scCategory = 'all';
+  try { document.getElementById('sc-manager').value = ''; } catch(e) {}
+  try { document.getElementById('sc-search').value = pkgName; } catch(e) {}
+  await loadSupplyChain();
+  // Find the row for this package and expand it
+  try {
+    var data = window._scVulnData || {};
+    var matchIdx = null;
+    for (var idx in data) {
+      var p = data[idx];
+      if (p.package_name === pkgName && (!mgr || p.package_manager === mgr)) {
+        matchIdx = parseInt(idx, 10);
+        break;
+      }
+    }
+    if (matchIdx !== null) {
+      scExpandRow(pkgName, mgr || '', matchIdx);
+      // Scroll the expanded row into view
+      setTimeout(function() {
+        var row = document.getElementById('sc-expand-' + matchIdx);
+        if (row) row.scrollIntoView({behavior:'smooth', block:'center'});
+      }, 200);
+    }
+  } catch(e) { console.warn('scJumpToPackage:', e); }
+}
+
+function openAdvisoryUrl(url) {
+  if (!url) return;
+  window.open(url, '_blank', 'noopener,noreferrer');
+}
+
+// Feature C: build a markdown investigation report for Slack/email.
+// The alert payload is stashed in window._alertCache by the renderer.
+async function copyAlertReport(alertId, btn) {
+  var a = (window._alertCache || {})[alertId];
+  if (!a) return;
+  var pkg = a.package || {};
+  var severity = (a.severity || 'medium').toUpperCase();
+  var sevIcon = a.severity === 'critical' ? '🔴' : a.severity === 'high' ? '🟠' : a.severity === 'medium' ? '🟡' : '⚪';
+  var patternSummary = (a.patterns || []).join(', ') || 'unknown';
+  var lines = [];
+  lines.push('## ' + sevIcon + ' ' + severity + ': ' + patternSummary);
+  lines.push('');
+  if (pkg.name) lines.push('**Package**: `' + pkg.name + '`' + (pkg.manager ? ' (' + pkg.manager + ')' : ''));
+  if (pkg.advisory_id) {
+    if (pkg.advisory_url) {
+      lines.push('**Advisory**: [' + pkg.advisory_id + '](' + pkg.advisory_url + ')');
+    } else {
+      lines.push('**Advisory**: ' + pkg.advisory_id);
+    }
+  }
+  if (pkg.installed_by) lines.push('**Installed by**: ' + pkg.installed_by);
+  if (a.session_title) lines.push('**Session**: ' + a.session_title);
+  lines.push('**Time**: ' + fmtTimestamp(a.timestamp));
+  lines.push('');
+  if (pkg.investigation && pkg.investigation.length) {
+    lines.push('### Investigation');
+    pkg.investigation.forEach(function(item) { lines.push('- ✅ ' + item); });
+    lines.push('');
+  }
+  lines.push('_Reported via AI Runtime Monitor_');
+  var report = lines.join('\n');
+  try {
+    await navigator.clipboard.writeText(report);
+    if (btn) {
+      var orig = btn.textContent;
+      btn.textContent = '✓ Copied!';
+      btn.disabled = true;
+      setTimeout(function() { btn.textContent = orig; btn.disabled = false; }, 2000);
+    }
+  } catch(e) {
+    alert('Copy failed — your browser may block clipboard writes outside HTTPS.\n\n' + report);
+  }
+}
+
 async function scOpenSession(sessionId, installTs) {
   // Open Deep Dive and try to jump to the turn containing the install timestamp
   await openDeepDive(sessionId);
@@ -2017,6 +2102,53 @@ async function loadAlerts(customOffset) {
       // Section 4c: the backend now stores only masked + hashed values, never
       // the raw credential. No Reveal button — masking is not reversible.
       const matchedHtml = a.matched_value ? '<div style="font-size:12px;margin-top:4px">Matched: <code style="background:var(--surface2);padding:2px 4px;border-radius:3px">' + esc(a.matched_value) + '</code></div>' : '';
+
+      // Feature C: investigation card for supply-chain alerts with a
+      // linked package. Keeps the original flat card for credential
+      // alerts (no a.package) so they don't get suddenly restyled.
+      if (a.package) {
+        const pkg = a.package;
+        const investigationList = (pkg.investigation || []).map(function(item) {
+          return '<li style="margin-bottom:2px">✅ ' + esc(item) + '</li>';
+        }).join('');
+        const advisoryBtn = pkg.advisory_url
+          ? '<button onclick="event.stopPropagation();openAdvisoryUrl(\'' + esc(pkg.advisory_url) + '\')" style="background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:4px 10px;color:var(--cyan);font-size:11px;cursor:pointer">View Advisory ↗</button>'
+          : '';
+        const sessionBtn = a.session_id
+          ? '<button onclick="event.stopPropagation();openDeepDive(\'' + esc(a.session_id) + '\',' + (a.turn_number||1) + ')" style="background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:4px 10px;color:var(--text);font-size:11px;cursor:pointer">View Session</button>'
+          : '';
+        const packageBtn = '<button onclick="event.stopPropagation();scJumpToPackage(\'' + esc(pkg.name) + '\',\'' + esc(pkg.manager||'') + '\')" style="background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:4px 10px;color:var(--text);font-size:11px;cursor:pointer">View Package</button>';
+        const copyBtn = '<button onclick="event.stopPropagation();copyAlertReport(' + a.id + ',this)" style="background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:4px 10px;color:var(--text);font-size:11px;cursor:pointer">Copy Report</button>';
+
+        // Stash the alert payload on window so copyAlertReport can read it
+        window._alertCache = window._alertCache || {};
+        window._alertCache[a.id] = a;
+
+        return '<div class="alert-item'+dismissedClass+'" style="border-left-color:'+borderColor+'" data-alert-id="'+a.id+'">'
+          + '<div class="alert-header">'
+          + '<span class="alert-patterns"><span class="badge" style="background:' + (sevColors[sev]||'#8b949e') + '22;color:'+(sevColors[sev]||'#8b949e')+';margin-right:6px">'
+          + sev.toUpperCase() + '</span>' + patternChips + confBadge(a.confidence||'medium') + fpTag + '</span>'
+          + '<span class="alert-meta">' + fmtTimestamp(a.timestamp) + '</span>'
+          + '</div>'
+          + '<div style="font-size:13px;color:var(--text);margin:6px 0 8px">' + esc(alertSummary(a)) + '</div>'
+          + '<div style="background:var(--surface2);border-radius:4px;padding:8px 12px;margin-bottom:8px;font-size:12px">'
+          + '<div style="display:grid;grid-template-columns:auto 1fr;gap:4px 12px">'
+          + '<span style="color:var(--text2)">Package:</span><strong>' + esc(pkg.name) + '</strong>'
+          + (pkg.manager ? '<span style="color:var(--text2)">Manager:</span><span>' + esc(pkg.manager) + '</span>' : '')
+          + (pkg.advisory_id ? '<span style="color:var(--text2)">Advisory:</span><span>' + esc(pkg.advisory_id) + '</span>' : '')
+          + (pkg.installed_by ? '<span style="color:var(--text2)">Installed by:</span><span>' + esc(pkg.installed_by) + '</span>' : '')
+          + (a.session_title ? '<span style="color:var(--text2)">Session:</span><span>' + esc(a.session_title) + '</span>' : '')
+          + '<span style="color:var(--text2)">Time:</span><span>' + fmtTimestamp(a.timestamp) + '</span>'
+          + '</div>'
+          + '</div>'
+          + '<div style="display:flex;gap:6px;margin-bottom:8px">' + sessionBtn + packageBtn + advisoryBtn + copyBtn + '</div>'
+          + (investigationList ? '<div style="font-size:12px;margin-bottom:8px"><div style="color:var(--text2);margin-bottom:4px">Investigation:</div><ul style="margin:0;padding-left:16px;list-style:none">' + investigationList + '</ul></div>' : '')
+          + repeatTag
+          + '<div style="margin-top:6px">' + dismissBtns + '</div>'
+          + '</div>';
+      }
+
+      // Original flat layout for non-supply-chain alerts
       return '<div class="alert-item'+dismissedClass+'" style="border-left-color:'+borderColor+'" data-alert-id="'+a.id+'">'
         + '<div class="alert-header">'
         + '<span class="alert-patterns"><span class="badge" style="background:' + (sevColors[sev]||'#8b949e') + '22;color:'+(sevColors[sev]||'#8b949e')+';margin-right:6px">'
