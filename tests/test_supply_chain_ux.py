@@ -520,82 +520,157 @@ class TestAlertEnrichment:
 # ─────────────────────────────────────────────────────────────
 
 
-def _seed_desktop_api_calls(db_path, service, count=3):
+def _seed_desktop_session(db_path, agent_type, title, api_service=None, call_count=0):
+    """Bug 1 fix: desktop sessions live in the sessions table (inserted by
+    ProcessScanner._ensure_desktop_session), and _api_sessions enriches
+    them with api_calls stats. Tests simulate what ProcessScanner would do.
+    """
     conn = sqlite3.connect(str(db_path))
-    for i in range(count):
-        conn.execute(
-            "INSERT INTO api_calls (timestamp, session_id, turn_id, turn_number, "
-            "destination_host, destination_service, endpoint_path, http_method, http_status, "
-            "model, stream, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, "
-            "request_size_bytes, response_size_bytes, latency_ms, num_messages, "
-            "system_prompt_chars, tool_call_count, sensitive_pattern_count, stop_reason, request_id) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (
-                f"2026-04-14T00:0{i}:00Z",
-                None,  # no session_id — this is what makes it a desktop app call
-                f"t{i}",
-                i,
-                "api.anthropic.com" if service == "anthropic_api" else "api.openai.com",
-                service,
-                "/v1/messages",
-                "POST",
-                200,
-                "claude-opus-4" if service == "anthropic_api" else "gpt-4",
-                "true",
-                100 * (i + 1),
-                50 * (i + 1),
-                0,
-                0,
-                1000,
-                500,
-                300,
-                5,
-                100,
-                0,
-                0,
-                "end_turn",
-                f"req-{i}",
-            ),
-        )
+    session_id = "desktop_" + agent_type
+    now = "2026-04-14T00:00:00Z"
+    conn.execute(
+        """INSERT INTO sessions (session_id, agent_type, title, start_time, last_activity,
+                                  total_turns, total_input_tokens, total_output_tokens, model)
+           VALUES (?, ?, ?, ?, ?, 0, 0, 0, ?)
+           ON CONFLICT(session_id) DO UPDATE SET last_activity=excluded.last_activity""",
+        (session_id, agent_type, title, now, now, agent_type),
+    )
+    # Optionally seed api_calls for the enrichment path
+    if api_service and call_count > 0:
+        for i in range(call_count):
+            conn.execute(
+                "INSERT INTO api_calls (timestamp, session_id, turn_id, turn_number, "
+                "destination_host, destination_service, endpoint_path, http_method, http_status, "
+                "model, stream, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, "
+                "request_size_bytes, response_size_bytes, latency_ms, num_messages, "
+                "system_prompt_chars, tool_call_count, sensitive_pattern_count, stop_reason, request_id) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    f"2026-04-14T00:0{i}:00Z",
+                    f"req-{i}",  # per-request UUID (not tied to the synthetic session)
+                    f"t{i}",
+                    i,
+                    f"api.{api_service.split('_')[0]}.com",
+                    api_service,
+                    "/v1/messages",
+                    "POST",
+                    200,
+                    agent_type,
+                    "true",
+                    100 * (i + 1),
+                    50 * (i + 1),
+                    0,
+                    0,
+                    1000,
+                    500,
+                    300,
+                    5,
+                    100,
+                    0,
+                    0,
+                    "end_turn",
+                    f"req-{i}",
+                ),
+            )
     conn.commit()
     conn.close()
+    return session_id
 
 
 class TestDesktopSessionSynthesis:
-    def test_desktop_filter_returns_synthesized_session(self, sc_server):
+    def test_desktop_filter_returns_session(self, sc_server):
         base, db_path = sc_server
-        _seed_desktop_api_calls(db_path, "anthropic_api", count=5)
+        _seed_desktop_session(
+            db_path,
+            "claude_desktop",
+            "Claude Desktop App",
+            api_service="anthropic_api",
+            call_count=5,
+        )
         data = _get_json(f"{base}/api/sessions?source=desktop")
         sessions = data["sessions"]
         desktop = [s for s in sessions if s.get("source") == "desktop"]
         assert len(desktop) == 1
-        claude_desktop = desktop[0]
-        assert claude_desktop["title"] == "Claude Desktop"
-        assert claude_desktop["agent_type"] == "claude_desktop"
-        assert claude_desktop["total_turns"] == 5
-        assert claude_desktop["total_input_tokens"] == 100 + 200 + 300 + 400 + 500
-        assert claude_desktop["total_output_tokens"] == 50 + 100 + 150 + 200 + 250
+        claude = desktop[0]
+        assert claude["agent_type"] == "claude_desktop"
+        assert claude["total_turns"] == 5
+        assert claude["total_input_tokens"] == 100 + 200 + 300 + 400 + 500
+        assert claude["total_output_tokens"] == 50 + 100 + 150 + 200 + 250
 
-    def test_desktop_filter_multiple_services(self, sc_server):
+    def test_desktop_filter_multiple_agents(self, sc_server):
         base, db_path = sc_server
-        _seed_desktop_api_calls(db_path, "anthropic_api", count=3)
-        _seed_desktop_api_calls(db_path, "openai_api", count=2)
+        _seed_desktop_session(db_path, "claude_desktop", "Claude Desktop App")
+        _seed_desktop_session(db_path, "chatgpt_desktop", "ChatGPT Desktop App")
         data = _get_json(f"{base}/api/sessions?source=desktop")
-        titles = {s["title"] for s in data["sessions"] if s.get("source") == "desktop"}
-        assert "Claude Desktop" in titles
-        assert "ChatGPT Desktop" in titles
+        agent_types = {s["agent_type"] for s in data["sessions"] if s.get("source") == "desktop"}
+        assert "claude_desktop" in agent_types
+        assert "chatgpt_desktop" in agent_types
 
-    def test_desktop_filter_empty_when_no_api_calls(self, sc_server):
+    def test_desktop_filter_empty_when_no_desktop_session(self, sc_server):
         base, _ = sc_server
         data = _get_json(f"{base}/api/sessions?source=desktop")
         assert [s for s in data["sessions"] if s.get("source") == "desktop"] == []
 
     def test_all_sources_includes_desktop(self, sc_server):
         base, db_path = sc_server
-        _seed_desktop_api_calls(db_path, "anthropic_api", count=2)
+        _seed_desktop_session(db_path, "claude_desktop", "Claude Desktop App")
         data = _get_json(f"{base}/api/sessions?source=all")
         sources = {s.get("source") for s in data["sessions"]}
         assert "desktop" in sources
+
+
+class TestProcessScannerDesktopSession:
+    def test_ensure_desktop_session_creates_row(self, tmp_path, monkeypatch):
+        """ProcessScanner._ensure_desktop_session writes to the sessions table."""
+        db_path = tmp_path / "test.db"
+        monkeypatch.setattr("claude_monitoring.config.get_db_path", lambda: db_path)
+        monkeypatch.setattr("claude_monitoring.db.get_db_path", lambda: db_path)
+        monkeypatch.setattr("claude_monitoring.config.get_output_dir", lambda: tmp_path)
+        monkeypatch.setattr("claude_monitoring.db.get_output_dir", lambda: tmp_path)
+        init_db(db_path).close()
+
+        from claude_monitoring.monitor import ProcessScanner
+
+        ps = ProcessScanner()
+        ps._ensure_desktop_session("ChatGPT", "/Applications/ChatGPT.app/Contents/MacOS/ChatGPT", 12345)
+        row = ps.db.execute(
+            "SELECT session_id, agent_type, title FROM sessions WHERE session_id='desktop_chatgpt_desktop'"
+        ).fetchone()
+        assert row is not None
+        assert row["agent_type"] == "chatgpt_desktop"
+        assert row["title"] == "ChatGPT Desktop App"
+
+    def test_ensure_desktop_session_is_idempotent(self, tmp_path, monkeypatch):
+        db_path = tmp_path / "test.db"
+        monkeypatch.setattr("claude_monitoring.config.get_db_path", lambda: db_path)
+        monkeypatch.setattr("claude_monitoring.db.get_db_path", lambda: db_path)
+        monkeypatch.setattr("claude_monitoring.config.get_output_dir", lambda: tmp_path)
+        monkeypatch.setattr("claude_monitoring.db.get_output_dir", lambda: tmp_path)
+        init_db(db_path).close()
+
+        from claude_monitoring.monitor import ProcessScanner
+
+        ps = ProcessScanner()
+        # Two helper processes of the same app → one session row
+        ps._ensure_desktop_session("Claude Helper", "/Applications/Claude.app/...", 100)
+        ps._ensure_desktop_session("Claude Helper (Renderer)", "/Applications/Claude.app/...", 101)
+        rows = ps.db.execute("SELECT COUNT(*) as n FROM sessions WHERE agent_type='claude_desktop'").fetchone()
+        assert rows["n"] == 1
+
+    def test_ensure_desktop_session_ignores_non_ai(self, tmp_path, monkeypatch):
+        db_path = tmp_path / "test.db"
+        monkeypatch.setattr("claude_monitoring.config.get_db_path", lambda: db_path)
+        monkeypatch.setattr("claude_monitoring.db.get_db_path", lambda: db_path)
+        monkeypatch.setattr("claude_monitoring.config.get_output_dir", lambda: tmp_path)
+        monkeypatch.setattr("claude_monitoring.db.get_output_dir", lambda: tmp_path)
+        init_db(db_path).close()
+
+        from claude_monitoring.monitor import ProcessScanner
+
+        ps = ProcessScanner()
+        ps._ensure_desktop_session("Finder", "/System/Library/CoreServices/Finder.app", 500)
+        rows = ps.db.execute("SELECT COUNT(*) as n FROM sessions").fetchone()
+        assert rows["n"] == 0
 
 
 # ─────────────────────────────────────────────────────────────
