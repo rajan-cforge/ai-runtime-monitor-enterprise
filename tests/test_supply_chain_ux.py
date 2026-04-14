@@ -513,3 +513,126 @@ class TestAlertEnrichment:
         assert len(data["alerts"]) == 1
         investigation = data["alerts"][0]["package"]["investigation"]
         assert any("typosquat" in item.lower() for item in investigation)
+
+
+# ─────────────────────────────────────────────────────────────
+# Bug 1 — Desktop Apps filter synthesizes sessions from api_calls
+# ─────────────────────────────────────────────────────────────
+
+
+def _seed_desktop_api_calls(db_path, service, count=3):
+    conn = sqlite3.connect(str(db_path))
+    for i in range(count):
+        conn.execute(
+            "INSERT INTO api_calls (timestamp, session_id, turn_id, turn_number, "
+            "destination_host, destination_service, endpoint_path, http_method, http_status, "
+            "model, stream, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, "
+            "request_size_bytes, response_size_bytes, latency_ms, num_messages, "
+            "system_prompt_chars, tool_call_count, sensitive_pattern_count, stop_reason, request_id) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                f"2026-04-14T00:0{i}:00Z",
+                None,  # no session_id — this is what makes it a desktop app call
+                f"t{i}",
+                i,
+                "api.anthropic.com" if service == "anthropic_api" else "api.openai.com",
+                service,
+                "/v1/messages",
+                "POST",
+                200,
+                "claude-opus-4" if service == "anthropic_api" else "gpt-4",
+                "true",
+                100 * (i + 1),
+                50 * (i + 1),
+                0,
+                0,
+                1000,
+                500,
+                300,
+                5,
+                100,
+                0,
+                0,
+                "end_turn",
+                f"req-{i}",
+            ),
+        )
+    conn.commit()
+    conn.close()
+
+
+class TestDesktopSessionSynthesis:
+    def test_desktop_filter_returns_synthesized_session(self, sc_server):
+        base, db_path = sc_server
+        _seed_desktop_api_calls(db_path, "anthropic_api", count=5)
+        data = _get_json(f"{base}/api/sessions?source=desktop")
+        sessions = data["sessions"]
+        desktop = [s for s in sessions if s.get("source") == "desktop"]
+        assert len(desktop) == 1
+        claude_desktop = desktop[0]
+        assert claude_desktop["title"] == "Claude Desktop"
+        assert claude_desktop["agent_type"] == "claude_desktop"
+        assert claude_desktop["total_turns"] == 5
+        assert claude_desktop["total_input_tokens"] == 100 + 200 + 300 + 400 + 500
+        assert claude_desktop["total_output_tokens"] == 50 + 100 + 150 + 200 + 250
+
+    def test_desktop_filter_multiple_services(self, sc_server):
+        base, db_path = sc_server
+        _seed_desktop_api_calls(db_path, "anthropic_api", count=3)
+        _seed_desktop_api_calls(db_path, "openai_api", count=2)
+        data = _get_json(f"{base}/api/sessions?source=desktop")
+        titles = {s["title"] for s in data["sessions"] if s.get("source") == "desktop"}
+        assert "Claude Desktop" in titles
+        assert "ChatGPT Desktop" in titles
+
+    def test_desktop_filter_empty_when_no_api_calls(self, sc_server):
+        base, _ = sc_server
+        data = _get_json(f"{base}/api/sessions?source=desktop")
+        assert [s for s in data["sessions"] if s.get("source") == "desktop"] == []
+
+    def test_all_sources_includes_desktop(self, sc_server):
+        base, db_path = sc_server
+        _seed_desktop_api_calls(db_path, "anthropic_api", count=2)
+        data = _get_json(f"{base}/api/sessions?source=all")
+        sources = {s.get("source") for s in data["sessions"]}
+        assert "desktop" in sources
+
+
+# ─────────────────────────────────────────────────────────────
+# Bug 2 — Browser session detail returns newest visits first
+# ─────────────────────────────────────────────────────────────
+
+
+class TestBrowserSessionReverseOrder:
+    def test_visits_returned_newest_first(self, sc_server):
+        base, db_path = sc_server
+        conn = sqlite3.connect(str(db_path))
+        for i in range(5):
+            conn.execute(
+                "INSERT INTO browser_sessions (service, url, title, conversation_id, visit_time, "
+                "duration_seconds, source, event_type, content_text, content_hash) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    "Claude Web",
+                    "https://claude.ai/chat/conv-1",
+                    "Test",
+                    "conv-1",
+                    f"2026-04-14T00:0{i}:00Z",
+                    5.0,
+                    "extension",
+                    "user_prompt" if i % 2 == 0 else "assistant_response",
+                    f"message {i}",
+                    f"hash{i}",
+                ),
+            )
+        conn.commit()
+        conn.close()
+
+        data = _get_json(f"{base}/api/browser/session_detail?conversation_id=conv-1")
+        visits = data["visits"]
+        assert len(visits) == 5
+        # Newest first
+        assert visits[0]["content_text"] == "message 4"
+        assert visits[-1]["content_text"] == "message 0"
+        # first_visit / last_visit computed correctly (chronological)
+        assert data["first_visit"] < data["last_visit"]
