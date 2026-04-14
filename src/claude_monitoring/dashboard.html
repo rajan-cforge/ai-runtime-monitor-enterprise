@@ -1406,18 +1406,28 @@ async function loadSupplyChain() {
       document.getElementById('sc-watchlist-indicator').textContent =
         'Watching: ' + (wc.critical||0) + ' critical (hourly) · ' + (wc.high||0) + ' high (6h) · ' + (wc.normal||0) + ' normal (daily)';
     } catch(e) {}
-    // Intel bar
+    // Intel bar (Feature A: 4-state dots + Refresh All)
     try {
       var ir = await fetch(API + '/api/supply-chain/intel-status');
       var id = await ir.json();
       var ibar = document.getElementById('sc-intel-bar');
+      // Map state → dot color
+      var stateColors = {
+        'green':  'var(--green)',
+        'yellow': 'var(--orange)',
+        'red':    'var(--red)',
+        'gray':   'var(--text2)',
+      };
       ibar.innerHTML = '<span style="color:var(--text2)">Threat intel:</span> '
         + (id.sources||[]).map(function(s, si) {
-          var dot = s.active ? '<span style="color:var(--green)">●</span>' : '<span style="color:var(--text2)">○</span>';
-          var extra = s.iocs ? ' (' + s.iocs + ')' : (s.cached ? ' (' + s.cached + ')' : '');
-          return '<span style="padding:2px 6px;border-radius:10px;border:1px solid var(--border);font-size:10px;color:' + (s.active?'var(--text)':'var(--text2)') + ';cursor:pointer;position:relative" onclick="toggleIntelTooltip(this,' + si + ')" data-src=\'' + esc(JSON.stringify(s)) + '\'>' + dot + ' ' + esc(s.name) + extra + '</span>';
+          var color = stateColors[s.state] || stateColors['gray'];
+          var dot = '<span style="color:' + color + '">●</span>';
+          var extra = s.records ? ' (' + s.records + ')' : '';
+          var textColor = s.state === 'gray' ? 'var(--text2)' : 'var(--text)';
+          return '<span style="padding:2px 6px;border-radius:10px;border:1px solid var(--border);font-size:10px;color:' + textColor + ';cursor:pointer;position:relative" onclick="toggleIntelTooltip(this,' + si + ')" data-src=\'' + esc(JSON.stringify(s)) + '\'>' + dot + ' ' + esc(s.name) + extra + '</span>';
         }).join('')
-        + (id.total_iocs ? ' <span style="color:var(--text2);font-size:10px">' + id.total_iocs + ' IOCs loaded</span>' : '');
+        + (id.total_iocs ? ' <span style="color:var(--text2);font-size:10px">' + id.total_iocs + ' IOCs loaded</span>' : '')
+        + ' <button onclick="refreshIntelFeeds()" id="sc-refresh-intel-btn" style="margin-left:8px;background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:2px 8px;color:var(--text);font-size:10px;cursor:pointer">↻ Refresh all</button>';
     } catch(e) {}
     // Scan status bar
     try {
@@ -1751,24 +1761,71 @@ async function scExpandRow(pkg, mgr, idx) {
 function toggleIntelTooltip(el, idx) {
   var existing = el.querySelector('.intel-tooltip');
   if (existing) { existing.remove(); return; }
-  // Close others
   document.querySelectorAll('.intel-tooltip').forEach(function(t){t.remove()});
   try {
     var s = JSON.parse(el.dataset.src);
     var srcUrls = {'OSV.dev':'https://osv.dev/list?ecosystem=PyPI','pip-audit':'https://pypi.org/project/pip-audit/','ThreatFox':'https://threatfox.abuse.ch/browse/','URLhaus':'https://urlhaus.abuse.ch/browse/','Registry metadata':'https://pypi.org/'};
     var srcUrl = srcUrls[s.name] || '';
-    var html = '<div class="intel-tooltip" style="position:absolute;top:100%;left:0;z-index:100;background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:10px;width:300px;font-size:12px;box-shadow:0 4px 12px rgba(0,0,0,0.3)">'
+    // Feature A: rich tooltip with state, last success, age, and error
+    var stateLabels = {
+      'green':  '<span style="color:var(--green)">● Healthy</span>',
+      'yellow': '<span style="color:var(--orange)">● Stale (>24h)</span>',
+      'red':    '<span style="color:var(--red)">● Failing</span>',
+      'gray':   '<span style="color:var(--text2)">○ Never fetched</span>',
+    };
+    var stateLine = stateLabels[s.state] || stateLabels['gray'];
+    var lastSuccess = s.last_success ? fmtRelative(s.last_success) : 'never';
+    var ageLine = s.age_hours !== null && s.age_hours !== undefined
+      ? '<div style="color:var(--text2);margin-bottom:4px">Age: <strong>' + Math.round(s.age_hours) + 'h</strong> old</div>'
+      : '';
+    var errorLine = s.last_error
+      ? '<div style="color:var(--red);margin-top:6px;padding:6px;background:var(--surface2);border-radius:4px;font-size:11px"><strong>Last error:</strong><br>' + esc(s.last_error) + '</div>'
+      : '';
+    var html = '<div class="intel-tooltip" style="position:absolute;top:100%;left:0;z-index:100;background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:10px;width:320px;font-size:12px;box-shadow:0 4px 12px rgba(0,0,0,0.3)">'
       + '<div style="font-weight:600;margin-bottom:6px">' + esc(s.name) + '</div>'
-      + '<div style="color:var(--text2);margin-bottom:4px">Status: ' + (s.active ? '<span style="color:var(--green)">Active</span>' : '<span style="color:var(--text2)">Not fetched</span>') + '</div>'
+      + '<div style="margin-bottom:4px">Status: ' + stateLine + '</div>'
       + (s.description ? '<div style="color:var(--text2);margin-bottom:4px">' + esc(s.description) + '</div>' : '')
-      + (s.iocs !== undefined ? '<div>IOCs loaded: <strong>' + s.iocs + '</strong></div>' : '')
-      + (s.cached !== undefined ? '<div>Cached packages: <strong>' + s.cached + '</strong></div>' : '')
-      + '<div style="margin-top:6px;display:flex;gap:6px">'
+      + '<div style="color:var(--text2);margin-bottom:4px">Last success: <strong>' + esc(lastSuccess) + '</strong></div>'
+      + ageLine
+      + (s.records !== undefined ? '<div>Records: <strong>' + s.records + '</strong></div>' : '')
+      + errorLine
+      + '<div style="margin-top:8px;display:flex;gap:6px">'
       + (srcUrl ? '<a href="' + srcUrl + '" target="_blank" style="background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:3px 8px;color:var(--cyan);font-size:11px;text-decoration:none;cursor:pointer">Open source ↗</a>' : '')
-      + ((!s.active) ? '<button onclick="event.stopPropagation();triggerScan();this.closest(\'.intel-tooltip\').remove()" style="background:var(--blue);border:none;border-radius:4px;padding:3px 8px;color:white;font-size:11px;cursor:pointer">Fetch now</button>' : '')
+      + '<button onclick="event.stopPropagation();refreshIntelFeeds();this.closest(\'.intel-tooltip\').remove()" style="background:var(--blue);border:none;border-radius:4px;padding:3px 8px;color:white;font-size:11px;cursor:pointer">Refresh now</button>'
       + '</div></div>';
     el.insertAdjacentHTML('beforeend', html);
   } catch(e) {}
+}
+
+// Feature A: Refresh All button calls /api/supply-chain/intel-refresh and polls status
+let _intelRefreshPoller = null;
+async function refreshIntelFeeds() {
+  var btn = document.getElementById('sc-refresh-intel-btn');
+  if (btn) { btn.textContent = '↻ Refreshing...'; btn.disabled = true; }
+  try {
+    var r = await fetch(API + '/api/supply-chain/intel-refresh', {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'});
+    if (r.status === 409) {
+      if (btn) { btn.textContent = '↻ Refresh all'; btn.disabled = false; }
+      alert('A scan is already in progress. Refresh will run after it finishes.');
+      return;
+    }
+    // Poll intel-status every 2s for up to 30s
+    var ticks = 0;
+    if (_intelRefreshPoller) clearInterval(_intelRefreshPoller);
+    _intelRefreshPoller = setInterval(async function() {
+      ticks++;
+      if (ticks > 15) {
+        clearInterval(_intelRefreshPoller);
+        _intelRefreshPoller = null;
+        if (btn) { btn.textContent = '↻ Refresh all'; btn.disabled = false; }
+        loadSupplyChain();
+        return;
+      }
+      await loadSupplyChain();
+    }, 2000);
+  } catch(e) {
+    if (btn) { btn.textContent = '↻ Refresh all'; btn.disabled = false; }
+  }
 }
 async function triggerScan() {
   var bar = document.getElementById('sc-scan-bar');

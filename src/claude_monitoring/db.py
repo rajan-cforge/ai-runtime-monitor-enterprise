@@ -329,6 +329,39 @@ def init_db(db_path=None):
         UNIQUE(package_name, manager)
     )""")
 
+    # Feature A: Per-source health tracking. One row per named intel
+    # source (osv, pip-audit, threatfox, urlhaus, registry). The status
+    # endpoint computes a 4-state color from these columns:
+    #   - last_success <= 24h → green
+    #   - last_success > 24h  → yellow
+    #   - last_error set      → red
+    #   - both null           → gray (never fetched)
+    c.execute("""CREATE TABLE IF NOT EXISTS intel_source_status (
+        name TEXT PRIMARY KEY,
+        last_attempt TEXT,
+        last_success TEXT,
+        last_error TEXT,
+        record_count INTEGER DEFAULT 0,
+        updated_at TEXT NOT NULL
+    )""")
+    # Backfill from existing threat_iocs.fetch_timestamp so the first
+    # load after upgrade doesn't show green sources as gray.
+    try:
+        for src in ("threatfox", "urlhaus"):
+            row = c.execute(
+                "SELECT MAX(fetch_timestamp), COUNT(*) FROM threat_iocs WHERE source=?",
+                (src,),
+            ).fetchone()
+            if row and row[0]:
+                c.execute(
+                    """INSERT OR IGNORE INTO intel_source_status
+                       (name, last_attempt, last_success, last_error, record_count, updated_at)
+                       VALUES (?, ?, ?, NULL, ?, ?)""",
+                    (src, row[0], row[0], row[1] or 0, row[0]),
+                )
+    except Exception:
+        pass
+
     # Package watchlist with prioritized scanning
     c.execute("""CREATE TABLE IF NOT EXISTS package_watchlist (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
