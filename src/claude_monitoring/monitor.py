@@ -2686,6 +2686,86 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 enrichments["total_cost"] = cost_row["total_cost"] or 0
                 enrichments["api_call_count"] = cost_row["api_call_count"] or 0
 
+        # Bug 1 follow-up: desktop synthetic sessions have no events. Enrich
+        # them with live api_calls aggregates AND synthesize pseudo-events
+        # from the most recent api_calls so the detail panel has something
+        # to render.
+        DESKTOP_AGENT_TYPES = {"chatgpt_desktop", "claude_desktop", "cursor_desktop"}
+        if session_dict.get("agent_type") in DESKTOP_AGENT_TYPES:
+            agent_to_services = {
+                "chatgpt_desktop": ("chatgpt_web", "openai_api"),
+                "claude_desktop": ("claude_web", "anthropic_api"),
+                "cursor_desktop": ("cursor_api",),
+            }
+            services = agent_to_services.get(session_dict["agent_type"], ())
+            if services:
+                try:
+                    placeholders = ",".join(["?"] * len(services))
+                    agg = db.execute(
+                        f"""SELECT
+                              COUNT(*) as call_count,
+                              COALESCE(SUM(input_tokens), 0) as in_tok,
+                              COALESCE(SUM(output_tokens), 0) as out_tok,
+                              COALESCE(SUM(request_size_bytes), 0) as req_bytes,
+                              COALESCE(SUM(response_size_bytes), 0) as resp_bytes,
+                              COALESCE(SUM(estimated_cost_usd), 0) as total_cost,
+                              MIN(timestamp) as first_ts,
+                              MAX(timestamp) as last_ts
+                           FROM api_calls
+                           WHERE destination_service IN ({placeholders})""",  # nosec B608
+                        list(services),
+                    ).fetchone()
+                    if agg and agg["call_count"]:
+                        session_dict["total_turns"] = agg["call_count"]
+                        session_dict["total_input_tokens"] = agg["in_tok"] or 0
+                        session_dict["total_output_tokens"] = agg["out_tok"] or 0
+                        if agg["first_ts"]:
+                            session_dict["start_time"] = agg["first_ts"]
+                        if agg["last_ts"]:
+                            session_dict["last_activity"] = agg["last_ts"]
+                        enrichments["bytes_in"] = agg["req_bytes"] or 0
+                        enrichments["bytes_out"] = agg["resp_bytes"] or 0
+                        enrichments["total_cost"] = agg["total_cost"] or 0
+                        enrichments["api_call_count"] = agg["call_count"]
+
+                    # Synthesize pseudo-events from the 50 most recent api_calls
+                    recent = db.execute(
+                        f"""SELECT timestamp, destination_host, destination_service,
+                                   endpoint_path, http_method, http_status, model,
+                                   input_tokens, output_tokens, latency_ms,
+                                   request_size_bytes, response_size_bytes
+                           FROM api_calls
+                           WHERE destination_service IN ({placeholders})
+                           ORDER BY id DESC LIMIT 50""",  # nosec B608
+                        list(services),
+                    ).fetchall()
+                    for r in recent:
+                        rd = dict(r)
+                        event_list.append(
+                            {
+                                "id": 0,
+                                "timestamp": rd.get("timestamp"),
+                                "event_type": "api_call",
+                                "source": "proxy",
+                                "data": {
+                                    "destination_host": rd.get("destination_host"),
+                                    "destination_service": rd.get("destination_service"),
+                                    "endpoint_path": rd.get("endpoint_path"),
+                                    "http_method": rd.get("http_method"),
+                                    "http_status": rd.get("http_status"),
+                                    "model": rd.get("model"),
+                                    "input_tokens": rd.get("input_tokens"),
+                                    "output_tokens": rd.get("output_tokens"),
+                                    "latency_ms": rd.get("latency_ms"),
+                                    "request_size_bytes": rd.get("request_size_bytes"),
+                                    "response_size_bytes": rd.get("response_size_bytes"),
+                                },
+                            }
+                        )
+                except Exception:
+                    pass
+                enrichments["is_desktop_session"] = True
+
         self._send_json(
             {
                 "session": session_dict,

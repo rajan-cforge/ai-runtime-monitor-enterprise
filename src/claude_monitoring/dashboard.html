@@ -962,10 +962,20 @@ async function loadSessionDetail(id) {
       + agentBadge(s.agent_type)
       + (d.channel ? '<span class="badge" style="background:var(--surface2);color:var(--cyan);margin:0 4px">'+esc(d.channel)+'</span>' : '')
       + '<span style="font-size:12px;color:var(--text2)">'
-      + s.total_turns+' turns &middot; '+fmtNum(s.total_input_tokens||0)+' tokens'
+      + (s.total_turns||0)+' turns &middot; '+fmtNum(s.total_input_tokens||0)+' tokens'
       + (d.total_cost > 0 ? ' &middot; $'+d.total_cost.toFixed(4) : '')+'</span>'
       + '<button onclick="openDeepDive(\'' + s.session_id + '\')" style="background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:4px 10px;color:var(--blue);font-size:12px;cursor:pointer;font-weight:600">&#x1f52c; Deep Dive</button>'
       + '</div></div>';
+
+    // Bug 1 follow-up: desktop synthetic session banner.
+    if (d.is_desktop_session) {
+      var bytesTotal = (d.bytes_in||0) + (d.bytes_out||0);
+      html += '<div style="background:var(--surface2);border-left:3px solid var(--cyan);border-radius:4px;padding:10px 14px;margin-bottom:14px;font-size:12px;line-height:1.5">'
+        + '<div style="font-weight:600;color:var(--cyan);margin-bottom:4px">Desktop AI app monitoring</div>'
+        + '<div style="color:var(--text2)">This is an Electron desktop app routing through the system proxy. We capture all its API traffic but cannot show chat turns — no DOM scraping is possible without a browser extension. The event list below shows the 50 most recent proxy-captured requests.</div>'
+        + '<div style="color:var(--text2);margin-top:6px">Traffic: <strong>' + fmtNum(bytesTotal) + 'B</strong> transferred across <strong>' + (d.api_call_count||0) + '</strong> API calls</div>'
+        + '</div>';
+    }
 
     // Reverse events: show most recent first
     const reversedEvents = d.events.slice().reverse();
@@ -1028,6 +1038,22 @@ async function loadSessionDetail(id) {
             + '<div class="event-body"><pre>Context: '+esc(data.context)
             + '\nPatterns: '+esc((data.patterns||[]).join(', '))
             + '\nSnippet: '+esc(data.snippet)+'</pre></div></div>';
+          break;
+        case 'api_call':
+          // Bug 1 follow-up: pseudo-event from a desktop synthetic session.
+          // Each row summarizes one proxy-captured request — no chat content
+          // because desktop apps are Electron wrappers with no DOM scraping.
+          var methodColor = data.http_method === 'POST' ? 'var(--orange)' : 'var(--cyan)';
+          var statusColor = (data.http_status && data.http_status >= 400) ? 'var(--red)' : 'var(--green)';
+          var bytesTotal = (data.request_size_bytes||0) + (data.response_size_bytes||0);
+          html += '<div class="event-block" style="border-left:3px solid var(--cyan);margin-bottom:6px">'
+            + '<div class="event-header" onclick="this.parentElement.classList.toggle(\'collapsed\')" style="padding:6px 10px;display:flex;gap:8px;align-items:center;font-size:12px">'
+            + '<span style="color:var(--text2);min-width:85px">' + fmtTime(ev.timestamp) + '</span>'
+            + '<span style="color:' + methodColor + ';font-weight:600;min-width:40px">' + esc(data.http_method || '?') + '</span>'
+            + '<span style="color:' + statusColor + '">' + (data.http_status || '-') + '</span>'
+            + '<span style="flex:1;color:var(--text);font-family:monospace;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(data.destination_host || '') + esc((data.endpoint_path || '').substring(0, 60)) + '</span>'
+            + '<span style="color:var(--text2);font-size:11px">' + fmtNum(bytesTotal) + 'B · ' + (data.latency_ms || 0) + 'ms</span>'
+            + '</div></div>';
           break;
       }
     }
@@ -2448,6 +2474,12 @@ let ddSession = null;
 let ddActiveTurn = 0;
 
 async function openDeepDive(sessionId, jumpToTurn) {
+  // Bug 1 follow-up: desktop sessions are synthetic — no events/turns.
+  // Render a dedicated panel showing recent API traffic for the service
+  // instead of trying to load turns that don't exist.
+  if (sessionId && sessionId.startsWith('desktop_')) {
+    return openDesktopDeepDive(sessionId);
+  }
   try {
     const r = await fetch(API + '/api/session/' + sessionId + '/turns');
     const d = await r.json();
@@ -2463,6 +2495,96 @@ async function openDeepDive(sessionId, jumpToTurn) {
     document.getElementById('deepdive-overlay').classList.add('open');
     selectTurn(jumpToTurn || ddTurns.length);
   } catch(e) { console.error('Deep dive error:', e); }
+}
+
+// Bug 1 follow-up: dedicated deep-dive for desktop sessions.
+// Desktop AI apps don't have events/turns (they're Electron wrappers, not
+// CLI sessions with JSONL files). We show a panel that lists recent API
+// traffic for the relevant destination_services and a one-click "View in
+// API Traffic tab" button.
+async function openDesktopDeepDive(sessionId) {
+  var agentType = sessionId.replace('desktop_', '');
+  var servicesByAgent = {
+    'chatgpt_desktop': ['chatgpt_web', 'openai_api'],
+    'claude_desktop':  ['claude_web', 'anthropic_api'],
+    'cursor_desktop':  ['cursor_api'],
+  };
+  var titles = {
+    'chatgpt_desktop': 'ChatGPT Desktop App',
+    'claude_desktop':  'Claude Desktop App',
+    'cursor_desktop':  'Cursor',
+  };
+  var services = servicesByAgent[agentType] || [];
+  var title = titles[agentType] || agentType;
+
+  document.getElementById('dd-title').textContent = title;
+  document.getElementById('deepdive-overlay').classList.add('open');
+
+  // Fetch recent api_calls for these services (30 most recent)
+  var calls = [];
+  try {
+    for (var i = 0; i < services.length; i++) {
+      var r = await fetch(API + '/api/traffic?service=' + encodeURIComponent(services[i]) + '&limit=30');
+      var d = await r.json();
+      calls = calls.concat(d.calls || []);
+    }
+  } catch(e) {}
+  // Sort newest first + cap
+  calls.sort(function(a, b) { return (b.timestamp || '').localeCompare(a.timestamp || ''); });
+  calls = calls.slice(0, 30);
+
+  var totalCalls = calls.length;
+  var totalBytes = calls.reduce(function(sum, c) { return sum + (c.request_size_bytes || 0) + (c.response_size_bytes || 0); }, 0);
+  var totalLatency = calls.reduce(function(sum, c) { return sum + (c.latency_ms || 0); }, 0);
+  var avgLatency = totalCalls > 0 ? Math.round(totalLatency / totalCalls) : 0;
+
+  document.getElementById('dd-meta').textContent =
+    title + ' \u00b7 ' + totalCalls + ' recent calls \u00b7 avg latency ' + avgLatency + 'ms';
+
+  // Build a dedicated panel inside the deep-dive body
+  var body = document.getElementById('dd-body') || document.querySelector('.deep-dive-body') || document.getElementById('dd-content');
+  var rail = document.getElementById('dd-turn-rail');
+  var infoHtml = '<div style="padding:16px;max-width:900px">'
+    + '<div style="background:var(--surface2);border-radius:6px;padding:12px;margin-bottom:12px;border:1px solid var(--border)">'
+    + '<div style="font-size:14px;font-weight:600;margin-bottom:6px">Desktop AI app monitoring</div>'
+    + '<div style="color:var(--text2);font-size:12px;line-height:1.6">'
+    + 'This is a desktop Electron app that routes through the system proxy. We capture all its API traffic '
+    + 'but there are no chat turns to display — for that, use the companion Chrome extension on the matching web UI. '
+    + 'The panel below shows the last ' + totalCalls + ' proxy-captured requests.'
+    + '</div>'
+    + '<div style="margin-top:10px;display:flex;gap:6px">'
+    + '<button onclick="switchTab(\'traffic\');loadTraffic(true);closeDeepDive()" style="background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:4px 10px;color:var(--text);font-size:11px;cursor:pointer">Open API Traffic tab ↗</button>'
+    + '</div>'
+    + '</div>'
+    + '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:12px">'
+    + '<div style="background:var(--surface2);border-radius:6px;padding:10px;text-align:center"><div style="font-size:20px;font-weight:600;color:var(--cyan)">' + totalCalls + '</div><div style="color:var(--text2);font-size:11px">API calls</div></div>'
+    + '<div style="background:var(--surface2);border-radius:6px;padding:10px;text-align:center"><div style="font-size:20px;font-weight:600;color:var(--green)">' + fmtNum(totalBytes) + '</div><div style="color:var(--text2);font-size:11px">bytes transferred</div></div>'
+    + '<div style="background:var(--surface2);border-radius:6px;padding:10px;text-align:center"><div style="font-size:20px;font-weight:600;color:var(--orange)">' + avgLatency + 'ms</div><div style="color:var(--text2);font-size:11px">avg latency</div></div>'
+    + '</div>'
+    + '<div style="font-size:12px;color:var(--text2);margin-bottom:6px">Recent requests:</div>'
+    + '<table style="width:100%;border-collapse:collapse;font-size:12px">'
+    + '<thead><tr style="border-bottom:1px solid var(--border)"><th style="text-align:left;padding:6px 4px">Time</th><th style="text-align:left;padding:6px 4px">Service</th><th style="text-align:left;padding:6px 4px">Method</th><th style="text-align:right;padding:6px 4px">Status</th><th style="text-align:right;padding:6px 4px">Size</th><th style="text-align:right;padding:6px 4px">Latency</th></tr></thead>'
+    + '<tbody>'
+    + calls.map(function(c) {
+        var size = (c.request_size_bytes || 0) + (c.response_size_bytes || 0);
+        return '<tr style="border-bottom:1px solid var(--border)">'
+          + '<td style="padding:4px">' + fmtTimestamp(c.timestamp) + '</td>'
+          + '<td style="padding:4px">' + esc(c.destination_service || '-') + '</td>'
+          + '<td style="padding:4px">' + esc(c.http_method || '-') + '</td>'
+          + '<td style="padding:4px;text-align:right">' + (c.http_status || '-') + '</td>'
+          + '<td style="padding:4px;text-align:right">' + fmtNum(size) + 'B</td>'
+          + '<td style="padding:4px;text-align:right">' + (c.latency_ms || 0) + 'ms</td>'
+          + '</tr>';
+      }).join('')
+    + '</tbody></table></div>';
+
+  // Clear the turn rail (there are no turns) and stash the info in the main content area
+  if (rail) rail.innerHTML = '<div style="padding:12px;color:var(--text2);font-size:12px;text-align:center">No chat turns<br>(desktop session)</div>';
+  // Try several possible content container IDs
+  var contentEl = document.getElementById('dd-turn-content') || document.getElementById('dd-content') || body;
+  if (contentEl) {
+    contentEl.innerHTML = infoHtml;
+  }
 }
 
 function closeDeepDive() {
