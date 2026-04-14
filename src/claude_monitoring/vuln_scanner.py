@@ -229,60 +229,148 @@ def store_vuln(db, vuln):
         pass
 
 
-def run_full_scan(db):
-    """Run all vulnerability scanners and store results."""
-    results = {"scanned": 0, "vulns_found": 0}
+def run_full_scan(db, progress_cb=None):
+    """Run all vulnerability scanners and store results.
 
-    # pip-audit (local, fast)
-    pip_vulns = run_pip_audit()
-    for v in pip_vulns:
-        store_vuln(db, v)
-    results["vulns_found"] += len(pip_vulns)
-    results["scanned"] += 1
+    Feature B: ``progress_cb(phase, status, records, error)`` is an optional
+    callback invoked before/after each phase so the dashboard can stream
+    progress. ``phase`` is one of:
+      - "pip-audit"  (local Python vuln scan)
+      - "osv"        (OSV.dev query per package)
+      - "threatfox"  (abuse.ch IOC refresh)
+      - "urlhaus"    (abuse.ch URL feed refresh)
+      - "registry"   (PyPI/npm metadata refresh — future)
+    ``status`` is "running" | "done" | "error".
 
-    # OSV for each unique package
-    packages = db.execute(
-        """SELECT DISTINCT package_name, package_manager, package_version
-           FROM agent_dependencies WHERE category='package'"""
-    ).fetchall()
+    Also records per-source health into intel_source_status so the
+    status endpoint can show green/yellow/red for pip-audit and OSV.
+    """
+    from claude_monitoring.threat_intel import (
+        fetch_threatfox_iocs,
+        fetch_urlhaus_iocs,
+        record_intel_status,
+        store_iocs,
+    )
 
-    for pkg in packages:
-        name = pkg["package_name"] if hasattr(pkg, "keys") else pkg[0]
-        manager = pkg["package_manager"] if hasattr(pkg, "keys") else pkg[1]
-        version = pkg["package_version"] if hasattr(pkg, "keys") else pkg[2]
-        ecosystem = ECOSYSTEM_MAP.get(manager)
-        if not ecosystem:
-            continue
-
-        # Check cache (skip if scanned in last 6 hours)
-        cached = db.execute(
-            """SELECT scan_timestamp FROM package_vulnerabilities
-               WHERE package_name=? AND source='osv'
-               ORDER BY scan_timestamp DESC LIMIT 1""",
-            (name,),
-        ).fetchone()
-        if cached:
+    def _cb(*args, **kwargs):
+        if progress_cb is not None:
             try:
-                cache_ts = cached["scan_timestamp"] if hasattr(cached, "keys") else cached[0]
-                age = time.time() - datetime.fromisoformat(cache_ts.replace("Z", "+00:00")).timestamp()
-                if age < 21600:
-                    continue
+                progress_cb(*args, **kwargs)
             except Exception:
                 pass
 
-        osv_vulns = query_osv(name, ecosystem, version if version != "latest" else None)
-        for v in osv_vulns:
+    results = {"scanned": 0, "vulns_found": 0, "new_since_last_scan": 0}
+    scan_start = datetime.now(timezone.utc).isoformat()
+
+    # ── Phase 1: pip-audit (local, fast) ──
+    _cb("pip-audit", "running")
+    try:
+        pip_vulns = run_pip_audit()
+        for v in pip_vulns:
             store_vuln(db, v)
-        results["vulns_found"] += len(osv_vulns)
+        results["vulns_found"] += len(pip_vulns)
         results["scanned"] += 1
-        time.sleep(0.5)  # Rate limit
+        record_intel_status(db, "pip-audit", success=True, record_count=len(pip_vulns))
+        _cb("pip-audit", "done", records=len(pip_vulns))
+    except Exception as exc:
+        record_intel_status(db, "pip-audit", success=False, error=str(exc)[:200])
+        _cb("pip-audit", "error", error=str(exc)[:200])
+
+    # ── Phase 2: OSV.dev per package ──
+    _cb("osv", "running")
+    osv_count = 0
+    try:
+        packages = db.execute(
+            """SELECT DISTINCT package_name, package_manager, package_version
+               FROM agent_dependencies WHERE category='package'"""
+        ).fetchall()
+
+        for pkg in packages:
+            name = pkg["package_name"] if hasattr(pkg, "keys") else pkg[0]
+            manager = pkg["package_manager"] if hasattr(pkg, "keys") else pkg[1]
+            version = pkg["package_version"] if hasattr(pkg, "keys") else pkg[2]
+            ecosystem = ECOSYSTEM_MAP.get(manager)
+            if not ecosystem:
+                continue
+
+            # Cache: skip if scanned in last 6 hours
+            cached = db.execute(
+                """SELECT scan_timestamp FROM package_vulnerabilities
+                   WHERE package_name=? AND source='osv'
+                   ORDER BY scan_timestamp DESC LIMIT 1""",
+                (name,),
+            ).fetchone()
+            if cached:
+                try:
+                    cache_ts = cached["scan_timestamp"] if hasattr(cached, "keys") else cached[0]
+                    age = time.time() - datetime.fromisoformat(cache_ts.replace("Z", "+00:00")).timestamp()
+                    if age < 21600:
+                        continue
+                except Exception:
+                    pass
+
+            osv_vulns = query_osv(name, ecosystem, version if version != "latest" else None)
+            for v in osv_vulns:
+                store_vuln(db, v)
+            osv_count += len(osv_vulns)
+            results["vulns_found"] += len(osv_vulns)
+            results["scanned"] += 1
+            time.sleep(0.5)  # Rate limit
+        record_intel_status(db, "osv", success=True, record_count=osv_count)
+        _cb("osv", "done", records=osv_count)
+    except Exception as exc:
+        record_intel_status(db, "osv", success=False, error=str(exc)[:200])
+        _cb("osv", "error", error=str(exc)[:200])
+
+    # ── Phase 3: ThreatFox IOC refresh ──
+    _cb("threatfox", "running")
+    try:
+        iocs = fetch_threatfox_iocs(db=db)
+        tf_count = 0
+        if iocs and (iocs.get("ips") or iocs.get("domains")):
+            tf_count = store_iocs(db, iocs)
+        _cb("threatfox", "done", records=tf_count or 0)
+    except Exception as exc:
+        _cb("threatfox", "error", error=str(exc)[:200])
+
+    # ── Phase 4: URLhaus refresh ──
+    _cb("urlhaus", "running")
+    try:
+        uh_count = fetch_urlhaus_iocs(db)
+        _cb("urlhaus", "done", records=uh_count or 0)
+    except Exception as exc:
+        _cb("urlhaus", "error", error=str(exc)[:200])
+
+    # ── Phase 5: Registry metadata refresh (synthetic — just record the state) ──
+    _cb("registry", "running")
+    try:
+        reg_count = db.execute("SELECT COUNT(*) FROM package_registry_cache").fetchone()[0]
+        record_intel_status(db, "registry", success=True, record_count=reg_count)
+        _cb("registry", "done", records=reg_count)
+    except Exception as exc:
+        _cb("registry", "error", error=str(exc)[:200])
+
+    # Compute delta: vulns newly added since this scan started
+    try:
+        row = db.execute(
+            "SELECT COUNT(*) FROM package_vulnerabilities WHERE scan_timestamp >= ?",
+            (scan_start,),
+        ).fetchone()
+        results["new_since_last_scan"] = int(row[0] if row else 0)
+    except Exception:
+        pass
 
     # Store scan history
     try:
         db.execute(
             """INSERT INTO scan_history (timestamp, packages_scanned, vulns_found, sources)
                VALUES (?, ?, ?, ?)""",
-            (datetime.now(timezone.utc).isoformat(), results["scanned"], results["vulns_found"], "pip-audit,osv"),
+            (
+                datetime.now(timezone.utc).isoformat(),
+                results["scanned"],
+                results["vulns_found"],
+                "pip-audit,osv,threatfox,urlhaus,registry",
+            ),
         )
     except Exception:
         pass

@@ -100,6 +100,35 @@ active_cwds_lock = threading.Lock()
 # Plan/subscription detection (populated on startup)
 plan_info = {"is_subscription": False, "plan_tier": ""}
 
+# Feature B: async scan progress state. Module-level singleton protected
+# by a lock. Shape matches the plan:
+#   running, started_at, finished_at, phase, per_source, totals
+# The POST /api/supply-chain/scan handler spawns a daemon thread that
+# calls vuln_scanner.run_full_scan(db, progress_cb=...). The callback
+# updates this dict under the lock, and GET /api/supply-chain/scan-progress
+# returns a snapshot for the dashboard to poll.
+_scan_state_lock = threading.Lock()
+
+
+def _new_scan_state() -> dict:
+    return {
+        "running": False,
+        "started_at": None,
+        "finished_at": None,
+        "phase": None,
+        "per_source": {
+            "pip-audit": {"status": "pending", "records": 0, "error": None},
+            "osv": {"status": "pending", "records": 0, "error": None},
+            "threatfox": {"status": "pending", "records": 0, "error": None},
+            "urlhaus": {"status": "pending", "records": 0, "error": None},
+            "registry": {"status": "pending", "records": 0, "error": None},
+        },
+        "totals": {"vulns_found": 0, "new_since_last_scan": 0, "packages_scanned": 0},
+    }
+
+
+_scan_state: dict = _new_scan_state()
+
 
 # ─────────────────────────────────────────────────────────────
 # SECTION 2: UTILITY FUNCTIONS (module-level state)
@@ -1824,6 +1853,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             "/api/supply-chain": self._api_supply_chain,
             "/api/supply-chain/detail": self._api_supply_chain_detail,
             "/api/supply-chain/scan-status": self._api_supply_chain_scan_status,
+            "/api/supply-chain/scan-progress": self._api_supply_chain_scan_progress,
             "/api/supply-chain/environment": self._api_supply_chain_environment,
             "/api/supply-chain/intel-status": self._api_supply_chain_intel_status,
             "/api/supply-chain/registry": self._api_supply_chain_registry,
@@ -1889,6 +1919,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             "/api/browser/ingest": self._api_browser_ingest,
             "/api/browser/heartbeat": self._api_browser_heartbeat,
             "/api/supply-chain/scan": self._api_supply_chain_scan_post,
+            "/api/supply-chain/intel-refresh": self._api_supply_chain_intel_refresh,
         }
 
         handler = post_routes.get(path)
@@ -3850,24 +3881,113 @@ class DashboardHandler(BaseHTTPRequestHandler):
         )
 
     def _api_supply_chain_intel_status(self, params):
-        """Threat intelligence source status."""
+        """Threat intelligence source status (Feature A).
+
+        Returns per-source state derived from the ``intel_source_status``
+        table. State is one of ``green``/``yellow``/``red``/``gray``:
+
+          green  — last fetch succeeded within 24h
+          yellow — last fetch succeeded but > 24h ago
+          red    — last fetch attempted and failed
+          gray   — never fetched / disabled
+
+        Sources reported: osv, pip-audit, threatfox, urlhaus, registry.
+        pip-audit and OSV are recorded by vuln_scanner on each scan.
+        threatfox and urlhaus are recorded by threat_intel fetchers.
+        registry is live-counted from package_registry_cache.
+        """
+        from datetime import datetime, timezone
+
         db = get_thread_db()
         ioc_count = db.execute("SELECT COUNT(*) FROM threat_iocs").fetchone()[0]
-        threatfox_count = db.execute("SELECT COUNT(*) FROM threat_iocs WHERE source='threatfox'").fetchone()[0]
-        urlhaus_count = db.execute("SELECT COUNT(*) FROM threat_iocs WHERE source='urlhaus'").fetchone()[0]
-        last_scan = db.execute("SELECT timestamp FROM scan_history ORDER BY id DESC LIMIT 1").fetchone()
         registry_cached = db.execute("SELECT COUNT(*) FROM package_registry_cache").fetchone()[0]
+        last_scan_row = db.execute("SELECT timestamp FROM scan_history ORDER BY id DESC LIMIT 1").fetchone()
+        last_scan_ts = last_scan_row[0] if last_scan_row else None
+
+        # Load per-source state rows, indexed by canonical short name
+        status_rows: dict = {}
+        try:
+            for row in db.execute(
+                "SELECT name, last_attempt, last_success, last_error, record_count FROM intel_source_status"
+            ).fetchall():
+                status_rows[row[0] if not hasattr(row, "keys") else row["name"]] = {
+                    "last_attempt": row[1] if not hasattr(row, "keys") else row["last_attempt"],
+                    "last_success": row[2] if not hasattr(row, "keys") else row["last_success"],
+                    "last_error": row[3] if not hasattr(row, "keys") else row["last_error"],
+                    "record_count": row[4] if not hasattr(row, "keys") else row["record_count"],
+                }
+        except Exception:
+            pass
+
+        now_utc = datetime.now(timezone.utc)
+
+        def _compute_state(last_attempt, last_success, last_error):
+            if last_error:
+                return ("red", None)
+            if not last_attempt and not last_success:
+                return ("gray", None)
+            if not last_success:
+                return ("red", None)
+            try:
+                ts = datetime.fromisoformat(last_success.replace("Z", "+00:00"))
+                if ts.tzinfo is None:
+                    ts = ts.replace(tzinfo=timezone.utc)
+                age_hours = (now_utc - ts).total_seconds() / 3600
+            except Exception:
+                return ("red", None)
+            if age_hours <= 24:
+                return ("green", age_hours)
+            return ("yellow", age_hours)
+
+        def _source(short_name: str, display: str, description: str, default_records: int = 0):
+            s = status_rows.get(short_name, {})
+            state, age = _compute_state(s.get("last_attempt"), s.get("last_success"), s.get("last_error"))
+            records = s.get("record_count") if s.get("record_count") is not None else default_records
+            return {
+                "name": display,
+                "short_name": short_name,
+                "state": state,
+                "description": description,
+                "records": records,
+                "iocs": records,  # legacy alias
+                "cached": records,  # legacy alias
+                "last_attempt": s.get("last_attempt"),
+                "last_success": s.get("last_success"),
+                "last_error": s.get("last_error"),
+                "age_hours": round(age, 1) if age is not None else None,
+                # legacy: treat green/yellow as "active" so older UI still works
+                "active": state in ("green", "yellow"),
+            }
+
+        # Registry source isn't in intel_source_status yet (cache is live-counted),
+        # so synthesize a state from package_registry_cache.fetch_timestamp MAX.
+        registry_state = {"last_attempt": None, "last_success": None, "last_error": None}
+        try:
+            row = db.execute("SELECT MAX(fetch_timestamp) FROM package_registry_cache").fetchone()
+            if row and row[0]:
+                registry_state["last_success"] = row[0]
+                registry_state["last_attempt"] = row[0]
+        except Exception:
+            pass
+        if "registry" not in status_rows:
+            status_rows["registry"] = {
+                **registry_state,
+                "record_count": registry_cached,
+            }
+
+        sources = [
+            _source("osv", "OSV.dev", "15K+ malicious packages"),
+            _source("pip-audit", "pip-audit", "Local Python vuln scan"),
+            _source("threatfox", "ThreatFox", "abuse.ch IP/domain IOCs"),
+            _source("urlhaus", "URLhaus", "Active malware URLs"),
+            _source("registry", "Registry metadata", "PyPI/npm package info"),
+        ]
+
         self._send_json(
             {
-                "sources": [
-                    {"name": "OSV.dev", "active": True, "description": "15K+ malicious packages"},
-                    {"name": "pip-audit", "active": True, "description": "Local Python vuln scan"},
-                    {"name": "ThreatFox", "active": threatfox_count > 0, "iocs": threatfox_count},
-                    {"name": "URLhaus", "active": urlhaus_count > 0, "iocs": urlhaus_count},
-                    {"name": "Registry metadata", "active": True, "cached": registry_cached},
-                ],
+                "sources": sources,
                 "total_iocs": ioc_count,
-                "last_scan": last_scan[0] if last_scan else None,
+                "last_scan": last_scan_ts,
             }
         )
 
@@ -3876,15 +3996,119 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self._api_supply_chain_scan_status(params)
 
     def _api_supply_chain_scan_post(self, payload):
-        """POST: trigger a vulnerability scan."""
-        try:
-            from claude_monitoring.vuln_scanner import run_full_scan
+        """POST: trigger a vulnerability scan (Feature B: async).
 
-            db = get_thread_db()
-            results = run_full_scan(db)
-            self._send_json(results)
-        except Exception as e:
-            self._send_json({"error": str(e)}, 500)
+        Returns immediately with ``{"started": true}``. The scan runs in
+        a daemon thread; the client polls ``/api/supply-chain/scan-progress``
+        to follow phase-by-phase progress. Rejects concurrent scans with
+        409 Conflict.
+        """
+        global _scan_state
+
+        with _scan_state_lock:
+            if _scan_state["running"]:
+                self._send_json(
+                    {
+                        "error": "scan already in progress",
+                        "started_at": _scan_state["started_at"],
+                    },
+                    409,
+                )
+                return
+            # Reset state
+            _scan_state = _new_scan_state()
+            _scan_state["running"] = True
+            _scan_state["started_at"] = datetime.now(timezone.utc).isoformat()
+
+        def _progress_cb(phase: str, status: str, records: int = 0, error: str | None = None):
+            """Called by vuln_scanner on each phase transition."""
+            with _scan_state_lock:
+                _scan_state["phase"] = phase
+                if phase in _scan_state["per_source"]:
+                    _scan_state["per_source"][phase] = {
+                        "status": status,
+                        "records": int(records or 0),
+                        "error": error,
+                    }
+
+        def _runner():
+            global _scan_state
+            try:
+                from claude_monitoring.vuln_scanner import run_full_scan
+
+                db = get_thread_db()
+                try:
+                    results = run_full_scan(db, progress_cb=_progress_cb)
+                finally:
+                    db.close()
+                with _scan_state_lock:
+                    _scan_state["totals"] = {
+                        "vulns_found": int(results.get("vulns_found", 0)),
+                        "packages_scanned": int(results.get("scanned", 0)),
+                        "new_since_last_scan": int(results.get("new_since_last_scan", 0)),
+                    }
+                    _scan_state["phase"] = "done"
+                    _scan_state["running"] = False
+                    _scan_state["finished_at"] = datetime.now(timezone.utc).isoformat()
+            except Exception as exc:
+                with _scan_state_lock:
+                    _scan_state["running"] = False
+                    _scan_state["phase"] = "error"
+                    _scan_state["finished_at"] = datetime.now(timezone.utc).isoformat()
+                    _scan_state["error"] = str(exc)[:300]
+
+        threading.Thread(target=_runner, daemon=True, name="SupplyChainScan").start()
+        self._send_json({"started": True, "started_at": _scan_state["started_at"]})
+
+    def _api_supply_chain_scan_progress(self, params):
+        """GET current scan state snapshot (Feature B)."""
+        with _scan_state_lock:
+            snapshot = json.loads(json.dumps(_scan_state))  # deep copy
+        self._send_json(snapshot)
+
+    def _api_supply_chain_intel_refresh(self, payload):
+        """POST: refresh threat intel feeds (ThreatFox + URLhaus) only.
+
+        Runs in a daemon thread so the HTTP request returns immediately.
+        This is distinct from ``/api/supply-chain/scan`` — it only hits
+        the intel feeds, not pip-audit or OSV. Good for a user who wants
+        fresh IOCs without waiting 90s for a full package scan.
+
+        Rejects if a full scan is already in progress (avoids thrashing
+        the same DB connection + double-writing intel_source_status rows).
+        """
+        with _scan_state_lock:
+            if _scan_state["running"]:
+                self._send_json(
+                    {
+                        "error": "scan already in progress",
+                        "started_at": _scan_state["started_at"],
+                    },
+                    409,
+                )
+                return
+
+        def _refresher():
+            try:
+                from claude_monitoring.threat_intel import (
+                    fetch_threatfox_iocs,
+                    fetch_urlhaus_iocs,
+                    store_iocs,
+                )
+
+                db = get_thread_db()
+                try:
+                    iocs = fetch_threatfox_iocs(db=db)
+                    if iocs and (iocs.get("ips") or iocs.get("domains")):
+                        store_iocs(db, iocs)
+                    fetch_urlhaus_iocs(db)
+                finally:
+                    db.close()
+            except Exception:
+                pass  # errors are recorded via record_intel_status in the fetchers
+
+        threading.Thread(target=_refresher, daemon=True, name="IntelRefresh").start()
+        self._send_json({"started": True})
 
     def _api_supply_chain_scan_status(self, params):
         """Get last scan info."""

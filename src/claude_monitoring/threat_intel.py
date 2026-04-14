@@ -288,11 +288,63 @@ def is_malicious_advisory(vuln_id):
     return vuln_id.startswith("MAL-")
 
 
+# ── Intel source health tracking (Feature A) ─────────────
+
+
+def record_intel_status(db, name: str, *, success: bool, error: str | None = None, record_count: int = 0) -> None:
+    """Upsert a row in intel_source_status.
+
+    ``success=True`` updates both ``last_attempt`` and ``last_success``.
+    ``success=False`` updates only ``last_attempt`` and stores ``error``.
+    Record count is the number of rows successfully fetched/cached.
+
+    Called from every intel fetcher (ThreatFox, URLhaus, OSV, pip-audit,
+    registry) and the scan runner in vuln_scanner. Safe to call from
+    any thread — the sqlite WAL mode handles concurrency.
+    """
+    try:
+        now = datetime.now(timezone.utc).isoformat()
+        db.execute(
+            """INSERT INTO intel_source_status
+               (name, last_attempt, last_success, last_error, record_count, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?)
+               ON CONFLICT(name) DO UPDATE SET
+                   last_attempt=excluded.last_attempt,
+                   last_success=CASE WHEN excluded.last_error IS NULL
+                                     THEN excluded.last_attempt
+                                     ELSE last_success END,
+                   last_error=excluded.last_error,
+                   record_count=CASE WHEN excluded.last_error IS NULL
+                                     THEN excluded.record_count
+                                     ELSE record_count END,
+                   updated_at=excluded.updated_at""",
+            (
+                name,
+                now,
+                now if success else None,
+                (error or None) if not success else None,
+                int(record_count or 0),
+                now,
+            ),
+        )
+        db.commit()
+    except Exception:
+        pass  # never crash a fetcher because of telemetry
+
+
 # ── ThreatFox IOC feed ───────────────────────────────────
 
 
-def fetch_threatfox_iocs():
-    """Fetch recent IOCs from ThreatFox (free, no API key)."""
+def fetch_threatfox_iocs(db=None):
+    """Fetch recent IOCs from ThreatFox (free, no API key).
+
+    If ``db`` is provided, records the attempt in intel_source_status
+    even on failure (so the status bar can turn red). Returns the
+    ``{ips, domains}`` dict — empty on failure.
+
+    Keeping ``db`` optional preserves backwards compatibility with
+    existing tests that call fetch_threatfox_iocs() with no args.
+    """
     try:
         payload = json.dumps({"query": "get_iocs", "days": 7}).encode()
         req = urllib.request.Request(
@@ -318,13 +370,19 @@ def fetch_threatfox_iocs():
             elif ioc_type == "domain":
                 domains[ioc_val] = info
         return {"ips": ips, "domains": domains}
-    except Exception:
+    except Exception as exc:
+        if db is not None:
+            try:
+                record_intel_status(db, "threatfox", success=False, error=str(exc)[:200])
+            except Exception:
+                pass
         return {"ips": {}, "domains": {}}
 
 
 def store_iocs(db, ioc_data):
-    """Store IOCs in the database."""
+    """Store IOCs in the database. Returns number of rows inserted."""
     ts = datetime.now(timezone.utc).isoformat()
+    count = 0
     for ip, info in ioc_data.get("ips", {}).items():
         try:
             db.execute(
@@ -333,6 +391,7 @@ def store_iocs(db, ioc_data):
                    VALUES ('ip', ?, ?, ?, ?, 'threatfox', ?)""",
                 (ip, info.get("threat_type", ""), info.get("malware", ""), info.get("confidence", 0), ts),
             )
+            count += 1
         except Exception:
             pass
     for domain, info in ioc_data.get("domains", {}).items():
@@ -343,9 +402,13 @@ def store_iocs(db, ioc_data):
                    VALUES ('domain', ?, ?, ?, ?, 'threatfox', ?)""",
                 (domain, info.get("threat_type", ""), info.get("malware", ""), info.get("confidence", 0), ts),
             )
+            count += 1
         except Exception:
             pass
     db.commit()
+    # Feature A: record success for the threatfox source row
+    record_intel_status(db, "threatfox", success=True, record_count=count)
+    return count
 
 
 def check_connection_against_iocs(remote_host, db):
@@ -410,8 +473,13 @@ def fetch_urlhaus_iocs(db):
             except Exception:
                 continue
         db.commit()
+        record_intel_status(db, "urlhaus", success=True, record_count=count)
         return count
-    except Exception:
+    except Exception as exc:
+        try:
+            record_intel_status(db, "urlhaus", success=False, error=str(exc)[:200])
+        except Exception:
+            pass
         return 0
 
 
