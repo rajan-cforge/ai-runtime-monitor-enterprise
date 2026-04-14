@@ -92,20 +92,17 @@ class TestCertTrusted:
 
 class TestMonitorRunning:
     def test_returns_true_on_http_200(self):
-        class FakeResp:
-            status = 200
-
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *_):
-                return False
-
-        with patch("urllib.request.urlopen", return_value=FakeResp()):
+        # The probe now uses http.client.HTTPConnection directly to
+        # bypass the macOS system proxy. Mock the connection class.
+        fake_conn = __import__("unittest.mock", fromlist=["MagicMock"]).MagicMock()
+        fake_resp = fake_conn.getresponse.return_value
+        fake_resp.status = 200
+        fake_resp.read.return_value = b""
+        with patch("http.client.HTTPConnection", return_value=fake_conn):
             assert status_mod._is_monitor_running() is True
 
     def test_returns_false_on_connection_error(self):
-        with patch("urllib.request.urlopen", side_effect=OSError("refused")):
+        with patch("http.client.HTTPConnection", side_effect=OSError("refused")):
             assert status_mod._is_monitor_running() is False
 
 

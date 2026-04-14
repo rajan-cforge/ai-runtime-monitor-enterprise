@@ -79,14 +79,31 @@ def _has_custom_ca() -> bool:
 
 
 def _is_monitor_running(port: int | None = None) -> bool:
-    port = port or get_dashboard_port()
-    try:
-        import urllib.request
+    """Probe the dashboard HTTP endpoint to check if the monitor is live.
 
-        # Probe "/" not "/api/stats" — the dashboard HTML loads without auth,
-        # so this works even when token auth is enabled (Section 4b).
-        with urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=2) as resp:
+    Uses a raw socket connection to bypass any proxy config that Python
+    might inherit from the macOS system proxy settings. When
+    --with-system-proxy is enabled, urllib.request on macOS will route
+    http://127.0.0.1:9081/ through mitmproxy at 127.0.0.1:9080, which
+    then rejects the loopback destination — making the probe return
+    False even though the server is actually healthy.
+
+    A direct socket connect avoids the proxy entirely.
+    """
+    port = port or get_dashboard_port()
+    import http.client
+
+    try:
+        # Bypass urllib entirely — http.client.HTTPConnection talks to
+        # the given host:port directly, no proxy resolution.
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=2)
+        try:
+            conn.request("GET", "/")
+            resp = conn.getresponse()
+            resp.read()  # drain so the connection can close cleanly
             return resp.status == 200
+        finally:
+            conn.close()
     except Exception:
         return False
 
