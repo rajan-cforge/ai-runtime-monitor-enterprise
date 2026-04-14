@@ -866,18 +866,13 @@ async function loadSessions() {
     const sort = document.getElementById('session-sort').value;
     const source = document.getElementById('session-source').value;
     const agentFilter = document.getElementById('session-agent').value;
+    // Bug 1 fix: the server now synthesizes desktop sessions from api_calls
+    // so the client just passes source=desktop and the API returns them.
     let url = API + '/api/sessions?sort=' + sort + '&include_browser=true';
-    if (source && source !== 'all' && source !== 'desktop') url += '&source=' + source;
+    if (source && source !== 'all') url += '&source=' + source;
     if (search) url += '&q=' + encodeURIComponent(search);
     const r = await fetch(url);
     const d = await r.json();
-    // Client-side desktop apps filter
-    if (source === 'desktop') {
-      var desktopPatterns = /desktop|chatgpt\.app|claude\s*desktop|cursor/i;
-      d.sessions = d.sessions.filter(function(s) {
-        return desktopPatterns.test(s.agent_type || '') || desktopPatterns.test(s.service || '') || desktopPatterns.test(s.model || '');
-      });
-    }
     // Client-side agent type filter
     if (agentFilter) {
       d.sessions = d.sessions.filter(function(s) { return s.agent_type === agentFilter; });

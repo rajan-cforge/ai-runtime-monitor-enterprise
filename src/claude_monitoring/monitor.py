@@ -2508,12 +2508,68 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     }
                 )
 
+        # Bug 1: synthesize "desktop" sessions from api_calls. Desktop apps
+        # (ChatGPT.app, Claude Desktop, Cursor) hit api.openai.com /
+        # api.anthropic.com / api.cursor.sh through the system proxy, but
+        # there's no row in the sessions table for them — they're not
+        # JSONL-based like Claude Code. We group api_calls by destination
+        # service and synthesize a logical session per service so the
+        # "Desktop Apps" filter has something to show.
+        include_desktop = include_browser or source_filter in ("all", "desktop")
+        if include_desktop:
+            desktop_services = {
+                "anthropic_api": {"title": "Claude Desktop", "agent_type": "claude_desktop"},
+                "openai_api": {"title": "ChatGPT Desktop", "agent_type": "chatgpt_desktop"},
+                "cursor_api": {"title": "Cursor", "agent_type": "cursor_desktop"},
+            }
+            try:
+                for svc, meta in desktop_services.items():
+                    row = db.execute(
+                        """SELECT
+                             MIN(timestamp) as start_time,
+                             MAX(timestamp) as last_activity,
+                             COUNT(*) as call_count,
+                             COALESCE(SUM(input_tokens), 0) as in_tok,
+                             COALESCE(SUM(output_tokens), 0) as out_tok
+                           FROM api_calls
+                           WHERE destination_service = ?
+                             AND (session_id IS NULL OR session_id = '' OR session_id LIKE 'desktop%%')""",
+                        (svc,),
+                    ).fetchone()
+                    if not row or not row["start_time"]:
+                        continue
+                    # Also reject if Claude Code already owns these calls
+                    # (filter by NULL session_id / desktop-prefixed session ids)
+                    call_count = row["call_count"] or 0
+                    if call_count == 0:
+                        continue
+                    sessions.append(
+                        {
+                            "session_id": "desktop_" + svc,
+                            "source": "desktop",
+                            "start_time": row["start_time"],
+                            "last_activity": row["last_activity"],
+                            "title": meta["title"],
+                            "model": svc,
+                            "service": svc,
+                            "cwd": "",
+                            "total_input_tokens": row["in_tok"] or 0,
+                            "total_output_tokens": row["out_tok"] or 0,
+                            "total_turns": call_count,
+                            "total_duration": 0,
+                            "alert_count": 0,
+                            "agent_type": meta["agent_type"],
+                        }
+                    )
+            except Exception:
+                pass  # never break the sessions endpoint because of desktop synthesis
+
         # Filter by source if requested
         if source_filter and source_filter not in ("all", ""):
             sessions = [s for s in sessions if s.get("source") == source_filter]
 
         # Re-sort mixed list
-        if include_browser or source_filter == "all":
+        if include_browser or include_desktop or source_filter == "all":
             sort_key = {"recent": "last_activity", "newest": "start_time"}.get(sort, "last_activity")
             sessions.sort(key=lambda s: s.get(sort_key, "") or "", reverse=True)
 
@@ -3073,6 +3129,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
             conn_rows = db.execute(conn_sql, host_binds + [first_visit, last_visit]).fetchall()
             correlated_connections = [dict(r) for r in conn_rows]
 
+        # Bug 2: reverse the visits list so the dashboard renders newest
+        # messages at the top, matching Claude Code session deep dives.
+        # first_visit / last_visit are computed from the chronological
+        # sort order before the reverse.
+        visits_newest_first = list(reversed(visits))
+
         self._send_json(
             {
                 "conversation_id": conv_id,
@@ -3084,7 +3146,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 "last_visit": last_visit,
                 "visit_count": len(visits),
                 "total_duration": total_duration,
-                "visits": visits,
+                "visits": visits_newest_first,
                 "correlated_connections": correlated_connections,
             }
         )
