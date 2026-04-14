@@ -1827,15 +1827,94 @@ async function refreshIntelFeeds() {
     if (btn) { btn.textContent = '↻ Refresh all'; btn.disabled = false; }
   }
 }
+// Feature B: async scan with per-source progress polling.
+// POST /api/supply-chain/scan starts a background thread server-side.
+// The client polls /api/supply-chain/scan-progress every 1s and renders
+// a 5-row progress panel until the phase becomes "done".
+let _scanPoller = null;
 async function triggerScan() {
   var bar = document.getElementById('sc-scan-bar');
-  bar.innerHTML = '<span style="color:var(--blue)">Scanning... this may take a minute</span>';
+  // POST — may 409 if a scan is already running
   try {
     var r = await fetch(API + '/api/supply-chain/scan', {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'});
+    if (r.status === 409) {
+      // Still render the panel and poll — another session might have started it
+      renderScanProgressPanel({running: true, phase: 'in progress (from another client)'});
+    } else if (!r.ok) {
+      bar.innerHTML = '<span style="color:var(--red)">Scan failed to start: HTTP ' + r.status + '</span>';
+      return;
+    }
+  } catch(e) {
+    bar.innerHTML = '<span style="color:var(--red)">Scan failed to start</span>';
+    return;
+  }
+  // Begin polling
+  if (_scanPoller) clearInterval(_scanPoller);
+  await pollScanProgress();  // render once immediately
+  _scanPoller = setInterval(pollScanProgress, 1000);
+}
+
+async function pollScanProgress() {
+  try {
+    var r = await fetch(API + '/api/supply-chain/scan-progress');
     var d = await r.json();
-    bar.innerHTML = '<span style="color:var(--green)">Scan complete: ' + (d.vulns_found||0) + ' vulnerabilities found</span>';
-    setTimeout(loadSupplyChain, 500);
-  } catch(e) { bar.innerHTML = '<span style="color:var(--red)">Scan failed</span>'; }
+    renderScanProgressPanel(d);
+    if (d.phase === 'done' || d.phase === 'error' || !d.running) {
+      if (_scanPoller) { clearInterval(_scanPoller); _scanPoller = null; }
+      // Re-load the supply chain view once the scan is done
+      setTimeout(loadSupplyChain, 300);
+    }
+  } catch(e) {}
+}
+
+function renderScanProgressPanel(state) {
+  var bar = document.getElementById('sc-scan-bar');
+  var icons = { 'pending':'⏸', 'running':'⏳', 'done':'✅', 'error':'❌' };
+  var labels = {
+    'pip-audit': 'pip-audit',
+    'osv':       'OSV.dev',
+    'threatfox': 'ThreatFox',
+    'urlhaus':   'URLhaus',
+    'registry':  'Registry metadata',
+  };
+  var order = ['pip-audit','osv','threatfox','urlhaus','registry'];
+  var per = (state && state.per_source) || {};
+  var phase = state && state.phase;
+
+  if (phase === 'done') {
+    var t = (state.totals || {});
+    var vulns = t.vulns_found || 0;
+    var pkgs  = t.packages_scanned || 0;
+    var newV  = t.new_since_last_scan || 0;
+    bar.innerHTML = '<span style="color:var(--green)">✅ Scan complete:</span> '
+      + '<strong>' + vulns + '</strong> vulns across <strong>' + pkgs + '</strong> packages '
+      + '· <strong>' + newV + '</strong> new since last scan'
+      + ' <button onclick="loadSupplyChain()" style="margin-left:8px;background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:2px 8px;color:var(--text);font-size:11px;cursor:pointer">Dismiss</button>';
+    return;
+  }
+
+  var rows = order.map(function(src) {
+    var s = per[src] || {status:'pending', records:0, error:null};
+    var icon = icons[s.status] || icons['pending'];
+    var color = s.status === 'done' ? 'var(--green)'
+             : s.status === 'running' ? 'var(--blue)'
+             : s.status === 'error' ? 'var(--red)'
+             : 'var(--text2)';
+    var detail = s.status === 'done' ? (s.records + ' records')
+               : s.status === 'running' ? 'in progress...'
+               : s.status === 'error' ? ('error: ' + (s.error || 'unknown'))
+               : 'pending';
+    return '<div style="display:flex;align-items:center;gap:8px;padding:2px 0">'
+      + '<span style="color:' + color + ';width:18px;text-align:center">' + icon + '</span>'
+      + '<span style="min-width:130px">' + labels[src] + '</span>'
+      + '<span style="color:var(--text2);font-size:11px">' + detail + '</span>'
+      + '</div>';
+  }).join('');
+
+  bar.innerHTML = '<div style="padding:8px 12px;background:var(--surface2);border-radius:6px;border:1px solid var(--border)">'
+    + '<div style="color:var(--blue);font-weight:600;margin-bottom:4px">Scanning...</div>'
+    + rows
+    + '</div>';
 }
 async function scOpenSession(sessionId, installTs) {
   // Open Deep Dive and try to jump to the turn containing the install timestamp

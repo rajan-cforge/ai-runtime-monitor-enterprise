@@ -225,3 +225,134 @@ class TestIntelRefreshEndpoint:
         status, body = _post_json(f"{base}/api/supply-chain/intel-refresh", {})
         assert status == 200
         assert body.get("started") is True
+
+
+# ─────────────────────────────────────────────────────────────
+# Feature B — async scan progress
+# ─────────────────────────────────────────────────────────────
+
+
+class TestAsyncScanProgress:
+    def _reset_state(self):
+        from claude_monitoring import monitor as mon
+
+        with mon._scan_state_lock:
+            mon._scan_state = mon._new_scan_state()
+
+    def test_scan_post_returns_started(self, sc_server, monkeypatch):
+        self._reset_state()
+        base, _ = sc_server
+        from claude_monitoring import vuln_scanner
+
+        def fake_scan(db, progress_cb=None):
+            if progress_cb:
+                progress_cb("pip-audit", "done", records=0)
+                progress_cb("osv", "done", records=0)
+                progress_cb("threatfox", "done", records=0)
+                progress_cb("urlhaus", "done", records=0)
+                progress_cb("registry", "done", records=0)
+            return {"scanned": 0, "vulns_found": 0, "new_since_last_scan": 0}
+
+        monkeypatch.setattr(vuln_scanner, "run_full_scan", fake_scan)
+        status, body = _post_json(f"{base}/api/supply-chain/scan", {})
+        assert status == 200
+        assert body.get("started") is True
+        assert body.get("started_at") is not None
+
+    def test_scan_progress_endpoint_shape(self, sc_server):
+        self._reset_state()
+        base, _ = sc_server
+        data = _get_json(f"{base}/api/supply-chain/scan-progress")
+        assert "running" in data
+        assert "per_source" in data
+        per = data["per_source"]
+        assert set(per.keys()) == {"pip-audit", "osv", "threatfox", "urlhaus", "registry"}
+        for src_state in per.values():
+            assert "status" in src_state
+            assert "records" in src_state
+            assert "error" in src_state
+
+    def test_scan_progress_reports_per_source_state(self, sc_server, monkeypatch):
+        self._reset_state()
+        base, _ = sc_server
+        from claude_monitoring import vuln_scanner
+
+        scan_done = threading.Event()
+
+        def fake_scan(db, progress_cb=None):
+            if progress_cb:
+                progress_cb("pip-audit", "done", records=3)
+                progress_cb("osv", "done", records=12)
+                progress_cb("threatfox", "done", records=500)
+                progress_cb("urlhaus", "done", records=250)
+                progress_cb("registry", "done", records=19)
+            scan_done.set()
+            return {"scanned": 4, "vulns_found": 15, "new_since_last_scan": 2}
+
+        monkeypatch.setattr(vuln_scanner, "run_full_scan", fake_scan)
+        _post_json(f"{base}/api/supply-chain/scan", {})
+        assert scan_done.wait(5)
+
+        import time as _t
+
+        data = None
+        for _ in range(40):
+            data = _get_json(f"{base}/api/supply-chain/scan-progress")
+            if data.get("phase") == "done":
+                break
+            _t.sleep(0.05)
+
+        assert data is not None
+        assert data["phase"] == "done"
+        assert data["running"] is False
+        assert data["per_source"]["pip-audit"]["records"] == 3
+        assert data["per_source"]["osv"]["records"] == 12
+        assert data["per_source"]["threatfox"]["records"] == 500
+        assert data["per_source"]["urlhaus"]["records"] == 250
+        assert data["per_source"]["registry"]["records"] == 19
+        assert data["totals"]["vulns_found"] == 15
+        assert data["totals"]["packages_scanned"] == 4
+        assert data["totals"]["new_since_last_scan"] == 2
+        self._reset_state()
+
+    def test_concurrent_scan_returns_409(self, sc_server):
+        self._reset_state()
+        base, _ = sc_server
+        from claude_monitoring import monitor as mon
+
+        with mon._scan_state_lock:
+            mon._scan_state["running"] = True
+            mon._scan_state["started_at"] = "2026-04-14T00:00:00+00:00"
+        try:
+            status, body = _post_json(f"{base}/api/supply-chain/scan", {})
+            assert status == 409
+            assert "already in progress" in body.get("error", "").lower()
+        finally:
+            self._reset_state()
+
+    def test_scan_records_intel_status_for_osv_and_pip_audit(self, tmp_path, monkeypatch):
+        db_path = tmp_path / "test.db"
+        monkeypatch.setattr("claude_monitoring.config.get_db_path", lambda: db_path)
+        monkeypatch.setattr("claude_monitoring.db.get_db_path", lambda: db_path)
+        monkeypatch.setattr("claude_monitoring.config.get_output_dir", lambda: tmp_path)
+        monkeypatch.setattr("claude_monitoring.db.get_output_dir", lambda: tmp_path)
+        conn = init_db(db_path)
+        conn.row_factory = sqlite3.Row
+
+        import claude_monitoring.threat_intel as ti
+        import claude_monitoring.vuln_scanner as vs
+
+        monkeypatch.setattr(vs, "run_pip_audit", lambda: [])
+        monkeypatch.setattr(vs, "query_osv", lambda *a, **k: [])
+        monkeypatch.setattr(ti, "fetch_threatfox_iocs", lambda db=None: {"ips": {}, "domains": {}})
+        monkeypatch.setattr(ti, "fetch_urlhaus_iocs", lambda db: 0)
+
+        try:
+            vs.run_full_scan(conn)
+            rows = {r["name"]: dict(r) for r in conn.execute("SELECT * FROM intel_source_status").fetchall()}
+        finally:
+            conn.close()
+        assert "pip-audit" in rows
+        assert "osv" in rows
+        assert rows["pip-audit"]["last_success"] is not None
+        assert rows["osv"]["last_success"] is not None
