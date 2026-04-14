@@ -208,13 +208,13 @@ threat_intel.py:
     │   → assess_registry_risk(): age <24h (+4), <7d (+2), no desc+repo (+2), postinstall (+2)
     │   → cached in package_registry_cache (24h TTL)
     │
-    ├── ThreatFox IOC feed (free, no API key)
-    │   POST https://threatfox-api.abuse.ch/api/v1/
-    │   → 7-day IOCs: IP:port pairs + domains + malware family
+    ├── ThreatFox IOC feed (public CSV export, no API key)
+    │   GET https://threatfox.abuse.ch/export/csv/recent/
+    │   → recent IOCs: IP:port pairs + domains + malware family
     │   → stored in threat_iocs table
     │
-    ├── URLhaus malicious domains (free)
-    │   POST https://urlhaus-api.abuse.ch/v1/urls/recent/
+    ├── URLhaus malicious domains (public CSV export, no API key)
+    │   GET https://urlhaus.abuse.ch/downloads/csv_recent/
     │   → active malicious URL hostnames
     │   → stored in threat_iocs table
     │

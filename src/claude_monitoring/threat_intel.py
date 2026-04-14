@@ -2,9 +2,19 @@
 # Proprietary and confidential.
 """Threat intelligence — registry metadata, IOC feeds, malicious package detection."""
 
+import csv
+import io
 import json
 import urllib.request
 from datetime import datetime, timezone
+
+
+def _safe_int(s):
+    try:
+        return int(str(s).strip())
+    except Exception:
+        return 0
+
 
 # ── Registry metadata enrichment ─────────────────────────
 
@@ -336,39 +346,54 @@ def record_intel_status(db, name: str, *, success: bool, error: str | None = Non
 
 
 def fetch_threatfox_iocs(db=None):
-    """Fetch recent IOCs from ThreatFox (free, no API key).
+    """Fetch recent IOCs from ThreatFox public CSV export.
+
+    Switched from the JSON API to the public CSV download because abuse.ch
+    now requires an Auth-Key header on all JSON API requests. The CSV
+    export remains anonymous and free. Same return shape as before:
+    ``{"ips": {ip: info}, "domains": {domain: info}}``.
 
     If ``db`` is provided, records the attempt in intel_source_status
-    even on failure (so the status bar can turn red). Returns the
-    ``{ips, domains}`` dict — empty on failure.
-
-    Keeping ``db`` optional preserves backwards compatibility with
-    existing tests that call fetch_threatfox_iocs() with no args.
+    even on failure (so the status bar can turn red). ``db`` is optional
+    for backwards compatibility with callers that don't track status.
     """
     try:
-        payload = json.dumps({"query": "get_iocs", "days": 7}).encode()
         req = urllib.request.Request(
-            "https://threatfox-api.abuse.ch/api/v1/",
-            data=payload,
-            headers={"Content-Type": "application/json"},
+            "https://threatfox.abuse.ch/export/csv/recent/",
+            headers={"User-Agent": "ai-runtime-monitor/1.0"},
         )
         resp = urllib.request.urlopen(req, timeout=30)
-        data = json.loads(resp.read())
+        text = resp.read().decode("utf-8", errors="replace")
         ips = {}
         domains = {}
-        for ioc in data.get("data") or []:
-            ioc_val = ioc.get("ioc", "")
-            ioc_type = ioc.get("ioc_type", "")
+        # ThreatFox uses ", " (comma + space) between fields, so we need
+        # skipinitialspace so csv.reader strips leading whitespace from
+        # each value.
+        reader = csv.reader(io.StringIO(text), skipinitialspace=True)
+        for row in reader:
+            if not row or not row[0] or row[0].startswith("#"):
+                continue
+            # ThreatFox CSV columns (verified live 2026-04-14):
+            # 0=first_seen_utc 1=ioc_id 2=ioc_value 3=ioc_type
+            # 4=threat_type 5=fk_malware 6=malware_alias
+            # 7=malware_printable 8=last_seen_utc 9=confidence_level
+            # 10=is_compromised 11=reference 12=tags 13=anonymous 14=reporter
+            if len(row) < 10:
+                continue
+            ioc_value = row[2].strip()
+            ioc_type = row[3].strip()
             info = {
-                "threat_type": ioc.get("threat_type", ""),
-                "malware": ioc.get("malware_printable", ""),
-                "confidence": ioc.get("confidence_level", 0),
+                "threat_type": row[4].strip(),
+                "malware": row[7].strip(),
+                "confidence": _safe_int(row[9]),
             }
             if ioc_type == "ip:port":
-                ip = ioc_val.split(":")[0]
-                ips[ip] = info
+                ip = ioc_value.split(":")[0]
+                if ip:
+                    ips[ip] = info
             elif ioc_type == "domain":
-                domains[ioc_val] = info
+                if ioc_value:
+                    domains[ioc_value] = info
         return {"ips": ips, "domains": domains}
     except Exception as exc:
         if db is not None:
@@ -437,41 +462,55 @@ def check_connection_against_iocs(remote_host, db):
 
 
 def fetch_urlhaus_iocs(db):
-    """Fetch active malicious URLs/domains from URLhaus."""
+    """Fetch active malicious URLs from URLhaus public CSV export.
+
+    Switched from the JSON API to the public CSV download because abuse.ch
+    now requires an Auth-Key header on all JSON API requests. The CSV
+    export remains anonymous and free.
+    """
     try:
-        payload = b"urlhaus_status=online"
         req = urllib.request.Request(
-            "https://urlhaus-api.abuse.ch/v1/urls/recent/",
-            data=payload,
-            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            "https://urlhaus.abuse.ch/downloads/csv_recent/",
+            headers={"User-Agent": "ai-runtime-monitor/1.0"},
         )
         resp = urllib.request.urlopen(req, timeout=30)
-        data = json.loads(resp.read())
+        text = resp.read().decode("utf-8", errors="replace")
         ts = datetime.now(timezone.utc).isoformat()
         count = 0
-        for entry in (data.get("urls") or [])[:500]:
-            url_str = entry.get("url", "")
-            try:
-                from urllib.parse import urlparse
+        reader = csv.reader(io.StringIO(text))
+        from urllib.parse import urlparse
 
+        for row in reader:
+            if not row or not row[0] or row[0].startswith("#"):
+                continue
+            # URLhaus CSV columns (verified live 2026-04-14):
+            # 0=id 1=dateadded 2=url 3=url_status 4=last_online
+            # 5=threat 6=tags 7=urlhaus_link 8=reporter
+            if len(row) < 6:
+                continue
+            url_str = row[2].strip()
+            if not url_str:
+                continue
+            threat = row[5].strip() or "malware"
+            tags_field = row[6].strip() if len(row) > 6 else ""
+            first_tag = tags_field.split(",")[0] if tags_field else "unknown"
+            date_added = row[1].strip()
+            try:
                 parsed = urlparse(url_str)
-                if parsed.hostname:
-                    db.execute(
-                        """INSERT OR IGNORE INTO threat_iocs
-                           (ioc_type, ioc_value, threat_type, malware_family,
-                            confidence, source, first_seen, fetch_timestamp)
-                           VALUES ('domain', ?, ?, ?, 75, 'urlhaus', ?, ?)""",
-                        (
-                            parsed.hostname,
-                            entry.get("threat", "malware"),
-                            (entry.get("tags") or ["unknown"])[0],
-                            entry.get("date_added", ""),
-                            ts,
-                        ),
-                    )
-                    count += 1
+                if not parsed.hostname:
+                    continue
+                db.execute(
+                    """INSERT OR IGNORE INTO threat_iocs
+                       (ioc_type, ioc_value, threat_type, malware_family,
+                        confidence, source, first_seen, fetch_timestamp)
+                       VALUES ('domain', ?, ?, ?, 75, 'urlhaus', ?, ?)""",
+                    (parsed.hostname, threat, first_tag, date_added, ts),
+                )
+                count += 1
             except Exception:
                 continue
+            if count >= 500:
+                break
         db.commit()
         record_intel_status(db, "urlhaus", success=True, record_count=count)
         return count

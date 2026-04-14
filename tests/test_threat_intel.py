@@ -139,28 +139,18 @@ class TestThreatFoxFeed:
     def test_fetch_iocs(self, mock_urlopen):
         from claude_monitoring.threat_intel import fetch_threatfox_iocs
 
+        # ThreatFox switched from JSON API to public CSV export.
+        csv_body = (
+            b"################################################################\n"
+            b"# ThreatFox IOCs - CSV                                        #\n"
+            b"################################################################\n"
+            b"#\n"
+            b'# "first_seen","ioc_id","ioc_value","ioc_type","threat_type","fk_malware","malware_alias","malware_printable","last_seen","confidence_level","is_compromised","reference","tags","anonymous","reporter"\n'
+            b'"2026-04-05 10:00:00", "1", "185.173.38.99:443", "ip:port", "payload_delivery", "x", "None", "npm-malware", "", "75", "False", "None", "tag", "0", "r"\n'
+            b'"2026-04-05 10:01:00", "2", "evil.com", "domain", "c2", "x", "None", "cobalt_strike", "", "90", "False", "None", "tag", "0", "r"\n'
+        )
         mock_resp = MagicMock()
-        mock_resp.read.return_value = json.dumps(
-            {
-                "query_status": "ok",
-                "data": [
-                    {
-                        "ioc": "185.173.38.99:443",
-                        "ioc_type": "ip:port",
-                        "threat_type": "payload_delivery",
-                        "malware_printable": "npm-malware",
-                        "confidence_level": 75,
-                    },
-                    {
-                        "ioc": "evil.com",
-                        "ioc_type": "domain",
-                        "threat_type": "c2",
-                        "malware_printable": "cobalt_strike",
-                        "confidence_level": 90,
-                    },
-                ],
-            }
-        ).encode()
+        mock_resp.read.return_value = csv_body
         mock_urlopen.return_value = mock_resp
         result = fetch_threatfox_iocs()
         assert "185.173.38.99" in result["ips"]
@@ -230,19 +220,17 @@ class TestURLhaus:
     def test_fetch_urlhaus(self, mock_urlopen, db):
         from claude_monitoring.threat_intel import fetch_urlhaus_iocs
 
+        # URLhaus switched from JSON API to public CSV export.
+        csv_body = (
+            b"################################################################\n"
+            b"# URLhaus Database Dump                                       #\n"
+            b"################################################################\n"
+            b"#\n"
+            b"# id,dateadded,url,url_status,last_online,threat,tags,urlhaus_link,reporter\n"
+            b'"1","2026-04-05 10:00:00","http://evil.example.com/malware.exe","online","2026-04-05 10:00:00","malware_download","emotet","https://urlhaus.abuse.ch/url/1/","anon"\n'
+        )
         mock_resp = MagicMock()
-        mock_resp.read.return_value = json.dumps(
-            {
-                "urls": [
-                    {
-                        "url": "http://evil.example.com/malware.exe",
-                        "threat": "malware_download",
-                        "tags": ["emotet"],
-                        "date_added": "2026-04-05",
-                    },
-                ],
-            }
-        ).encode()
+        mock_resp.read.return_value = csv_body
         mock_urlopen.return_value = mock_resp
         count = fetch_urlhaus_iocs(db)
         assert count == 1
