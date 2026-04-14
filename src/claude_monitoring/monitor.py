@@ -2686,21 +2686,56 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 enrichments["total_cost"] = cost_row["total_cost"] or 0
                 enrichments["api_call_count"] = cost_row["api_call_count"] or 0
 
-        # Bug 1 follow-up: desktop synthetic sessions have no events. Enrich
-        # them with live api_calls aggregates AND synthesize pseudo-events
-        # from the most recent api_calls so the detail panel has something
-        # to render.
+        # Desktop synthetic sessions (chatgpt_desktop, claude_desktop,
+        # cursor_desktop) are Electron wrappers that route traffic through
+        # the system proxy. Their conversation bodies are SSE / protobuf
+        # that we cannot parse, so we surface network activity instead:
+        # totals, daily breakdown, peak hour, top hosts — the kind of
+        # information a SOC analyst actually wants to correlate with
+        # other events.
         DESKTOP_AGENT_TYPES = {"chatgpt_desktop", "claude_desktop", "cursor_desktop"}
         if session_dict.get("agent_type") in DESKTOP_AGENT_TYPES:
-            agent_to_services = {
-                "chatgpt_desktop": ("chatgpt_web", "openai_api"),
-                "claude_desktop": ("claude_web", "anthropic_api"),
-                "cursor_desktop": ("cursor_api",),
+            agent_type = session_dict["agent_type"]
+            # Match api_calls rows by service AND by host substring —
+            # host-matching catches any call that wasn't recognized by
+            # detect_service but still came from our target app's
+            # upstream endpoints.
+            agent_match = {
+                "chatgpt_desktop": {
+                    "services": ("chatgpt_web", "openai_api"),
+                    "host_patterns": ("chatgpt.com", "api.openai.com"),
+                    "display_name": "ChatGPT Desktop",
+                },
+                "claude_desktop": {
+                    "services": ("claude_web", "anthropic_api"),
+                    "host_patterns": ("claude.ai", "api.anthropic.com"),
+                    "display_name": "Claude Desktop",
+                },
+                "cursor_desktop": {
+                    "services": ("cursor_api",),
+                    "host_patterns": ("cursor.sh", "cursor.com"),
+                    "display_name": "Cursor",
+                },
             }
-            services = agent_to_services.get(session_dict["agent_type"], ())
-            if services:
+            matcher = agent_match.get(agent_type, {})
+            services = matcher.get("services", ())
+            host_patterns = matcher.get("host_patterns", ())
+
+            if services or host_patterns:
                 try:
-                    placeholders = ",".join(["?"] * len(services))
+                    svc_placeholders = ",".join(["?"] * max(len(services), 1))
+                    host_clauses = " OR ".join(["destination_host LIKE ?"] * len(host_patterns))
+                    where_parts = []
+                    params: list[object] = []
+                    if services:
+                        where_parts.append(f"destination_service IN ({svc_placeholders})")
+                        params.extend(services)
+                    if host_clauses:
+                        where_parts.append(f"({host_clauses})")
+                        params.extend(f"%{p}%" for p in host_patterns)
+                    where_sql = " OR ".join(where_parts) if where_parts else "1=0"
+
+                    # Totals + first/last timestamps in one pass
                     agg = db.execute(
                         f"""SELECT
                               COUNT(*) as call_count,
@@ -2709,14 +2744,17 @@ class DashboardHandler(BaseHTTPRequestHandler):
                               COALESCE(SUM(request_size_bytes), 0) as req_bytes,
                               COALESCE(SUM(response_size_bytes), 0) as resp_bytes,
                               COALESCE(SUM(estimated_cost_usd), 0) as total_cost,
+                              COALESCE(AVG(latency_ms), 0) as avg_latency,
                               MIN(timestamp) as first_ts,
                               MAX(timestamp) as last_ts
                            FROM api_calls
-                           WHERE destination_service IN ({placeholders})""",  # nosec B608
-                        list(services),
+                           WHERE {where_sql}""",  # nosec B608
+                        params,
                     ).fetchone()
-                    if agg and agg["call_count"]:
-                        session_dict["total_turns"] = agg["call_count"]
+
+                    call_count = (agg and agg["call_count"]) or 0
+                    if call_count:
+                        session_dict["total_turns"] = call_count
                         session_dict["total_input_tokens"] = agg["in_tok"] or 0
                         session_dict["total_output_tokens"] = agg["out_tok"] or 0
                         if agg["first_ts"]:
@@ -2726,67 +2764,94 @@ class DashboardHandler(BaseHTTPRequestHandler):
                         enrichments["bytes_in"] = agg["req_bytes"] or 0
                         enrichments["bytes_out"] = agg["resp_bytes"] or 0
                         enrichments["total_cost"] = agg["total_cost"] or 0
-                        enrichments["api_call_count"] = agg["call_count"]
+                        enrichments["api_call_count"] = call_count
 
-                    # Synthesize pseudo-events from the 200 most recent api_calls
-                    # and expose preview fields so the dashboard can render
-                    # them as conversation turns (user / assistant blocks)
-                    # instead of metadata-only rows.
-                    recent = db.execute(
-                        f"""SELECT timestamp, destination_host, destination_service,
-                                   endpoint_path, http_method, http_status, model,
-                                   input_tokens, output_tokens, latency_ms,
-                                   request_size_bytes, response_size_bytes,
-                                   last_user_msg_preview, assistant_msg_preview,
-                                   cache_read_tokens, cache_write_tokens,
-                                   estimated_cost_usd, tool_call_count
-                           FROM api_calls
-                           WHERE destination_service IN ({placeholders})
-                           ORDER BY id DESC LIMIT 200""",  # nosec B608
-                        list(services),
-                    ).fetchall()
-                    with_content = 0
-                    for r in recent:
-                        rd = dict(r)
-                        user_prev = (rd.get("last_user_msg_preview") or "").strip()
-                        asst_prev = (rd.get("assistant_msg_preview") or "").strip()
-                        if user_prev or asst_prev:
-                            with_content += 1
-                        event_list.append(
-                            {
-                                "id": 0,
-                                "timestamp": rd.get("timestamp"),
-                                "event_type": "api_call",
-                                "source": "proxy",
-                                "data": {
-                                    "destination_host": rd.get("destination_host"),
-                                    "destination_service": rd.get("destination_service"),
-                                    "endpoint_path": rd.get("endpoint_path"),
-                                    "http_method": rd.get("http_method"),
-                                    "http_status": rd.get("http_status"),
-                                    "model": rd.get("model"),
-                                    "input_tokens": rd.get("input_tokens"),
-                                    "output_tokens": rd.get("output_tokens"),
-                                    "cache_read_tokens": rd.get("cache_read_tokens"),
-                                    "cache_write_tokens": rd.get("cache_write_tokens"),
-                                    "latency_ms": rd.get("latency_ms"),
-                                    "request_size_bytes": rd.get("request_size_bytes"),
-                                    "response_size_bytes": rd.get("response_size_bytes"),
-                                    "estimated_cost_usd": rd.get("estimated_cost_usd"),
-                                    "tool_call_count": rd.get("tool_call_count") or 0,
-                                    "user_preview": user_prev,
-                                    "assistant_preview": asst_prev,
-                                },
-                            }
-                        )
-                    enrichments["content_coverage"] = {
-                        "total": len(recent),
-                        "with_content": with_content,
-                        "metadata_only": len(recent) - with_content,
-                    }
+                        # Daily activity for the last 14 days
+                        daily = db.execute(
+                            f"""SELECT
+                                  substr(timestamp, 1, 10) as day,
+                                  COUNT(*) as calls,
+                                  COALESCE(SUM(response_size_bytes), 0) as bytes_down
+                               FROM api_calls
+                               WHERE {where_sql}
+                               GROUP BY day
+                               ORDER BY day DESC
+                               LIMIT 14""",  # nosec B608
+                            params,
+                        ).fetchall()
+
+                        # Peak hour — the single hour with the most calls
+                        peak = db.execute(
+                            f"""SELECT
+                                  substr(timestamp, 1, 13) as hour,
+                                  COUNT(*) as calls
+                               FROM api_calls
+                               WHERE {where_sql}
+                               GROUP BY hour
+                               ORDER BY calls DESC
+                               LIMIT 1""",  # nosec B608
+                            params,
+                        ).fetchone()
+
+                        # Top hosts — most-hit destinations
+                        top_hosts = db.execute(
+                            f"""SELECT
+                                  destination_host as host,
+                                  COUNT(*) as calls,
+                                  COALESCE(SUM(request_size_bytes + response_size_bytes), 0) as bytes_total
+                               FROM api_calls
+                               WHERE {where_sql}
+                               GROUP BY destination_host
+                               ORDER BY calls DESC
+                               LIMIT 5""",  # nosec B608
+                            params,
+                        ).fetchall()
+
+                        enrichments["activity_summary"] = {
+                            "total_calls": call_count,
+                            "bytes_up": agg["req_bytes"] or 0,
+                            "bytes_down": agg["resp_bytes"] or 0,
+                            "avg_latency_ms": int(agg["avg_latency"] or 0),
+                            "active_since": agg["first_ts"],
+                            "last_activity": agg["last_ts"],
+                            "daily": [
+                                {
+                                    "date": d["day"],
+                                    "calls": d["calls"],
+                                    "bytes": d["bytes_down"] or 0,
+                                }
+                                for d in daily
+                            ],
+                            "peak_hour": (
+                                {"hour": peak["hour"], "calls": peak["calls"]} if peak and peak["hour"] else None
+                            ),
+                            "top_hosts": [
+                                {"host": h["host"], "calls": h["calls"], "bytes": h["bytes_total"] or 0}
+                                for h in top_hosts
+                            ],
+                        }
+                        enrichments["traffic_captured"] = True
+                    else:
+                        # Zero rows — Cursor typically lands here because its
+                        # Electron stack bypasses the system proxy. Signal to
+                        # the frontend so it can show a configuration hint
+                        # instead of an empty summary.
+                        enrichments["traffic_captured"] = False
+                        enrichments["activity_summary"] = {
+                            "total_calls": 0,
+                            "bytes_up": 0,
+                            "bytes_down": 0,
+                            "avg_latency_ms": 0,
+                            "active_since": None,
+                            "last_activity": None,
+                            "daily": [],
+                            "peak_hour": None,
+                            "top_hosts": [],
+                        }
                 except Exception:
                     pass
                 enrichments["is_desktop_session"] = True
+                enrichments["desktop_agent_type"] = agent_type
 
         self._send_json(
             {
@@ -4835,11 +4900,20 @@ def start_monitoring(cp_url=None, cp_api_key=None):
     # died, disables system proxy and attempts restart (exponential backoff,
     # max 3 attempts). Writes heartbeat file every tick so external observers
     # (--status, other processes) can tell whether we're healthy or hung.
+    #
+    # Bug fix: the restart counter only resets after HEALTHY_TICKS_BEFORE_RESET
+    # consecutive healthy polls (not on every successful restart). Otherwise
+    # a flapping mitmdump restarts forever without the backoff ever kicking in,
+    # leading to the 30-second flap loop we hit this week.
+    HEALTHY_TICKS_BEFORE_RESET = 3
+
     def _watchdog_loop():
+        healthy_streak = 0
         while not stop_event.is_set():
             write_heartbeat()
             pm = globals().get("_PROXY_MANAGER")
             if pm is not None and not pm.is_alive():
+                healthy_streak = 0
                 print("\n  ⚠ Watchdog: mitmdump died — disabling system proxy")
                 try:
                     from claude_monitoring.lifecycle import disable_system_proxy
@@ -4849,9 +4923,12 @@ def start_monitoring(cp_url=None, cp_api_key=None):
                     pass
                 if pm.restart():
                     print("  ✅ Watchdog: mitmdump restarted")
-                    pm.reset_restart_count()
                 else:
                     print("  ❌ Watchdog: max restart attempts reached — giving up")
+            elif pm is not None:
+                healthy_streak += 1
+                if healthy_streak >= HEALTHY_TICKS_BEFORE_RESET:
+                    pm.reset_restart_count()
             stop_event.wait(30)
 
     watchdog_thread = threading.Thread(target=_watchdog_loop, daemon=True, name="Watchdog")
