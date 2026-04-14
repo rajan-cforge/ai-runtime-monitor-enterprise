@@ -5108,15 +5108,33 @@ def main():
         print(("✅ " if ok else "❌ ") + msg)
         sys.exit(0 if ok else 1)
     elif args.restart:
-        # Phase 3: stop + start in one command. Used by operators after
-        # config changes or to recover from a wedged state.
+        # Phase 3: restart via launchctl kickstart -k when the service is
+        # installed. Falls back to a terminal-mode restart (old behavior)
+        # when there's no LaunchAgent, so dev workflows still work.
         from claude_monitoring.lifecycle import (
             ProxyManager,
             get_monitor_pid_file,
             is_pid_alive,
+            is_service_installed,
             read_pid_file,
+            restart_service,
         )
 
+        if is_service_installed():
+            print("Restarting LaunchAgent service...")
+            ok, msg = restart_service()
+            print(("✅ " if ok else "❌ ") + msg)
+            if ok:
+                token_path = Path.home() / "claude_watch_output" / ".dashboard_token"
+                if token_path.exists():
+                    try:
+                        token = token_path.read_text().strip()
+                        print(f"  Dashboard: http://localhost:9081?token={token}")
+                    except Exception:
+                        pass
+            sys.exit(0 if ok else 1)
+
+        # No service installed — terminal-mode restart (dev workflow)
         mpid = read_pid_file(get_monitor_pid_file())
         if mpid and is_pid_alive(mpid):
             print(f"Stopping monitor (PID {mpid})...")
@@ -5125,7 +5143,6 @@ def main():
             except OSError:
                 pass
         ProxyManager().stop(disable_proxy=True)
-        # Wait briefly for the old monitor to shut down
         for _ in range(30):
             if not (mpid and is_pid_alive(mpid)):
                 break

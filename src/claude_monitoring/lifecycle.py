@@ -654,17 +654,108 @@ def generate_plist(
 """
 
 
-def install_service(with_system_proxy: bool = False) -> tuple[bool, str]:
-    """Write the LaunchAgent plist and load it via launchctl.
+def _wait_for_pid_to_exit(pid: int | None, timeout: float = 10.0) -> bool:
+    """Block until the PID is no longer alive, or ``timeout`` seconds pass.
 
-    Returns (success, message). If with_system_proxy is True, stores a
-    preference so the service's --start path enables the system proxy
-    on startup.
+    Returns True if the pid exited cleanly, False on timeout. Safe to call
+    with ``pid=None`` (returns True immediately).
+    """
+    if not pid:
+        return True
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if not is_pid_alive(pid):
+            return True
+        time.sleep(0.1)
+    return False
+
+
+def _wait_for_monitor_http(port: int | None = None, timeout: float = 15.0) -> bool:
+    """Poll the monitor's HTTP endpoint until it returns 200, or timeout.
+
+    Uses ``http.client`` directly to bypass the macOS system proxy, matching
+    the _is_monitor_running() probe in status.py. Returns True on success.
+    """
+    import http.client
+
+    port = port or get_proxy_port() + 1  # dashboard port is proxy_port + 1 by convention
+    # Actually dashboard port comes from config
+    from claude_monitoring.config import get_dashboard_port as _gdp
+
+    port = _gdp()
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=2)
+            conn.request("GET", "/")
+            resp = conn.getresponse()
+            resp.read()
+            conn.close()
+            if resp.status == 200:
+                return True
+        except Exception:
+            pass
+        time.sleep(0.3)
+    return False
+
+
+def install_service(with_system_proxy: bool = False, wait_for_http: bool = True) -> tuple[bool, str]:
+    """Write the LaunchAgent plist, load it, and wait for the monitor to be ready.
+
+    Idempotent: if the service is already installed and running, this cleanly
+    stops the old instance, writes the new plist, and launches a fresh process.
+    Waits up to 15s for the monitor's HTTP endpoint to return 200 before
+    declaring success, so callers can immediately hit the dashboard.
+
+    If ``with_system_proxy`` is True, stores a preference so the service's
+    --start path enables the system proxy on startup.
     """
     import sys as _sys
 
     plist_path = get_plist_path()
     plist_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # If a previous version is loaded, kill it cleanly first so the new
+    # process starts with no port conflicts and no stale PID files.
+    was_running = False
+    try:
+        result = subprocess.run(
+            ["launchctl", "list", LAUNCH_AGENT_LABEL],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        was_running = result.returncode == 0
+    except Exception:
+        pass
+
+    if was_running and plist_path.exists():
+        # Unload (sends SIGTERM, waits for exit)
+        try:
+            subprocess.run(
+                ["launchctl", "unload", str(plist_path)],
+                capture_output=True,
+                timeout=10,
+            )
+        except Exception:
+            pass
+        # Wait for the old monitor process to fully exit so we don't race
+        # on port 9081/9080 or the PID file.
+        old_mpid = read_pid_file(get_monitor_pid_file())
+        _wait_for_pid_to_exit(old_mpid, timeout=10)
+        # Also nuke any orphan mitmdump that somehow survived
+        old_ppid = read_pid_file(get_proxy_pid_file())
+        if old_ppid and is_pid_alive(old_ppid):
+            try:
+                os.kill(old_ppid, signal.SIGTERM)
+            except OSError:
+                pass
+            _wait_for_pid_to_exit(old_ppid, timeout=5)
+        # Remove stale PID files so the new instance starts fresh
+        remove_pid_file(get_monitor_pid_file())
+        remove_pid_file(get_proxy_pid_file())
+
+    # Write the plist (after cleanup so the new instance sees fresh state)
     plist_content = generate_plist(python_path=_sys.executable)
     plist_path.write_text(plist_content)
 
@@ -673,15 +764,7 @@ def install_service(with_system_proxy: bool = False) -> tuple[bool, str]:
     prefs["auto_enable_system_proxy"] = bool(with_system_proxy)
     write_preferences(prefs)
 
-    # Unload first in case an older version is already loaded, then load
-    try:
-        subprocess.run(
-            ["launchctl", "unload", str(plist_path)],
-            capture_output=True,
-            timeout=10,
-        )
-    except Exception:
-        pass
+    # Load the new plist — launchctl spawns the process (RunAtLoad=true)
     try:
         result = subprocess.run(
             ["launchctl", "load", str(plist_path)],
@@ -693,18 +776,45 @@ def install_service(with_system_proxy: bool = False) -> tuple[bool, str]:
             return False, f"launchctl load failed: {result.stderr.strip()}"
     except Exception as exc:
         return False, f"launchctl load error: {exc}"
+
+    # Wait for the monitor to actually serve HTTP — otherwise the user
+    # sees "installed" but then --status says "Monitor: Stopped" while
+    # the process is still starting up.
+    if wait_for_http:
+        ready = _wait_for_monitor_http(timeout=15)
+        if not ready:
+            return True, (
+                f"Service installed at {plist_path}, but monitor HTTP "
+                "didn't respond within 15s. Check `ai-monitor --logs`."
+            )
+
     return True, f"Service installed at {plist_path}"
 
 
 def uninstall_service() -> tuple[bool, str]:
-    """Unload the LaunchAgent and remove its plist.
+    """Unload the LaunchAgent, wait for the process to exit, remove the plist.
 
-    Also disables the system proxy (since the service owned it).
+    Also disables the system proxy (since the service owned it) and cleans
+    up any stale PID files. Idempotent — safe to call multiple times.
     """
     plist_path = get_plist_path()
     if not plist_path.exists():
         disable_system_proxy()
+        # Belt-and-suspenders: kill any orphan processes from a prior install
+        for pid_file in (get_monitor_pid_file(), get_proxy_pid_file()):
+            pid = read_pid_file(pid_file)
+            if pid and is_pid_alive(pid):
+                try:
+                    os.kill(pid, signal.SIGTERM)
+                except OSError:
+                    pass
+            remove_pid_file(pid_file)
         return True, "Service was not installed"
+
+    # Remember the running PIDs before we unload so we can wait for them
+    old_mpid = read_pid_file(get_monitor_pid_file())
+    old_ppid = read_pid_file(get_proxy_pid_file())
+
     try:
         subprocess.run(
             ["launchctl", "unload", str(plist_path)],
@@ -713,12 +823,72 @@ def uninstall_service() -> tuple[bool, str]:
         )
     except Exception:
         pass
+
+    # Wait for both the monitor and mitmproxy to actually exit
+    _wait_for_pid_to_exit(old_mpid, timeout=10)
+    _wait_for_pid_to_exit(old_ppid, timeout=5)
+    if old_ppid and is_pid_alive(old_ppid):
+        try:
+            os.kill(old_ppid, signal.SIGKILL)
+        except OSError:
+            pass
+
     try:
         plist_path.unlink()
     except OSError:
         pass
+    remove_pid_file(get_monitor_pid_file())
+    remove_pid_file(get_proxy_pid_file())
     disable_system_proxy()
     return True, "Service uninstalled"
+
+
+def restart_service() -> tuple[bool, str]:
+    """Restart the service via ``launchctl kickstart -k``.
+
+    kickstart -k sends SIGTERM, waits for the process to exit, then relaunches
+    it — the canonical way to restart a LaunchAgent without touching the plist.
+    Falls back to an uninstall+install cycle if the service isn't loaded.
+    Waits for the monitor HTTP to respond before returning.
+    """
+    plist_path = get_plist_path()
+    if not plist_path.exists():
+        return False, "Service is not installed. Run: ai-monitor --install-service"
+
+    # kickstart needs the domain/target format: gui/<uid>/<label>
+    try:
+        uid = os.getuid()
+        target = f"gui/{uid}/{LAUNCH_AGENT_LABEL}"
+        result = subprocess.run(
+            ["launchctl", "kickstart", "-k", target],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        if result.returncode != 0:
+            # Fallback: unload + load cycle
+            subprocess.run(
+                ["launchctl", "unload", str(plist_path)],
+                capture_output=True,
+                timeout=10,
+            )
+            time.sleep(0.5)
+            result = subprocess.run(
+                ["launchctl", "load", str(plist_path)],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if result.returncode != 0:
+                return False, f"launchctl reload failed: {result.stderr.strip()}"
+    except Exception as exc:
+        return False, f"launchctl kickstart error: {exc}"
+
+    # Wait for the new instance's HTTP to come up
+    ready = _wait_for_monitor_http(timeout=15)
+    if not ready:
+        return True, "Service restarted, but monitor HTTP didn't respond within 15s. Check `ai-monitor --logs`."
+    return True, "Service restarted"
 
 
 def is_service_installed() -> bool:
