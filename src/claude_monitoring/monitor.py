@@ -117,6 +117,7 @@ def _new_scan_state() -> dict:
         "finished_at": None,
         "phase": None,
         "per_source": {
+            "environment": {"status": "pending", "records": 0, "error": None},
             "pip-audit": {"status": "pending", "records": 0, "error": None},
             "osv": {"status": "pending", "records": 0, "error": None},
             "threatfox": {"status": "pending", "records": 0, "error": None},

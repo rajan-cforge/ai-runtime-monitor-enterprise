@@ -1981,13 +1981,14 @@ function renderScanProgressPanel(state) {
   var bar = document.getElementById('sc-scan-bar');
   var icons = { 'pending':'⏸', 'running':'⏳', 'done':'✅', 'error':'❌' };
   var labels = {
-    'pip-audit': 'pip-audit',
-    'osv':       'OSV.dev',
-    'threatfox': 'ThreatFox',
-    'urlhaus':   'URLhaus',
-    'registry':  'Registry metadata',
+    'environment': 'Environment inventory',
+    'pip-audit':   'pip-audit',
+    'osv':         'OSV.dev',
+    'threatfox':   'ThreatFox',
+    'urlhaus':     'URLhaus',
+    'registry':    'Registry metadata',
   };
-  var order = ['pip-audit','osv','threatfox','urlhaus','registry'];
+  var order = ['environment','pip-audit','osv','threatfox','urlhaus','registry'];
   var per = (state && state.per_source) || {};
   var phase = state && state.phase;
 
