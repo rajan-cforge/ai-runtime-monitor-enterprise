@@ -392,3 +392,75 @@ class TestBackfill:
         assert "tail" not in names
         assert "|" not in names
         assert "2>&1" not in names
+
+
+class TestEnvironmentEnumerators:
+    """Launchd-safety regression: the environment scanners must NOT rely
+    on a bare ``pip`` or ``brew`` executable lookup via PATH. Under
+    launchd, PATH is stripped to a minimal set that usually doesn't
+    include pip or /opt/homebrew/bin, and we saw the environment phase
+    silently return 0 packages in production because of it."""
+
+    def test_get_pip_packages_uses_sys_executable(self):
+        from unittest.mock import patch
+
+        from claude_monitoring import supply_chain
+
+        captured_cmd = []
+
+        def fake_run(cmd, **kw):
+            captured_cmd.append(cmd)
+
+            class R:
+                stdout = '[{"name": "requests", "version": "2.31.0"}]'
+
+            return R()
+
+        with patch("claude_monitoring.supply_chain.subprocess.run", side_effect=fake_run):
+            result = supply_chain.get_pip_packages()
+
+        # First arg must be an absolute path (sys.executable), not the
+        # string "pip" — a bare "pip" would be a PATH lookup and break
+        # under launchd.
+        assert captured_cmd, "subprocess.run was never called"
+        assert captured_cmd[0][0] != "pip"
+        assert captured_cmd[0][1:4] == ["-m", "pip", "list"]
+        assert result == [{"name": "requests", "version": "2.31.0", "manager": "pip"}]
+
+    def test_get_brew_packages_uses_absolute_path(self):
+        from unittest.mock import patch
+
+        from claude_monitoring import supply_chain
+
+        captured_cmd = []
+
+        def fake_run(cmd, **kw):
+            captured_cmd.append(cmd)
+
+            class R:
+                stdout = "htop 3.2.2\nabseil 20260107.1"
+
+            return R()
+
+        with (
+            patch("os.path.exists", side_effect=lambda p: p == "/opt/homebrew/bin/brew"),
+            patch("claude_monitoring.supply_chain.subprocess.run", side_effect=fake_run),
+        ):
+            result = supply_chain.get_brew_packages()
+
+        assert captured_cmd, "subprocess.run was never called"
+        assert captured_cmd[0][0] == "/opt/homebrew/bin/brew"
+        names = [p["name"] for p in result]
+        assert "htop" in names
+        assert "abseil" in names
+
+    def test_get_brew_packages_returns_empty_when_brew_absent(self):
+        from unittest.mock import patch
+
+        from claude_monitoring import supply_chain
+
+        with (
+            patch("os.path.exists", return_value=False),
+            patch("shutil.which", return_value=None),
+        ):
+            assert supply_chain.get_brew_packages() == []
