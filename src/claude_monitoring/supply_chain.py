@@ -616,13 +616,22 @@ def backfill_dependencies(db):
 
 
 def get_pip_packages():
-    """Get all installed Python packages via pip list."""
+    """Get all installed Python packages via ``python -m pip list``.
+
+    Uses ``sys.executable -m pip`` instead of bare ``pip`` so the call
+    works under launchd, where the shell PATH is stripped and a bare
+    ``pip`` command often doesn't resolve. This is the same class of
+    bug we hit with mitmdump — rely on the Python interpreter path,
+    never on PATH lookups, for subprocess-launched tooling.
+    """
+    import sys
+
     try:
         result = subprocess.run(
-            ["pip", "list", "--format=json"],
+            [sys.executable, "-m", "pip", "list", "--format=json"],
             capture_output=True,
             text=True,
-            timeout=15,
+            timeout=30,
         )
         data = json.loads(result.stdout)
         return [{"name": p["name"], "version": p["version"], "manager": "pip"} for p in data]
@@ -631,13 +640,29 @@ def get_pip_packages():
 
 
 def get_brew_packages():
-    """Get all installed Homebrew packages."""
+    """Get all installed Homebrew packages.
+
+    Tries the common absolute paths first (``/opt/homebrew/bin/brew``
+    for Apple Silicon, ``/usr/local/bin/brew`` for Intel) before
+    falling back to PATH lookup — the absolute paths are the only
+    ones that reliably work under launchd.
+    """
+    import shutil
+
+    candidates = [
+        "/opt/homebrew/bin/brew",
+        "/usr/local/bin/brew",
+        shutil.which("brew"),
+    ]
+    brew_bin = next((c for c in candidates if c and __import__("os").path.exists(c)), None)
+    if brew_bin is None:
+        return []
     try:
         result = subprocess.run(
-            ["brew", "list", "--versions"],
+            [brew_bin, "list", "--versions"],
             capture_output=True,
             text=True,
-            timeout=15,
+            timeout=30,
         )
         pkgs = []
         for line in result.stdout.strip().splitlines():
