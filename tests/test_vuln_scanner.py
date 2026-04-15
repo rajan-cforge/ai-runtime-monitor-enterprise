@@ -333,6 +333,63 @@ class TestRunFullScan:
         assert results["scanned"] >= 1  # pip-audit counts as 1 scan
         assert results["vulns_found"] == 0
 
+    @patch("claude_monitoring.supply_chain.get_full_environment")
+    @patch("claude_monitoring.vuln_scanner.run_pip_audit")
+    def test_environment_phase_populates_table(self, mock_pip, mock_env, db):
+        """run_full_scan must call get_full_environment() + store the
+        results in environment_packages. Previously those functions
+        existed but had zero callers, so Full Environment view stayed
+        empty forever."""
+        from claude_monitoring.vuln_scanner import run_full_scan
+
+        mock_pip.return_value = []
+        mock_env.return_value = [
+            {"name": "requests", "version": "2.31.0", "manager": "pip"},
+            {"name": "flask", "version": "3.0.0", "manager": "pip"},
+            {"name": "htop", "version": "3.2.2", "manager": "brew"},
+        ]
+
+        run_full_scan(db)
+
+        rows = db.execute(
+            "SELECT package_name, manager, package_version FROM environment_packages ORDER BY package_name"
+        ).fetchall()
+        names = [r[0] for r in rows]
+        assert "requests" in names
+        assert "flask" in names
+        assert "htop" in names
+        # Intel status row records the success
+        status_row = db.execute(
+            "SELECT record_count, last_error FROM intel_source_status WHERE name='environment'"
+        ).fetchone()
+        assert status_row is not None
+        assert status_row[0] == 3
+        assert status_row[1] is None
+
+    @patch("claude_monitoring.supply_chain.get_full_environment")
+    @patch("claude_monitoring.vuln_scanner.run_pip_audit")
+    def test_environment_phase_invokes_progress_callback(self, mock_pip, mock_env, db):
+        """The scan progress UI panel expects an 'environment' phase
+        in the callback stream, same as pip-audit / osv / etc."""
+        from claude_monitoring.vuln_scanner import run_full_scan
+
+        mock_pip.return_value = []
+        mock_env.return_value = [{"name": "requests", "version": "2.31.0", "manager": "pip"}]
+
+        phases_seen: list[tuple[str, str]] = []
+
+        def cb(phase, status, **kwargs):
+            phases_seen.append((phase, status))
+
+        run_full_scan(db, progress_cb=cb)
+
+        assert ("environment", "running") in phases_seen
+        assert ("environment", "done") in phases_seen
+        # Environment phase runs BEFORE pip-audit (Phase 0)
+        env_running_idx = phases_seen.index(("environment", "running"))
+        pip_running_idx = phases_seen.index(("pip-audit", "running"))
+        assert env_running_idx < pip_running_idx
+
 
 class TestCVSSSeverity:
     def test_critical(self):

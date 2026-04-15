@@ -235,6 +235,7 @@ def run_full_scan(db, progress_cb=None):
     Feature B: ``progress_cb(phase, status, records, error)`` is an optional
     callback invoked before/after each phase so the dashboard can stream
     progress. ``phase`` is one of:
+      - "environment" (full installed-package inventory via pip/brew list)
       - "pip-audit"  (local Python vuln scan)
       - "osv"        (OSV.dev query per package)
       - "threatfox"  (abuse.ch IOC refresh)
@@ -245,6 +246,10 @@ def run_full_scan(db, progress_cb=None):
     Also records per-source health into intel_source_status so the
     status endpoint can show green/yellow/red for pip-audit and OSV.
     """
+    from claude_monitoring.supply_chain import (
+        get_full_environment,
+        store_environment_packages,
+    )
     from claude_monitoring.threat_intel import (
         fetch_threatfox_iocs,
         fetch_urlhaus_iocs,
@@ -261,6 +266,21 @@ def run_full_scan(db, progress_cb=None):
 
     results = {"scanned": 0, "vulns_found": 0, "new_since_last_scan": 0}
     scan_start = datetime.now(timezone.utc).isoformat()
+
+    # ── Phase 0: full environment inventory (pip list + brew list) ──
+    # Populates environment_packages so the Supply Chain tab's
+    # "Full Environment" view has something to render. Before this
+    # phase existed, the table stayed empty forever because
+    # get_full_environment() was defined but never called.
+    _cb("environment", "running")
+    try:
+        env_pkgs = get_full_environment()
+        store_environment_packages(db, env_pkgs)
+        record_intel_status(db, "environment", success=True, record_count=len(env_pkgs))
+        _cb("environment", "done", records=len(env_pkgs))
+    except Exception as exc:
+        record_intel_status(db, "environment", success=False, error=str(exc)[:200])
+        _cb("environment", "error", error=str(exc)[:200])
 
     # ── Phase 1: pip-audit (local, fast) ──
     _cb("pip-audit", "running")

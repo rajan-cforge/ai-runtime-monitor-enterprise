@@ -266,7 +266,7 @@ class TestAsyncScanProgress:
         assert "running" in data
         assert "per_source" in data
         per = data["per_source"]
-        assert set(per.keys()) == {"pip-audit", "osv", "threatfox", "urlhaus", "registry"}
+        assert set(per.keys()) == {"environment", "pip-audit", "osv", "threatfox", "urlhaus", "registry"}
         for src_state in per.values():
             assert "status" in src_state
             assert "records" in src_state
