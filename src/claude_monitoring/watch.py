@@ -773,10 +773,14 @@ def run_setup():
             [sys.executable, "-m", "pip", "install", "--upgrade", pkg, "--break-system-packages"],
             capture_output=True,
             text=True,
+            timeout=120,
         )
         if result.returncode != 0:
             result = subprocess.run(
-                [sys.executable, "-m", "pip", "install", "--upgrade", pkg], capture_output=True, text=True
+                [sys.executable, "-m", "pip", "install", "--upgrade", pkg],
+                capture_output=True,
+                text=True,
+                timeout=120,
             )
 
         if result.returncode == 0:
@@ -822,6 +826,7 @@ def run_setup():
                 ],
                 capture_output=True,
                 text=True,
+                timeout=60,
             )
             if result.returncode == 0:
                 print("   ✅ Certificate trusted in macOS System Keychain")
@@ -1519,9 +1524,11 @@ def run_scan():
     print("\nAI Agent Process Scanner")
     print("=" * 55)
 
-    # Get all processes
+    # Get all processes. timeout guards against a wedged ps on a
+    # broken system (some macOS configs with D-state processes cause
+    # `ps aux` to hang for minutes — must not hang the scan CLI).
     try:
-        result = subprocess.run(["ps", "aux"], capture_output=True, text=True)
+        result = subprocess.run(["ps", "aux"], capture_output=True, text=True, timeout=30)
         lines = result.stdout.strip().split("\n")[1:]  # skip header
     except Exception as e:
         print(f"Failed to list processes: {e}")
@@ -1555,7 +1562,9 @@ def run_scan():
     print("─" * 55)
     print("Checking network connections to AI services...\n")
     try:
-        result = subprocess.run(["lsof", "-i", "-n", "-P"], capture_output=True, text=True)
+        # lsof can hang on a stuck process/kernel NFS mount. 30s cap
+        # is generous for the common case and bounds worst-case.
+        result = subprocess.run(["lsof", "-i", "-n", "-P"], capture_output=True, text=True, timeout=30)
         ai_connections = []
         for line in result.stdout.strip().split("\n"):
             for host in AI_HOSTS:
