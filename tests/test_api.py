@@ -1124,6 +1124,58 @@ class TestDashboardAPI:
         # And neither got the generic browser_ai label.
         assert "browser_ai" not in types
 
+    def test_browser_ingest_masks_credentials_in_content(self, api_server):
+        """P1-02 regression: raw credentials posted via the Chrome extension
+        must be masked inline before being stored in browser_sessions. The
+        raw value must not appear in content_text and must not appear in the
+        associated sensitive_data event's matched_value / snippet."""
+        from claude_monitoring import monitor as mon
+
+        raw_aws_key = "AKIAIOSFODNN7EXAMPLE"
+        events = [
+            {
+                "service": "ChatGPT",
+                "url": "https://chatgpt.com/c/mask-test",
+                "type": "user_prompt",
+                "text": f"Please help me debug why my AWS key {raw_aws_key} isn't working",
+                "timestamp": "2026-02-01T14:00:00Z",
+                "conversation_id": "mask-test",
+            },
+        ]
+        req = Request(
+            f"{api_server}/api/browser/ingest",
+            data=json.dumps({"events": events}).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        resp = urlopen(req)
+        assert resp.status == 200
+
+        # browser_sessions row must not contain the raw key
+        db = mon.get_thread_db()
+        row = db.execute(
+            "SELECT content_text FROM browser_sessions WHERE conversation_id = ? LIMIT 1",
+            ("mask-test",),
+        ).fetchone()
+        assert row is not None
+        assert raw_aws_key not in row["content_text"]
+
+        # The sensitive_data event must not contain the raw key in snippet or matched_value
+        ev = db.execute(
+            """SELECT data_json FROM events
+               WHERE session_id='browser_mask-test' AND event_type='sensitive_data'
+               ORDER BY id DESC LIMIT 1"""
+        ).fetchone()
+        assert ev is not None
+        data = json.loads(ev["data_json"])
+        assert raw_aws_key not in data.get("snippet", "")
+        assert raw_aws_key not in data.get("matched_value", "")
+        # Masked form should be present in matched_value
+        assert data["matched_value"] != raw_aws_key
+        # matched_hash is the hash of the raw value — consumers who know the
+        # value can verify, but the DB alone does not leak it.
+        assert "matched_hash" in data
+
     def test_browser_ingest_missing_fields(self, api_server):
         events = [
             {"text": "no service or type"},
