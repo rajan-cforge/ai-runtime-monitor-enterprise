@@ -4496,8 +4496,6 @@ class DashboardHandler(BaseHTTPRequestHandler):
         to follow phase-by-phase progress. Rejects concurrent scans with
         409 Conflict.
         """
-        global _scan_state
-
         with _scan_state_lock:
             if _scan_state["running"]:
                 self._send_json(
@@ -4508,8 +4506,16 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     409,
                 )
                 return
-            # Reset state
-            _scan_state = _new_scan_state()
+            # P0-04: reset state by MUTATING the existing dict in place
+            # (clear + update), not by rebinding `_scan_state = ...`.
+            # Rebinding the module-level variable inside the lock leaves
+            # any other thread that holds a reference to the old dict
+            # reading stale state — the lock only protects the binding
+            # operation itself, not the dict identity. Mutating in place
+            # keeps the single shared reference authoritative.
+            fresh = _new_scan_state()
+            _scan_state.clear()
+            _scan_state.update(fresh)
             _scan_state["running"] = True
             _scan_state["started_at"] = datetime.now(timezone.utc).isoformat()
 
@@ -4525,7 +4531,6 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     }
 
         def _runner():
-            global _scan_state
             try:
                 from claude_monitoring.vuln_scanner import run_full_scan
 
