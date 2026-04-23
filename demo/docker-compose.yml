@@ -1,0 +1,12 @@
+# Safe sandbox for real pip installs during the demo.
+#
+# The monitor does NOT observe this container — its job is purely to
+# keep legit package installs (requests, flask, beautifulsoup4, etc.)
+# off the host venv. The dashboard state comes from JSONL files written
+# by run_demo.py into ~/.claude/projects/demo-scraper/, which the
+# monitor's JSONL watcher picks up exactly like a real Claude Code
+# session.
+services:
+  sandbox:
+    build: .
+    container_name: ai-demo-sandbox
