@@ -5102,7 +5102,7 @@ def install_launch_agent():
     plist_path.write_text(plist_content)
     print(f"  Wrote: {plist_path}")
 
-    result = subprocess.run(["launchctl", "load", str(plist_path)], capture_output=True, text=True)
+    result = subprocess.run(["launchctl", "load", str(plist_path)], capture_output=True, text=True, timeout=10)
     if result.returncode == 0:
         print("  LaunchAgent loaded successfully!")
         print(f"  Log: {log_path}")
@@ -5119,7 +5119,7 @@ def uninstall_launch_agent():
         print("  LaunchAgent not found. Nothing to uninstall.")
         return
 
-    subprocess.run(["launchctl", "unload", str(plist_path)], capture_output=True, text=True)
+    subprocess.run(["launchctl", "unload", str(plist_path)], capture_output=True, text=True, timeout=10)
     plist_path.unlink()
     print("  LaunchAgent unloaded and removed.")
 
@@ -5192,13 +5192,21 @@ def main():
         port = get_proxy_port()
         print(f"Enabling macOS system proxy → 127.0.0.1:{port}")
         print("Only AI API domains are inspected. All other traffic passes through untouched.")
-        subprocess.run(["networksetup", "-setsecurewebproxy", "Wi-Fi", "127.0.0.1", str(port)], check=False)
+        subprocess.run(
+            ["networksetup", "-setsecurewebproxy", "Wi-Fi", "127.0.0.1", str(port)],
+            check=False,
+            timeout=10,
+        )
         print("✅ System proxy enabled.")
         print("Run 'ai-monitor --disable-system-proxy' to disable.")
         sys.exit(0)
     elif args.disable_system_proxy:
         print("Disabling macOS system proxy...")
-        subprocess.run(["networksetup", "-setsecurewebproxystate", "Wi-Fi", "off"], check=False)
+        subprocess.run(
+            ["networksetup", "-setsecurewebproxystate", "Wi-Fi", "off"],
+            check=False,
+            timeout=10,
+        )
         print("✅ System proxy disabled.")
         sys.exit(0)
     elif args.status:
@@ -5366,6 +5374,7 @@ def main():
                         str(get_proxy_port()),
                     ],
                     capture_output=True,
+                    timeout=10,
                 )
 
         # Section 8: first-run wizard. Skipped if .setup_complete already
