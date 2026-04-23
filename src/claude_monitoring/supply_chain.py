@@ -469,6 +469,22 @@ def assess_risk(package, active_cves=None):
     reasons = []
     name = (package.get("name") or "").lower()
 
+    # Hardcoded malicious-package list. We also check at OSV scan time
+    # via MAL- advisory prefixes, but that's async — a fresh install of
+    # a known-bad package should fire an immediate CRITICAL at capture
+    # time, not wait for the next scan cycle. The list lives in
+    # threat_intel.py and is shared with the advisory-prefix matcher.
+    try:
+        from claude_monitoring.threat_intel import KNOWN_MALICIOUS_PACKAGES
+
+        if name in KNOWN_MALICIOUS_PACKAGES:
+            score += 8
+            reasons.append("KNOWN MALICIOUS package (+8)")
+    except Exception:
+        # Fail-open: if threat_intel can't be imported for some reason,
+        # just skip this check. Other risk signals still apply.
+        pass
+
     if name in KNOWN_TYPOSQUATS:
         score += 5
         reasons.append(f"typosquat of '{KNOWN_TYPOSQUATS[name]}' (+5)")
