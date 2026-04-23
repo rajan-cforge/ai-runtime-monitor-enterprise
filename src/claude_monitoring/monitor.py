@@ -1251,7 +1251,13 @@ class JSONLSessionWatcher:
             pass
 
     # Alert dedup cache: (session_id, pattern, matched_prefix) -> event_id
+    # P0-05: watchdog filesystem events dispatch to multiple handler
+    # threads, and _check_sensitive mutates this dict (set, del, clear).
+    # Without a lock two concurrent inserts can race the size check +
+    # clear, and readers can see a half-populated dict. Shared class
+    # lock keeps reads and writes atomic across all threads.
     _alert_dedup = {}
+    _alert_dedup_lock = threading.Lock()
 
     @staticmethod
     def _calculate_confidence(context, pattern, matched_value, full_text):
@@ -1330,9 +1336,10 @@ class JSONLSessionWatcher:
 
         # Dedup: same pattern + matched value in same session
         dedup_key = (session_id, pattern_names[0], matched_value[:20] if matched_value else "")
-        if dedup_key in self._alert_dedup:
+        with self._alert_dedup_lock:
+            existing_id = self._alert_dedup.get(dedup_key)
+        if existing_id is not None:
             try:
-                existing_id = self._alert_dedup[dedup_key]
                 self.db.execute(
                     """UPDATE events SET data_json = json_set(data_json,
                         '$.repeat_count',
@@ -1371,13 +1378,17 @@ class JSONLSessionWatcher:
         }
         self._store_event(timestamp, session_id, "sensitive_data", "network", event_data)
 
-        # Track for dedup
+        # Track for dedup. The size-check-and-clear must run under the
+        # same lock as the insert — without it, two threads inserting
+        # near the 500-key cap could both see len < 500, both insert,
+        # then both clear, losing each other's entry.
         try:
             row = self.db.execute("SELECT MAX(id) FROM events WHERE event_type='sensitive_data'").fetchone()
             if row and row[0]:
-                self._alert_dedup[dedup_key] = row[0]
-            if len(self._alert_dedup) > 500:
-                self._alert_dedup.clear()
+                with self._alert_dedup_lock:
+                    self._alert_dedup[dedup_key] = row[0]
+                    if len(self._alert_dedup) > 500:
+                        self._alert_dedup.clear()
         except Exception:
             pass
 
