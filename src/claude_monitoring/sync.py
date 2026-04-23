@@ -15,6 +15,28 @@ import threading
 from claude_monitoring.config import get_db_path
 from claude_monitoring.utils import now_iso
 
+# Fields that may carry free-form text captured from agent sessions and
+# could incidentally contain secrets (API keys pasted into prompts, AWS
+# keys surfaced in tool outputs). The pre-sync sanitizer walks every
+# payload, and wherever it encounters one of these keys with a string
+# value, it runs scan_sensitive + mask_value inline. Defense in depth —
+# the primary sensitive-data pipeline already masks on capture, but the
+# sync layer must not blindly trust upstream for P1-04.
+_SANITIZE_TEXT_FIELDS = {
+    "text",
+    "snippet",
+    "matched_value",
+    "match_context",
+    "command",
+    "output",
+    "input_preview",
+    "content",
+    "content_text",
+    "title",
+    "cwd",
+    "summary",
+}
+
 
 class SyncAgent:
     """Background thread that syncs local monitor.db to the control plane."""
@@ -96,6 +118,15 @@ class SyncAgent:
                 "api_calls": watermarks.get("api_calls", 0) + len(new_api_calls),
             },
         }
+
+        # P1-04: scrub every free-form text field in the payload for
+        # plaintext credentials before transmission. This is defense
+        # in depth — the primary capture paths already mask on write,
+        # but historical rows from before the masking fix, or any path
+        # that stores raw text (future or current), must not leak to
+        # the control plane. Uses the same scan_sensitive + mask_value
+        # logic as the ingest-side capture.
+        payload = _sanitize_payload(payload)
 
         response = requests.post(
             f"{self.cp_url}/api/v1/ingest",
@@ -224,3 +255,49 @@ class SyncAgent:
                     }
                 )
         return alerts
+
+
+def _sanitize_string(value: str) -> str:
+    """Scan a free-form string for secrets and inline-mask each match.
+
+    Uses the same scan_sensitive + mask_value pair that the primary
+    capture pipelines use (monitor.py::_check_sensitive). Returns the
+    input unchanged if no matches found or the scan fails.
+    """
+    if not value or not isinstance(value, str):
+        return value
+    try:
+        from claude_monitoring.security import mask_value
+        from claude_monitoring.utils import scan_sensitive
+
+        matches = scan_sensitive(value[:5000])
+        if not matches:
+            return value
+        sanitized = value
+        for m in matches:
+            raw = m.get("matched_value") or ""
+            if raw and raw in sanitized:
+                sanitized = sanitized.replace(raw, mask_value(raw))
+        return sanitized
+    except Exception:
+        # Fail closed: if scan crashes, return input unchanged rather
+        # than dropping the payload. The primary capture pipeline has
+        # already sanitized most fields; this is belt-and-suspenders.
+        return value
+
+
+def _sanitize_payload(obj):
+    """Recursively walk a payload and mask text fields in place.
+
+    Only masks values under keys listed in ``_SANITIZE_TEXT_FIELDS``.
+    Other fields (numbers, IDs, timestamps, model names, etc.) pass
+    through unchanged so the control plane still gets useful telemetry.
+    """
+    if isinstance(obj, dict):
+        return {
+            k: (_sanitize_string(v) if (k in _SANITIZE_TEXT_FIELDS and isinstance(v, str)) else _sanitize_payload(v))
+            for k, v in obj.items()
+        }
+    if isinstance(obj, list):
+        return [_sanitize_payload(item) for item in obj]
+    return obj
