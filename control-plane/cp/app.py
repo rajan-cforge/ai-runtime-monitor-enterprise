@@ -9,7 +9,9 @@ from cp.registry import get_all_endpoints, register_or_update_endpoint
 
 app = FastAPI(title="AI Runtime Monitor — Control Plane", version="0.1.0")
 
-# Include dashboard routes (no auth required for dashboard HTML)
+# Include dashboard routes. The /dashboard HTML shell is unauthenticated
+# (it's a static SPA that prompts for the key), but every
+# /api/v1/fleet/* route below it now requires X-API-Key (P1-03).
 app.include_router(dashboard_router)
 
 

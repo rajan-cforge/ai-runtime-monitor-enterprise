@@ -51,7 +51,12 @@ target-version = "py39"
 line-length = 120
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B"]
-ignore = ["E501"]
+# B008: FastAPI's idiomatic pattern is `x: T = Depends(fn)` in function
+# signatures. Ruff flags every call-in-default, but this is correct for
+# FastAPI dependency injection and has no runtime impact (Depends() is a
+# marker, not an evaluation). Ignore project-wide — applies to
+# control-plane/cp/* route handlers.
+ignore = ["E501", "B008"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

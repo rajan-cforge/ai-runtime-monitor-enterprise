@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import HTMLResponse
 from sqlalchemy import text
 
+from cp.auth import validate_api_key
 from cp.db import get_db
 
 router = APIRouter()
@@ -11,7 +12,13 @@ router = APIRouter()
 
 @router.get("/dashboard", response_class=HTMLResponse)
 async def fleet_dashboard():
-    """Serve the fleet dashboard HTML."""
+    """Serve the fleet dashboard HTML shell (no auth).
+
+    The shell is a static SPA that prompts the user for their API key
+    and stores it in localStorage. All subsequent API calls from the
+    SPA send X-API-Key and are authenticated by the /api/v1/fleet/*
+    handlers below.
+    """
     html_path = Path(__file__).parent.parent / "fleet_dashboard.html"
     if not html_path.exists():
         html_path = Path(__file__).parent / "fleet_dashboard.html"
@@ -21,7 +28,7 @@ async def fleet_dashboard():
 
 
 @router.get("/api/v1/fleet/stats")
-async def fleet_stats(db=Depends(get_db)):
+async def fleet_stats(_api_key: str = Depends(validate_api_key), db=Depends(get_db)):
     """Aggregated fleet statistics."""
     stats = {}
 
@@ -88,6 +95,7 @@ async def fleet_stats(db=Depends(get_db)):
 
 @router.get("/api/v1/fleet/sessions")
 async def fleet_sessions(
+    _api_key: str = Depends(validate_api_key),
     db=Depends(get_db),
     limit: int = 100,
     endpoint_id: str = None,
@@ -123,8 +131,11 @@ async def fleet_sessions(
 
 
 @router.get("/api/v1/fleet/endpoints")
-async def fleet_endpoints(db=Depends(get_db)):
-    """Fleet endpoints for the dashboard (no auth required)."""
+async def fleet_endpoints(
+    _api_key: str = Depends(validate_api_key),
+    db=Depends(get_db),
+):
+    """Fleet endpoints for the dashboard."""
     rows = db.execute(
         text(
             """SELECT e.endpoint_id, e.hostname, e.ip_address, e.os,
@@ -163,6 +174,7 @@ async def fleet_endpoints(db=Depends(get_db)):
 
 @router.get("/api/v1/fleet/alerts")
 async def fleet_alerts(
+    _api_key: str = Depends(validate_api_key),
     db=Depends(get_db),
     limit: int = 50,
     offset: int = 0,
@@ -197,7 +209,10 @@ async def fleet_alerts(
 
 
 @router.get("/api/v1/fleet/stats/alert_trend")
-async def alert_trend(db=Depends(get_db)):
+async def alert_trend(
+    _api_key: str = Depends(validate_api_key),
+    db=Depends(get_db),
+):
     """7-day alert trend by severity for stacked bar chart."""
     rows = db.execute(
         text(
@@ -221,7 +236,11 @@ async def alert_trend(db=Depends(get_db)):
 
 
 @router.post("/api/v1/fleet/alerts/{alert_id}/dismiss")
-async def dismiss_alert(alert_id: int, db=Depends(get_db)):
+async def dismiss_alert(
+    alert_id: int,
+    _api_key: str = Depends(validate_api_key),
+    db=Depends(get_db),
+):
     """Dismiss a fleet alert."""
     result = db.execute(
         text("UPDATE fleet_alerts SET dismissed = true, dismissed_at = now() WHERE id = :aid AND dismissed = false"),
