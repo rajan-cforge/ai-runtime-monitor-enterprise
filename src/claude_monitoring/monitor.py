@@ -2337,19 +2337,42 @@ class DashboardHandler(BaseHTTPRequestHandler):
             if not service or not ev_type:
                 continue
 
-            # Content-based dedup: hash first 200 chars
-            # Same content_hash → 7-day window (prevents cross-day re-capture of same text)
-            # Falls back to text prefix match for rows with NULL content_hash
-            content_hash = None
+            # P1-02: sanitize raw text before storage. Extension payloads
+            # can contain user prompts with plaintext credentials (API
+            # keys pasted into a chat box, AWS keys in tool outputs
+            # rendered inside claude.ai). The DB must never persist the
+            # raw secret — anyone with read access to monitor.db would
+            # get usable credentials. Run scan_sensitive first; for
+            # every match, inline-replace the matched bytes with
+            # mask_value() so conversation context survives but the
+            # credential itself is redacted.
+            sanitized_text = text
+            early_matches = []
             if text:
-                content_hash = hashlib.sha256(text[:200].encode()).hexdigest()[:16]
+                early_matches = scan_sensitive(text[:5000])
+                if early_matches:
+                    from claude_monitoring.security import mask_value
+
+                    sanitized_text = text[:5000]
+                    for m in early_matches:
+                        raw = m.get("matched_value") or ""
+                        if raw and raw in sanitized_text:
+                            sanitized_text = sanitized_text.replace(raw, mask_value(raw))
+
+            # Content-based dedup: hash first 200 chars of the SANITIZED
+            # text. Dedup on sanitized content avoids the edge case where
+            # the same credential appears twice with different surrounding
+            # context — the masked form collapses both into one row.
+            content_hash = None
+            if sanitized_text:
+                content_hash = hashlib.sha256(sanitized_text[:200].encode()).hexdigest()[:16]
                 recent = db.execute(
                     """SELECT id FROM browser_sessions
                        WHERE conversation_id = ? AND event_type = ?
                        AND (content_hash = ? OR substr(content_text, 1, 200) = ?)
                        AND visit_time > datetime(?, '-7 days')
                        LIMIT 1""",
-                    (conv_id, ev_type, content_hash, text[:200], timestamp),
+                    (conv_id, ev_type, content_hash, sanitized_text[:200], timestamp),
                 ).fetchone()
                 if recent:
                     continue
@@ -2360,7 +2383,16 @@ class DashboardHandler(BaseHTTPRequestHandler):
                        (service, url, title, conversation_id,
                         visit_time, duration_seconds, source, event_type, content_text, content_hash)
                        VALUES (?, ?, ?, ?, ?, 0, 'extension', ?, ?, ?)""",
-                    (service, url, title, conv_id, timestamp, ev_type, text[:5000] if text else None, content_hash),
+                    (
+                        service,
+                        url,
+                        title,
+                        conv_id,
+                        timestamp,
+                        ev_type,
+                        sanitized_text[:5000] if sanitized_text else None,
+                        content_hash,
+                    ),
                 )
                 stored += 1
                 # Push to live feed.
@@ -2382,47 +2414,55 @@ class DashboardHandler(BaseHTTPRequestHandler):
                         "event_type": feed_event_type,
                         "source": "browser",
                         "service": service,
-                        "summary": f"{service}: {(text or '')[:80]}",
+                        "summary": f"{service}: {(sanitized_text or '')[:80]}",
                     }
                 )
             except Exception:
                 continue
 
-            # Scan captured text for sensitive data and STORE alerts
-            if text:
-                matches = scan_sensitive(text[:5000])
-                if matches:
-                    alerts += len(matches)
-                    session_id = "browser_" + (conv_id or "unknown")
-                    matched_value = matches[0].get("matched_value", "") if matches else ""
-                    severity = min(
-                        (m.get("severity", "medium") for m in matches),
-                        key=lambda s: {"critical": 0, "high": 1, "medium": 2, "low": 3}.get(s, 99),
+            # P1-02: reuse the matches found during the sanitization pass
+            # above. Storing the alert event with raw matched_value/snippet
+            # would defeat the purpose of the sanitization — mask them
+            # here the same way _check_sensitive does on the JSONL path.
+            if early_matches:
+                from claude_monitoring.security import hash_value, mask_value
+
+                alerts += len(early_matches)
+                session_id = "browser_" + (conv_id or "unknown")
+                matched_value = early_matches[0].get("matched_value", "") or ""
+                masked_value = mask_value(matched_value)
+                severity = min(
+                    (m.get("severity", "medium") for m in early_matches),
+                    key=lambda s: {"critical": 0, "high": 1, "medium": 2, "low": 3}.get(s, 99),
+                )
+                confidence = "high" if ev_type == "user_prompt" else "medium"
+                # Snippet comes from the already-sanitized text so no raw
+                # credentials land in the events row either.
+                safe_snippet = (sanitized_text or "")[:200]
+                data_json = json.dumps(
+                    {
+                        "patterns": [m["name"] for m in early_matches],
+                        "severity": severity,
+                        "categories": list({m.get("category", "credential") for m in early_matches}),
+                        "context": f"browser_{ev_type}",
+                        "snippet": safe_snippet,
+                        "matched_value": masked_value,
+                        "matched_hash": hash_value(matched_value),
+                        "confidence": confidence,
+                        "likely_false_positive": False,
+                    }
+                )
+                dedup_key = f"{session_id}|{timestamp}|{[m['name'] for m in early_matches]}"
+                dedup_hash = hashlib.sha256(dedup_key.encode()).hexdigest()[:16]
+                try:
+                    db.execute(
+                        """INSERT OR IGNORE INTO events
+                           (timestamp, session_id, event_type, source_layer, data_json, dedup_hash)
+                           VALUES (?, ?, 'sensitive_data', 'browser', ?, ?)""",
+                        (timestamp, session_id, data_json, dedup_hash),
                     )
-                    confidence = "high" if ev_type == "user_prompt" else "medium"
-                    data_json = json.dumps(
-                        {
-                            "patterns": [m["name"] for m in matches],
-                            "severity": severity,
-                            "categories": list(set(m.get("category", "credential") for m in matches)),
-                            "context": f"browser_{ev_type}",
-                            "snippet": text[:200],
-                            "matched_value": matched_value,
-                            "confidence": confidence,
-                            "likely_false_positive": False,
-                        }
-                    )
-                    dedup_key = f"{session_id}|{timestamp}|{[m['name'] for m in matches]}"
-                    dedup_hash = hashlib.sha256(dedup_key.encode()).hexdigest()[:16]
-                    try:
-                        db.execute(
-                            """INSERT OR IGNORE INTO events
-                               (timestamp, session_id, event_type, source_layer, data_json, dedup_hash)
-                               VALUES (?, ?, 'sensitive_data', 'browser', ?, ?)""",
-                            (timestamp, session_id, data_json, dedup_hash),
-                        )
-                    except Exception:
-                        pass
+                except Exception:
+                    pass
 
         if stored > 0:
             try:
