@@ -268,3 +268,90 @@ class TestSyncLoop:
         assert call_count["n"] == 2
         # After one failure + one success, backoff was doubled then reset
         assert agent._backoff_time == 1  # reset on success
+
+
+class TestPayloadSanitization:
+    """P1-04 regression: sync payloads must be scrubbed for plaintext
+    credentials before POSTing to the control plane. Even though the
+    primary capture pipelines mask on write, sync is downstream and
+    cannot trust upstream — any path that stores raw text (historical
+    rows, new capture paths that forgot to mask) must be caught here."""
+
+    def test_sanitize_payload_masks_aws_key_in_snippet(self):
+        from claude_monitoring.sync import _sanitize_payload
+
+        raw = "AKIAIOSFODNN7EXAMPLE"
+        payload = {
+            "alerts": [
+                {
+                    "snippet": f"my key is {raw}",
+                    "matched_value": raw,
+                    "patterns": ["aws_key"],
+                    "session_id": "sess1",
+                }
+            ]
+        }
+        scrubbed = _sanitize_payload(payload)
+        assert raw not in scrubbed["alerts"][0]["snippet"]
+        assert raw not in scrubbed["alerts"][0]["matched_value"]
+        # Non-sensitive fields untouched
+        assert scrubbed["alerts"][0]["patterns"] == ["aws_key"]
+        assert scrubbed["alerts"][0]["session_id"] == "sess1"
+
+    def test_sanitize_payload_masks_event_text(self):
+        from claude_monitoring.sync import _sanitize_payload
+
+        raw = "AKIAIOSFODNN7EXAMPLE"
+        payload = {
+            "events": [
+                {
+                    "event_type": "user_prompt",
+                    "data_json": {"text": f"help debug {raw} not working"},
+                }
+            ]
+        }
+        scrubbed = _sanitize_payload(payload)
+        assert raw not in scrubbed["events"][0]["data_json"]["text"]
+
+    def test_sanitize_payload_preserves_non_string_fields(self):
+        from claude_monitoring.sync import _sanitize_payload
+
+        payload = {
+            "api_calls": [
+                {
+                    "input_tokens": 1234,
+                    "output_tokens": 567,
+                    "estimated_cost_usd": 0.01,
+                    "timestamp": "2026-04-17T10:00:00Z",
+                    "session_id": "s1",
+                }
+            ]
+        }
+        scrubbed = _sanitize_payload(payload)
+        assert scrubbed["api_calls"][0]["input_tokens"] == 1234
+        assert scrubbed["api_calls"][0]["output_tokens"] == 567
+        assert scrubbed["api_calls"][0]["estimated_cost_usd"] == 0.01
+
+    def test_sanitize_payload_handles_nested_lists(self):
+        from claude_monitoring.sync import _sanitize_payload
+
+        raw = "AKIAIOSFODNN7EXAMPLE"
+        payload = {
+            "events": [
+                {"data_json": {"text": f"first {raw}"}},
+                {"data_json": {"text": "clean text here"}},
+                {"data_json": {"text": f"third with {raw} again"}},
+            ]
+        }
+        scrubbed = _sanitize_payload(payload)
+        assert raw not in scrubbed["events"][0]["data_json"]["text"]
+        assert scrubbed["events"][1]["data_json"]["text"] == "clean text here"
+        assert raw not in scrubbed["events"][2]["data_json"]["text"]
+
+    def test_sanitize_payload_empty_and_none_safe(self):
+        from claude_monitoring.sync import _sanitize_payload
+
+        assert _sanitize_payload({}) == {}
+        assert _sanitize_payload([]) == []
+        assert _sanitize_payload({"snippet": None}) == {"snippet": None}
+        assert _sanitize_payload({"snippet": ""}) == {"snippet": ""}
