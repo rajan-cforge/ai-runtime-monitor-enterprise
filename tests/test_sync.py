@@ -112,18 +112,32 @@ class TestReadHelpers:
     def test_read_sessions(self, sync_db):
         conn, _ = sync_db
         agent = SyncAgent("http://localhost", "key")
-        sessions = agent._read_sessions(conn, 0)
+        sessions, max_rowid = agent._read_sessions(conn, 0)
         assert len(sessions) >= 1
+        assert max_rowid > 0
         s = sessions[0]
         assert s["client_session_id"] == "sync-s1"
         assert s["model"] == "claude-sonnet-4"
         assert s["total_input_tokens"] == 500
         assert s["total_turns"] == 3
 
+    def test_read_sessions_respects_watermark(self, sync_db):
+        """P0-01 regression: _read_sessions used to ignore last_id and
+        re-send the first 100 sessions forever. With the fix, a
+        watermark past the max rowid returns an empty list."""
+        conn, _ = sync_db
+        agent = SyncAgent("http://localhost", "key")
+        sessions, max_rowid = agent._read_sessions(conn, 0)
+        assert len(sessions) >= 1
+        # Re-call with the watermark — should return empty
+        sessions_after, max_rowid_after = agent._read_sessions(conn, max_rowid)
+        assert sessions_after == []
+        assert max_rowid_after == max_rowid
+
     def test_read_events(self, sync_db):
         conn, _ = sync_db
         agent = SyncAgent("http://localhost", "key")
-        events = agent._read_events(conn, 0)
+        events, _ = agent._read_events(conn, 0)
         assert len(events) >= 2
         types = {e["event_type"] for e in events}
         assert "user_prompt" in types
@@ -132,16 +146,17 @@ class TestReadHelpers:
     def test_read_events_respects_watermark(self, sync_db):
         conn, _ = sync_db
         agent = SyncAgent("http://localhost", "key")
-        all_events = agent._read_events(conn, 0)
-        max_id = max(e["client_event_id"] for e in all_events)
-        empty = agent._read_events(conn, max_id)
+        all_events, max_id = agent._read_events(conn, 0)
+        assert max_id == max(e["client_event_id"] for e in all_events)
+        empty, _ = agent._read_events(conn, max_id)
         assert empty == []
 
     def test_read_api_calls(self, sync_db):
         conn, _ = sync_db
         agent = SyncAgent("http://localhost", "key")
-        calls = agent._read_api_calls(conn, 0)
+        calls, max_id = agent._read_api_calls(conn, 0)
         assert len(calls) == 1
+        assert max_id == calls[0]["client_call_id"]
         c = calls[0]
         assert c["model"] == "claude-sonnet-4"
         assert c["input_tokens"] == 500
@@ -152,7 +167,7 @@ class TestExtractAlerts:
     def test_extracts_sensitive_data_events(self, sync_db):
         conn, _ = sync_db
         agent = SyncAgent("http://localhost", "key")
-        events = agent._read_events(conn, 0)
+        events, _ = agent._read_events(conn, 0)
         alerts = agent._extract_alerts(events)
         assert len(alerts) == 1
         a = alerts[0]

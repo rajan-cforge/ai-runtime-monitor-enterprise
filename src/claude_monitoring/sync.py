@@ -95,10 +95,15 @@ class SyncAgent:
         for row in conn.execute("SELECT table_name, last_synced_id FROM sync_state").fetchall():
             watermarks[row["table_name"]] = row["last_synced_id"]
 
-        # Read new data
-        new_sessions = self._read_sessions(conn, watermarks.get("sessions", 0))
-        new_events = self._read_events(conn, watermarks.get("events", 0))
-        new_api_calls = self._read_api_calls(conn, watermarks.get("api_calls", 0))
+        # Read new data. P0-01: the helpers now return (rows, max_id)
+        # and watermarks advance to the max id actually seen in the
+        # batch — NOT `previous + len(batch)`, which was silently
+        # wrong when there were id gaps (deleted rows, INSERT OR
+        # IGNORE paths) AND was completely broken for sessions where
+        # the query ignored last_id entirely.
+        new_sessions, sessions_max_id = self._read_sessions(conn, watermarks.get("sessions", 0))
+        new_events, events_max_id = self._read_events(conn, watermarks.get("events", 0))
+        new_api_calls, api_calls_max_id = self._read_api_calls(conn, watermarks.get("api_calls", 0))
         new_alerts = self._extract_alerts(new_events)
 
         if not any([new_sessions, new_events, new_api_calls]):
@@ -113,9 +118,9 @@ class SyncAgent:
             "api_calls": new_api_calls,
             "alerts": new_alerts,
             "watermarks": {
-                "events": watermarks.get("events", 0) + len(new_events),
-                "sessions": watermarks.get("sessions", 0) + len(new_sessions),
-                "api_calls": watermarks.get("api_calls", 0) + len(new_api_calls),
+                "events": events_max_id,
+                "sessions": sessions_max_id,
+                "api_calls": api_calls_max_id,
             },
         }
 
@@ -164,10 +169,25 @@ class SyncAgent:
         }
 
     def _read_sessions(self, conn, last_id):
-        rows = conn.execute("SELECT * FROM sessions ORDER BY rowid LIMIT 100").fetchall()
-        # Sessions use UPSERT, so send all (CP handles dedup)
+        """Read UNSYNCED sessions using rowid as the watermark.
+
+        P0-01: the previous version was `ORDER BY rowid LIMIT 100` with
+        no WHERE clause — it ignored last_id entirely and re-sent the
+        first 100 rowids on every sync forever. Any sessions after
+        rowid 100 were invisible to the control plane.
+
+        Returns (rows, max_rowid_seen) so the caller can persist the
+        correct watermark — simply adding len() to the previous
+        watermark is wrong when there are rowid gaps (deleted rows).
+        """
+        rows = conn.execute(
+            "SELECT rowid, * FROM sessions WHERE rowid > ? ORDER BY rowid LIMIT 100",
+            (last_id,),
+        ).fetchall()
         results = []
+        max_rowid = last_id
         for r in rows:
+            max_rowid = max(max_rowid, r["rowid"])
             results.append(
                 {
                     "client_session_id": r["session_id"],
@@ -183,16 +203,19 @@ class SyncAgent:
                     "last_activity": r["last_activity"],
                 }
             )
-        return results
+        return results, max_rowid
 
     def _read_events(self, conn, last_id):
+        """Read unsynced events. Returns (rows, max_id_seen)."""
         rows = conn.execute(
             "SELECT id, timestamp, session_id, event_type, source_layer, data_json "
             "FROM events WHERE id > ? ORDER BY id LIMIT 500",
             (last_id,),
         ).fetchall()
         results = []
+        max_id = last_id
         for r in rows:
+            max_id = max(max_id, r["id"])
             try:
                 data = json.loads(r["data_json"])
             except (json.JSONDecodeError, TypeError):
@@ -207,9 +230,10 @@ class SyncAgent:
                     "data_json": data,
                 }
             )
-        return results
+        return results, max_id
 
     def _read_api_calls(self, conn, last_id):
+        """Read unsynced api_calls. Returns (rows, max_id_seen)."""
         rows = conn.execute(
             "SELECT id, timestamp, session_id, model, destination_service, "
             "input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, "
@@ -217,7 +241,9 @@ class SyncAgent:
             (last_id,),
         ).fetchall()
         results = []
+        max_id = last_id
         for r in rows:
+            max_id = max(max_id, r["id"])
             results.append(
                 {
                     "client_call_id": r["id"],
@@ -233,7 +259,7 @@ class SyncAgent:
                     "latency_ms": r["latency_ms"] or 0,
                 }
             )
-        return results
+        return results, max_id
 
     def _extract_alerts(self, events):
         """Extract sensitive_data events as alerts."""
