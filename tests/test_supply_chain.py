@@ -249,6 +249,22 @@ class TestAssessRisk:
         assert score >= 2
         assert any("financial" in r for r in reasons)
 
+    def test_known_malicious_package_fires_critical(self):
+        """P-1 fix: KNOWN_MALICIOUS_PACKAGES was previously dead code —
+        defined in threat_intel.py but never checked at install time.
+        A known-bad package should fire CRITICAL at capture, not wait
+        for the async OSV scan."""
+        from claude_monitoring.supply_chain import risk_level
+
+        score, reasons = assess_risk({"name": "strapi-plugin-cron", "pinned": False, "manager": "npm"})
+        assert score >= 8
+        assert any("malicious" in r.lower() for r in reasons)
+        assert risk_level(score) == "critical"
+
+    def test_known_malicious_case_insensitive(self):
+        score, reasons = assess_risk({"name": "Strapi-Plugin-Server", "pinned": False, "manager": "npm"})
+        assert any("malicious" in r.lower() for r in reasons)
+
 
 # ── Categorization ───────────────────────────────────────────
 
