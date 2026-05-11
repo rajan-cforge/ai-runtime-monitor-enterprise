@@ -867,7 +867,18 @@ def run_start():
     proxy_port = get_proxy_port()
     session_dir.mkdir(parents=True, exist_ok=True)
 
-    # Write env file for easy sourcing
+    # Write env file for easy sourcing. Uses the canonical per-install
+    # CA path (~/claude_watch_output/certs/ai-monitor-ca.pem), NOT the
+    # legacy ~/.mitmproxy/ location — that's mitmproxy's default
+    # confdir, but our runtime mitmdump is started with
+    # --set confdir=<get_mitmproxy_confdir()> so it writes its cert to
+    # a different directory. A user who sources this file with the
+    # legacy path gets NODE_EXTRA_CA_CERTS pointing at a file that
+    # doesn't exist, which silently fails for Node.js clients (Claude
+    # Code) since Node ignores the macOS Keychain and the env-var path.
+    from claude_monitoring.security import get_ca_cert_path
+
+    ca_cert = str(get_ca_cert_path())
     env_file = output_dir / "proxy_env.sh"
     env_file.write_text(f"""#!/bin/bash
 # Source this file before running Claude Code:
@@ -876,9 +887,9 @@ def run_start():
 export HTTPS_PROXY=http://127.0.0.1:{proxy_port}
 export HTTP_PROXY=http://127.0.0.1:{proxy_port}
 export ALL_PROXY=http://127.0.0.1:{proxy_port}
-export NODE_EXTRA_CA_CERTS="$HOME/.mitmproxy/mitmproxy-ca-cert.pem"
-export SSL_CERT_FILE="$HOME/.mitmproxy/mitmproxy-ca-cert.pem"
-export REQUESTS_CA_BUNDLE="$HOME/.mitmproxy/mitmproxy-ca-cert.pem"
+export NODE_EXTRA_CA_CERTS="{ca_cert}"
+export SSL_CERT_FILE="{ca_cert}"
+export REQUESTS_CA_BUNDLE="{ca_cert}"
 # NODE_TLS_REJECT_UNAUTHORIZED=0  # only if cert trust fails
 
 echo "🔭 Claude Watch proxy active on port {proxy_port}"
@@ -1835,12 +1846,18 @@ def run_configure(agent):
         return
 
     port = get_proxy_port()
+    # Use the canonical per-install CA path — see comment in run_start()
+    # above. The legacy ~/.mitmproxy/ default is not where our runtime
+    # mitmdump writes its cert.
+    from claude_monitoring.security import get_ca_cert_path
+
+    ca_cert = str(get_ca_cert_path())
     marker = "# [ai-runtime-monitor]"
     proxy_lines = f"""
 {marker} — START
 export HTTPS_PROXY=http://127.0.0.1:{port}
 export HTTP_PROXY=http://127.0.0.1:{port}
-export NODE_EXTRA_CA_CERTS="$HOME/.mitmproxy/mitmproxy-ca-cert.pem"
+export NODE_EXTRA_CA_CERTS="{ca_cert}"
 {marker} — END
 """
 
@@ -1877,7 +1894,8 @@ export NODE_EXTRA_CA_CERTS="$HOME/.mitmproxy/mitmproxy-ca-cert.pem"
         output_dir = get_output_dir()
         output_dir.mkdir(parents=True, exist_ok=True)
         script_path = output_dir / "claude-desktop-proxy.sh"
-        cert_path = Path.home() / ".mitmproxy" / "mitmproxy-ca-cert.pem"
+        # Use canonical per-install CA — see comment in run_start().
+        cert_path = get_ca_cert_path()
 
         script_content = f"""#!/bin/bash
 # Claude Desktop with AI Runtime Monitor proxy
