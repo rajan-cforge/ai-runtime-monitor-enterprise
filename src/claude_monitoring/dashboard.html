@@ -1479,6 +1479,11 @@ var _scCategory = 'package';
 var _scManagerFilter = '';
 var _scRiskOnly = false;
 var _scUnpinnedOnly = false;
+// Tracks (package_name||manager) keys for currently-expanded rows so we
+// can restore the expansion after loadSupplyChain() rebuilds the table
+// body. Without this, any background refresh (intel poller, scan
+// completion, filter change) collapses the expanded row immediately.
+var _scExpandedKeys = new Set();
 function scSetCategory(btn) {
   _scCategory = btn.dataset.cat;
   // Clear all filters on view switch
@@ -1506,6 +1511,35 @@ function scRiskBadge(score) {
   if (score >= 1) return '<span style="color:var(--text2);font-size:10px">STANDARD</span>';
   return '';
 }
+// Updates ONLY the intel-status bar (the 5 colored dots). Split out of
+// loadSupplyChain so the refresh-all poller can update the bar every
+// 2 seconds without rebuilding the entire package table — rebuilding
+// the table on a timer destroys any user-expanded row.
+async function loadIntelStatus() {
+  try {
+    var ir = await fetch(API + '/api/supply-chain/intel-status');
+    var id = await ir.json();
+    var ibar = document.getElementById('sc-intel-bar');
+    if (!ibar) return;
+    var stateColors = {
+      'green':  'var(--green)',
+      'yellow': 'var(--orange)',
+      'red':    'var(--red)',
+      'gray':   'var(--text2)',
+    };
+    ibar.innerHTML = '<span style="color:var(--text2)">Threat intel:</span> '
+      + (id.sources||[]).map(function(s, si) {
+        var color = stateColors[s.state] || stateColors['gray'];
+        var dot = '<span style="color:' + color + '">●</span>';
+        var extra = s.records ? ' (' + s.records + ')' : '';
+        var textColor = s.state === 'gray' ? 'var(--text2)' : 'var(--text)';
+        return '<span style="padding:2px 6px;border-radius:10px;border:1px solid var(--border);font-size:10px;color:' + textColor + ';cursor:pointer;position:relative" onclick="toggleIntelTooltip(this,' + si + ')" data-src=\'' + esc(JSON.stringify(s)) + '\'>' + dot + ' ' + esc(s.name) + extra + '</span>';
+      }).join('')
+      + (id.total_iocs ? ' <span style="color:var(--text2);font-size:10px">' + id.total_iocs + ' IOCs loaded</span>' : '')
+      + ' <button onclick="refreshIntelFeeds()" id="sc-refresh-intel-btn" style="margin-left:8px;background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:2px 8px;color:var(--text);font-size:10px;cursor:pointer">↻ Refresh all</button>';
+  } catch(e) {}
+}
+
 async function loadSupplyChain() {
   try {
     // Watchlist indicator
@@ -1516,29 +1550,8 @@ async function loadSupplyChain() {
       document.getElementById('sc-watchlist-indicator').textContent =
         'Watching: ' + (wc.critical||0) + ' critical (hourly) · ' + (wc.high||0) + ' high (6h) · ' + (wc.normal||0) + ' normal (daily)';
     } catch(e) {}
-    // Intel bar (Feature A: 4-state dots + Refresh All)
-    try {
-      var ir = await fetch(API + '/api/supply-chain/intel-status');
-      var id = await ir.json();
-      var ibar = document.getElementById('sc-intel-bar');
-      // Map state → dot color
-      var stateColors = {
-        'green':  'var(--green)',
-        'yellow': 'var(--orange)',
-        'red':    'var(--red)',
-        'gray':   'var(--text2)',
-      };
-      ibar.innerHTML = '<span style="color:var(--text2)">Threat intel:</span> '
-        + (id.sources||[]).map(function(s, si) {
-          var color = stateColors[s.state] || stateColors['gray'];
-          var dot = '<span style="color:' + color + '">●</span>';
-          var extra = s.records ? ' (' + s.records + ')' : '';
-          var textColor = s.state === 'gray' ? 'var(--text2)' : 'var(--text)';
-          return '<span style="padding:2px 6px;border-radius:10px;border:1px solid var(--border);font-size:10px;color:' + textColor + ';cursor:pointer;position:relative" onclick="toggleIntelTooltip(this,' + si + ')" data-src=\'' + esc(JSON.stringify(s)) + '\'>' + dot + ' ' + esc(s.name) + extra + '</span>';
-        }).join('')
-        + (id.total_iocs ? ' <span style="color:var(--text2);font-size:10px">' + id.total_iocs + ' IOCs loaded</span>' : '')
-        + ' <button onclick="refreshIntelFeeds()" id="sc-refresh-intel-btn" style="margin-left:8px;background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:2px 8px;color:var(--text);font-size:10px;cursor:pointer">↻ Refresh all</button>';
-    } catch(e) {}
+    // Intel bar — same renderer used by the refresh-all poller
+    await loadIntelStatus();
     // Scan status bar
     try {
       var scanR = await fetch(API + '/api/supply-chain/scan-status');
@@ -1630,6 +1643,22 @@ async function loadSupplyChain() {
     }).join('');
     window._scVulnData = {};
     d.installs.forEach(function(p, idx) { window._scVulnData[idx] = p; });
+
+    // Restore expanded rows after the table was rebuilt. Without this,
+    // any background re-render (intel refresh poller, scan completion,
+    // filter change) silently collapses whatever the user had open.
+    // We snapshot the set, clear it, and let scExpandRow re-add the
+    // keys as it re-expands each row.
+    if (_scExpandedKeys.size > 0) {
+      var toRestore = new Set(_scExpandedKeys);
+      _scExpandedKeys.clear();
+      d.installs.forEach(function(p, idx) {
+        var key = p.package_name + '||' + p.package_manager;
+        if (toRestore.has(key)) {
+          scExpandRow(p.package_name, p.package_manager, idx);
+        }
+      });
+    }
   } catch(e) { console.error('Supply chain load error:', e); }
 }
 function renderCVEPanel(vulns, pkgName, installedVer) {
@@ -1838,8 +1867,15 @@ async function renderVersionAwareCVEs(pkgName, installedVersion) {
 }
 async function scExpandRow(pkg, mgr, idx) {
   var row = document.getElementById('sc-expand-' + idx);
-  if (row.style.display !== 'none') { row.style.display = 'none'; return; }
+  if (!row) return;
+  var key = pkg + '||' + mgr;
+  if (row.style.display !== 'none') {
+    row.style.display = 'none';
+    _scExpandedKeys.delete(key);
+    return;
+  }
   row.style.display = 'table-row';
+  _scExpandedKeys.add(key);
   try {
     // Render CVE panel from stored grouped row data
     var storedRow = (window._scVulnData || {})[idx] || {};
@@ -1919,7 +1955,11 @@ async function refreshIntelFeeds() {
       alert('A scan is already in progress. Refresh will run after it finishes.');
       return;
     }
-    // Poll intel-status every 2s for up to 30s
+    // Poll intel-status every 2s for up to 30s. ONLY refresh the intel
+    // bar — calling loadSupplyChain() rebuilds the whole table and
+    // collapses any row the user has expanded. The final call after
+    // the timeout does a full refresh to pick up any new IOC counts
+    // that affect the table itself.
     var ticks = 0;
     if (_intelRefreshPoller) clearInterval(_intelRefreshPoller);
     _intelRefreshPoller = setInterval(async function() {
@@ -1931,7 +1971,7 @@ async function refreshIntelFeeds() {
         loadSupplyChain();
         return;
       }
-      await loadSupplyChain();
+      await loadIntelStatus();
     }, 2000);
   } catch(e) {
     if (btn) { btn.textContent = '↻ Refresh all'; btn.disabled = false; }
