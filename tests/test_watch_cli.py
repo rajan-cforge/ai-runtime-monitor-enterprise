@@ -1129,3 +1129,94 @@ class TestConfigureClaudeDesktop:
 
         captured = capsys.readouterr()
         assert "macOS only" in captured.out
+
+
+# ---------------------------------------------------------------------------
+# Generated helpers reference the canonical CA path
+# ---------------------------------------------------------------------------
+
+
+class TestGeneratedCertPaths:
+    """Regression tests for the historical drift bug where proxy_env.sh,
+    the claude_code/aider shell-rc injection, and the claude_desktop
+    wrapper script all hardcoded ``$HOME/.mitmproxy/mitmproxy-ca-cert.pem``
+    — mitmproxy's default confdir location, NOT where our runtime writes
+    its cert. Users who sourced the helpers got NODE_EXTRA_CA_CERTS
+    pointing at a file that doesn't exist, breaking Node.js clients
+    (Claude Code) silently.
+
+    Every generated helper must reference the canonical per-install CA
+    path returned by ``get_ca_cert_path()``.
+    """
+
+    @staticmethod
+    def _legacy_path_in(text: str) -> bool:
+        return "/.mitmproxy/mitmproxy-ca-cert.pem" in text
+
+    def test_proxy_env_sh_uses_canonical_ca_path(self, tmp_path, monkeypatch):
+        from unittest.mock import patch
+
+        monkeypatch.setattr("claude_monitoring.watch.get_output_dir", lambda: tmp_path)
+        monkeypatch.setattr("claude_monitoring.watch.get_session_dir", lambda: tmp_path / "sessions")
+        monkeypatch.setattr("claude_monitoring.watch.get_proxy_port", lambda: 9080)
+        # Sidestep the mitmdump exec at the end of run_start by mocking it
+        with patch("claude_monitoring.watch.os.execvp"):
+            from claude_monitoring.watch import run_start
+
+            try:
+                run_start()
+            except SystemExit:
+                pass  # execvp mocked, so we may fall through to the end
+
+        env_file = tmp_path / "proxy_env.sh"
+        assert env_file.exists(), "proxy_env.sh was not generated"
+        content = env_file.read_text()
+
+        assert not self._legacy_path_in(content), (
+            "proxy_env.sh references legacy ~/.mitmproxy/ path — must use canonical CA"
+        )
+        # Must reference the canonical location
+        assert "ai-monitor-ca.pem" in content
+        # All three env vars must be present
+        assert "NODE_EXTRA_CA_CERTS=" in content
+        assert "SSL_CERT_FILE=" in content
+        assert "REQUESTS_CA_BUNDLE=" in content
+
+    def test_configure_claude_code_uses_canonical_ca_path(self, tmp_path, monkeypatch):
+        # Point HOME at tmp_path so the test doesn't touch the user's
+        # real .zshrc / .bashrc.
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+        monkeypatch.setattr("claude_monitoring.watch.get_proxy_port", lambda: 9080)
+
+        # Create an empty .zshrc so the helper picks it as target
+        rc = tmp_path / ".zshrc"
+        rc.write_text("")
+
+        from claude_monitoring.watch import run_configure
+
+        run_configure("claude_code")
+
+        rc_content = rc.read_text()
+        assert not self._legacy_path_in(rc_content), (
+            "shell rc references legacy ~/.mitmproxy/ path after run_configure(claude_code)"
+        )
+        assert "ai-monitor-ca.pem" in rc_content
+        assert "NODE_EXTRA_CA_CERTS=" in rc_content
+
+    def test_configure_claude_desktop_uses_canonical_ca_path(self, tmp_path, monkeypatch):
+        import platform
+
+        monkeypatch.setattr(platform, "system", lambda: "Darwin")
+        monkeypatch.setattr("claude_monitoring.watch.get_output_dir", lambda: tmp_path)
+        monkeypatch.setattr("claude_monitoring.watch.get_proxy_port", lambda: 9080)
+
+        from claude_monitoring.watch import run_configure
+
+        run_configure("claude_desktop")
+
+        script_path = tmp_path / "claude-desktop-proxy.sh"
+        assert script_path.exists()
+        content = script_path.read_text()
+        assert not self._legacy_path_in(content), "claude-desktop-proxy.sh references legacy ~/.mitmproxy/ path"
+        assert "ai-monitor-ca.pem" in content
