@@ -265,6 +265,34 @@ class TestAssessRisk:
         score, reasons = assess_risk({"name": "Strapi-Plugin-Server", "pinned": False, "manager": "npm"})
         assert any("malicious" in r.lower() for r in reasons)
 
+    def test_known_malicious_version_pinned_fires_critical(self):
+        """Version-pinned malicious detection: ``mistralai`` is legitimate,
+        but version 2.4.6 was reported to ship a backdoor that executes
+        during import time. The named version must fire CRITICAL while
+        other versions of the same package score normal."""
+        from claude_monitoring.supply_chain import risk_level
+
+        score, reasons = assess_risk({"name": "mistralai", "version": "2.4.6", "pinned": True, "manager": "pip"})
+        assert score >= 8
+        assert risk_level(score) == "critical"
+        assert any("2.4.6" in r for r in reasons)
+
+    def test_legit_version_of_same_package_not_flagged(self):
+        """``mistralai==2.4.5`` and ``mistralai`` (no version) must NOT
+        be flagged as malicious — only the specific reported version."""
+        score, reasons = assess_risk({"name": "mistralai", "version": "2.4.5", "pinned": True, "manager": "pip"})
+        # Should score 0 (pinned + no other risk signals)
+        assert score == 0
+        assert not any("malicious" in r.lower() for r in reasons)
+
+        # Same for unpinned (just +1 for unpinned, no malicious flag)
+        score2, reasons2 = assess_risk({"name": "mistralai", "pinned": False, "manager": "pip"})
+        assert not any("malicious" in r.lower() for r in reasons2)
+
+    def test_known_malicious_version_case_insensitive_name(self):
+        score, reasons = assess_risk({"name": "MistralAI", "version": "2.4.6", "pinned": True, "manager": "pip"})
+        assert any("2.4.6" in r for r in reasons)
+
 
 # ── Categorization ───────────────────────────────────────────
 

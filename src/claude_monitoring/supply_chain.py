@@ -472,14 +472,17 @@ def assess_risk(package, active_cves=None):
     # Hardcoded malicious-package list. We also check at OSV scan time
     # via MAL- advisory prefixes, but that's async — a fresh install of
     # a known-bad package should fire an immediate CRITICAL at capture
-    # time, not wait for the next scan cycle. The list lives in
-    # threat_intel.py and is shared with the advisory-prefix matcher.
+    # time, not wait for the next scan cycle. The check covers both
+    # name-only matches (e.g., strapi-plugin-cron) AND version-pinned
+    # matches (e.g., mistralai==2.4.6 — legitimate package, one bad
+    # release).
     try:
-        from claude_monitoring.threat_intel import KNOWN_MALICIOUS_PACKAGES
+        from claude_monitoring.threat_intel import is_known_malicious
 
-        if name in KNOWN_MALICIOUS_PACKAGES:
+        is_bad, reason = is_known_malicious(name, package.get("version"))
+        if is_bad:
             score += 8
-            reasons.append("KNOWN MALICIOUS package (+8)")
+            reasons.append(f"{reason} (+8)")
     except Exception:
         # Fail-open: if threat_intel can't be imported for some reason,
         # just skip this check. Other risk signals still apply.
