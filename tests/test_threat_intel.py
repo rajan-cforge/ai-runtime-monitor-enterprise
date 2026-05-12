@@ -133,6 +133,40 @@ class TestMaliciousDetection:
 
         assert "strapi-plugin-cron" in KNOWN_MALICIOUS_PACKAGES
 
+    def test_is_known_malicious_name_only(self):
+        from claude_monitoring.threat_intel import is_known_malicious
+
+        is_bad, reason = is_known_malicious("strapi-plugin-cron")
+        assert is_bad is True
+        assert "MALICIOUS" in reason
+
+    def test_is_known_malicious_version_pinned(self):
+        """mistralai 2.4.6 is the named version; other versions clean."""
+        from claude_monitoring.threat_intel import is_known_malicious
+
+        is_bad, reason = is_known_malicious("mistralai", "2.4.6")
+        assert is_bad is True
+        assert "2.4.6" in reason
+
+        # Other versions of the same legitimate package must NOT match
+        assert is_known_malicious("mistralai", "2.4.5") == (False, None)
+        assert is_known_malicious("mistralai", "2.4.7") == (False, None)
+        assert is_known_malicious("mistralai", None) == (False, None)
+        assert is_known_malicious("mistralai", "latest") == (False, None)
+
+    def test_is_known_malicious_case_insensitive(self):
+        from claude_monitoring.threat_intel import is_known_malicious
+
+        # Name lookup should be case-insensitive (install commands vary)
+        assert is_known_malicious("MistralAI", "2.4.6")[0] is True
+        assert is_known_malicious("STRAPI-PLUGIN-CRON")[0] is True
+
+    def test_is_known_malicious_clean_package(self):
+        from claude_monitoring.threat_intel import is_known_malicious
+
+        assert is_known_malicious("requests") == (False, None)
+        assert is_known_malicious("flask", "3.0.0") == (False, None)
+
 
 class TestThreatFoxFeed:
     @patch("claude_monitoring.threat_intel.urllib.request.urlopen")

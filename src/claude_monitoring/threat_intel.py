@@ -283,6 +283,9 @@ def detect_maintainer_changes(name, manager, current_meta, db):
 
 # ── Malicious package detection via OSV MAL- prefix ──────
 
+# Packages whose name alone is sufficient to flag as malicious.
+# Used by ``supply_chain.assess_risk`` to fire CRITICAL at install
+# time without waiting for the async OSV scan cycle.
 KNOWN_MALICIOUS_PACKAGES = {
     "strapi-plugin-cron",
     "strapi-plugin-config",
@@ -292,10 +295,49 @@ KNOWN_MALICIOUS_PACKAGES = {
     "strapi-plugin-hooks",
 }
 
+# Packages where only specific versions are malicious. Format:
+# ``{package_name: {version, version, ...}}``. Used when a legitimate
+# package shipped a single tampered release — flagging the name alone
+# would false-positive every legitimate install.
+#
+# Entries should reference the version string as it appears in the
+# install command (e.g., ``"2.4.6"`` for ``pip install mistralai==2.4.6``).
+KNOWN_MALICIOUS_VERSIONS = {
+    # mistralai 2.4.6 — alleged supply-chain backdoor reported May 2026.
+    # Downloads payload from hardcoded IP and executes during import
+    # time, before any user code runs. Source: public reporting; pinned
+    # defensively so the install-time alert fires regardless of OSV
+    # advisory availability.
+    "mistralai": {"2.4.6"},
+}
+
 
 def is_malicious_advisory(vuln_id):
     """Check if an OSV advisory indicates malicious code (not just a vulnerability)."""
     return vuln_id.startswith("MAL-")
+
+
+def is_known_malicious(package_name: str, package_version: str | None = None) -> tuple[bool, str | None]:
+    """Return ``(is_malicious, reason)`` for a given package + version.
+
+    Reason is a human-readable string suitable for surfacing in the
+    risk_flags reasons list (e.g., 'KNOWN MALICIOUS package',
+    'KNOWN MALICIOUS version 2.4.6'). Returns ``(False, None)`` when
+    the package is not flagged.
+
+    Args:
+        package_name: case-sensitive name as captured at install time.
+        package_version: optional pinned version string. ``None`` /
+            ``"latest"`` skip the version-specific check.
+    """
+    name = (package_name or "").lower()
+    if name in KNOWN_MALICIOUS_PACKAGES:
+        return True, "KNOWN MALICIOUS package"
+    bad_versions = KNOWN_MALICIOUS_VERSIONS.get(name)
+    if bad_versions and package_version and package_version != "latest":
+        if package_version in bad_versions:
+            return True, f"KNOWN MALICIOUS version {package_version}"
+    return False, None
 
 
 # ── Intel source health tracking (Feature A) ─────────────
