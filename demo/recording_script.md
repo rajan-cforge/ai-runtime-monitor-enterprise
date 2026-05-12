@@ -56,18 +56,32 @@ active list. Click it. Show the 7 conversation turns.
 > it wanted to install. I can see exactly what it said and what it
 > did."
 
-### [0:35 – 0:50] Screen — Supply Chain tab
+### [0:35 – 0:55] Screen — Supply Chain tab
 
-Click Supply Chain. Show the intel bar (5 green dots). Scroll to
-find `strapi-plugin-cron`. Click it to expand.
+Click Supply Chain. Show the intel bar (5 green dots). Sort by risk.
+Scroll to find `mistralai` first — click to expand. Then scroll to
+`strapi-plugin-cron` and expand it too.
 
-> "Claude installed 7 packages. Every single one is cross-referenced
+> "Claude installed 8 packages. Every single one is cross-referenced
 > against OSV, ThreatFox, URLhaus, and 15,000 OpenSSF malicious
-> packages. This one — `strapi-plugin-cron` — is malicious. Scope
-> mismatch, zero downloads, no description. No other tool on the
-> market catches this for AI agents."
+> packages."
+>
+> [Click mistralai row]
+>
+> "This one — `mistralai==2.4.6`. Reported last week to ship a
+> backdoor that executes during import time, before any of your code
+> runs. The package itself is legitimate — millions of developers use
+> the Mistral SDK. But version 2.4.6 specifically was compromised. We
+> caught it the moment Claude pinned the bad version. Not the next
+> day. Not after the next OSV sync. Immediately."
+>
+> [Click strapi-plugin-cron row]
+>
+> "Same story for `strapi-plugin-cron`. Scope mismatch, zero downloads,
+> no description. No other tool on the market catches either of these
+> for AI agents."
 
-### [0:50 – 1:00] Screen — Alerts tab
+### [0:55 – 1:05] Screen — Alerts tab
 
 Click Alerts. Show the critical red alert for malicious package. Scroll
 to the AWS key alert. Highlight the masked value.
@@ -77,7 +91,7 @@ to the AWS key alert. Highlight the masked value.
 > capture. Typosquat caught. Every finding has an investigation
 > trail back to the session."
 
-### [1:00 – 1:10] Screen — Session Explorer, click a desktop session
+### [1:05 – 1:15] Screen — Session Explorer, click a desktop session
 
 Navigate back to Session Explorer. Click a `desktop_claude_desktop` or
 `desktop_chatgpt_desktop` session if one exists. Show the activity
@@ -87,7 +101,7 @@ summary card (daily bar chart, top hosts).
 > network activity monitoring via SSL inspection. Bytes transferred,
 > peak hours, every endpoint hit."
 
-### [1:10 – 1:25] Face to camera (or slide with prevention roadmap)
+### [1:15 – 1:25] Face to camera (or slide with prevention roadmap)
 
 > "Detection is what we have today. What Vercel needed last week was
 > prevention. One employee installed an AI tool with 'Allow All'
