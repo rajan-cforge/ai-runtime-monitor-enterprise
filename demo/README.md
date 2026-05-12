@@ -35,7 +35,7 @@ open "http://localhost:9081/?token=$(cat ~/claude_watch_output/.dashboard_token)
 
 ---
 
-## What the 7 scenarios do
+## What the 8 scenarios do
 
 | # | Scenario | How it reaches the monitor |
 |---|----------|---------------------------|
@@ -46,6 +46,7 @@ open "http://localhost:9081/?token=$(cat ~/claude_watch_output/.dashboard_token)
 | 5 | **Credential leak: AWS key in claude.ai response** | POST /api/browser/ingest → auto-mask + sensitive_data alert |
 | 6 | **Typosquat: requets** | JSONL tool_use → matches KNOWN_TYPOSQUATS → CRITICAL alert |
 | 7 | Elevated: playwright | JSONL tool_use → risk score +3 for browser automation |
+| 8 | **Version-pinned backdoor: mistralai==2.4.6** | JSONL tool_use → matches KNOWN_MALICIOUS_VERSIONS → CRITICAL alert (May 2026 reported supply-chain attack) |
 
 Scenarios 1, 2, 4, 7 also run real `pip install` inside the Docker
 container so `docker exec ai-demo-sandbox pip list` shows the packages.

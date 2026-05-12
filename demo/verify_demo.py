@@ -84,6 +84,7 @@ def main() -> int:
     expected_typosquat = {"requets"}
     expected_high_capability = {"python-binance"}
     expected_elevated = {"playwright"}
+    expected_version_pinned_bad = {"mistralai"}  # Act 8 — version 2.4.6 specifically
 
     checks.append(
         (
@@ -129,6 +130,15 @@ def main() -> int:
             f"missing: {expected_elevated - packages}" if not expected_elevated.issubset(packages) else "",
         )
     )
+    checks.append(
+        (
+            "version-pinned malicious captured (mistralai==2.4.6)",
+            expected_version_pinned_bad.issubset(packages),
+            f"missing: {expected_version_pinned_bad - packages}"
+            if not expected_version_pinned_bad.issubset(packages)
+            else "",
+        )
+    )
 
     # ── Alerts ──
     try:
@@ -141,6 +151,7 @@ def main() -> int:
     typosquat_alert = any(_alert_matches(a, "typosquat") or _alert_matches(a, "requets") for a in alerts)
     malicious_alert = any(_alert_matches(a, "malicious") or _alert_matches(a, "strapi-plugin-cron") for a in alerts)
     aws_key_alert = any(_alert_matches(a, "aws_key") or _alert_matches(a, "akiaios") for a in alerts)
+    version_pinned_alert = any(_alert_matches(a, "2.4.6") or _alert_matches(a, "mistralai") for a in alerts)
 
     checks.append(
         (
@@ -154,6 +165,13 @@ def main() -> int:
             "malicious package alert fired",
             malicious_alert,
             "" if malicious_alert else "no malicious/strapi match in /api/alerts",
+        )
+    )
+    checks.append(
+        (
+            "version-pinned malicious alert fired (mistralai 2.4.6)",
+            version_pinned_alert,
+            "" if version_pinned_alert else "no mistralai/2.4.6 match in /api/alerts",
         )
     )
     checks.append(

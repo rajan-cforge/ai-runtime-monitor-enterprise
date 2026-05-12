@@ -363,6 +363,37 @@ def act_7_browser_automation(jsonl_path: Path, use_docker: bool) -> None:
     _pause(2)
 
 
+def act_8_version_pinned_backdoor(jsonl_path: Path) -> None:
+    """Real-world inspired scenario: mistralai==2.4.6 (reported May 2026
+    to ship a backdoor that executes during import time). Demonstrates
+    version-pinned malicious detection — name alone is a legitimate
+    package, but this specific release is on the known-bad list.
+
+    No real install — the alleged payload contacts a hardcoded IP and
+    drops a script in /tmp on Linux during ``import mistralai``. We
+    record the JSONL event so the monitor's _check_supply_chain hits
+    KNOWN_MALICIOUS_VERSIONS and fires CRITICAL at capture time.
+    """
+    _banner("ACT 8 -- Claude pins a KNOWN-COMPROMISED version (mistralai==2.4.6)")
+    _append_jsonl(
+        jsonl_path,
+        _user_line(
+            "Let's add multi-model fallback. Install the Mistral SDK — pin "
+            "to 2.4.6 since that's what our other service is using."
+        ),
+        _assistant_line(
+            "Pinning to the requested version:",
+            bash_command="pip install mistralai==2.4.6",
+            in_tokens=185,
+            out_tokens=55,
+        ),
+    )
+    print("  [!] Dashboard: CRITICAL -- mistralai 2.4.6 (KNOWN_MALICIOUS_VERSIONS)")
+    print("  [!] Reason: import-time RCE reported May 2026")
+    print("  [!] Note: name alone (mistralai) is legitimate -- only 2.4.6 flagged")
+    _pause(3, "Version-pinned malicious detection running...")
+
+
 def run_demo(use_docker: bool) -> None:
     global TOKEN
     TOKEN = _token()
@@ -391,19 +422,21 @@ def run_demo(use_docker: bool) -> None:
     act_5_credential_leak()
     act_6_typosquat(jsonl_path)
     act_7_browser_automation(jsonl_path, use_docker)
+    act_8_version_pinned_backdoor(jsonl_path)
 
     _banner("DEMO COMPLETE")
     print(f"  Dashboard: {MONITOR_URL}/?token={TOKEN}")
     print()
     print("  Investigation trail:")
     print(f"  1. Session Explorer -> find '{DEMO_SESSION_ID}'")
-    print("  2. 7 conversation turns captured (user + assistant)")
-    print("  3. Supply Chain -> 7 packages with risk scoring")
-    print("  4. Alerts -> critical malicious + typosquat + AWS key")
-    print("  5. Activity Timeline -> all 7 scenarios in order")
+    print("  2. 8 conversation turns captured (user + assistant)")
+    print("  3. Supply Chain -> 8 packages with risk scoring")
+    print("  4. Alerts -> 2 critical malicious + typosquat + AWS key")
+    print("  5. Activity Timeline -> all 8 scenarios in order")
     print()
     print("  What you just watched the monitor catch:")
     print("  [ok] 4 legitimate packages scanned")
+    print("  [!] 1 MALICIOUS pinned-version (mistralai==2.4.6, import-time RCE)")
     print("  [!] 1 MALICIOUS package (strapi-plugin-cron)")
     print("  [!] 1 typosquat (requets)")
     print("  [!] 1 elevated-risk (playwright)")
