@@ -101,6 +101,12 @@ function sendCaptureEvent(type, text) {
 // still send a heartbeat (so we can tell the extension is alive).
 let _capturesSent = 0;
 let _lastSelectorFailureReported = 0;
+// Per-type captures since the last heartbeat. Lets us report meaningful
+// counts for event-driven user-prompt capture sites (ChatGPT, Gemini)
+// where the DOM has no scrapeable user input — the input clears on
+// submit, so the only signal is the Enter/send-button event that fires
+// once per prompt. Reset to zero on every heartbeat.
+let _captureWindow = { user_prompt: 0, assistant_response: 0 };
 
 function _defaultSelectorCounts() {
   return { user: 0, assistant: 0 };
@@ -110,11 +116,25 @@ async function sendHeartbeat(extra) {
   const counts = (window.AIMon && window.AIMon.getSelectorCounts)
     ? window.AIMon.getSelectorCounts()
     : _defaultSelectorCounts();
-  const failure = (counts.user === 0 && counts.assistant === 0);
+  // Take the higher of (DOM matches right now) and (capture events
+  // flowed through us since the last heartbeat). Either signal is
+  // sufficient evidence the site is actively monitored:
+  //   - DOM-scraping sites (claude.ai) report DOM counts — historical
+  //     prompts/responses still on the page.
+  //   - Event-driven sites (ChatGPT, Gemini) report the count of
+  //     prompts the user typed in the last 60s — DOM count is always 0.
+  // Using max() means selector_failure only trips when BOTH sources
+  // are silent, which is the correct condition for "extension is
+  // alive but not seeing any AI activity".
+  const userMatches = Math.max(counts.user || 0, _captureWindow.user_prompt);
+  const assistantMatches = Math.max(counts.assistant || 0, _captureWindow.assistant_response);
+  const failure = (userMatches === 0 && assistantMatches === 0);
+  // Reset the per-heartbeat capture window
+  _captureWindow = { user_prompt: 0, assistant_response: 0 };
   const body = Object.assign({
     hostname: window.location.hostname,
-    user_matches: counts.user,
-    assistant_matches: counts.assistant,
+    user_matches: userMatches,
+    assistant_matches: assistantMatches,
     captures_sent: _capturesSent,
     selector_failure: failure,
     timestamp: new Date().toISOString(),
@@ -135,6 +155,8 @@ const _origSendCaptureEvent = sendCaptureEvent;
 function sendCaptureEventTracked(type, text) {
   _origSendCaptureEvent(type, text);
   _capturesSent += 1;
+  if (type === 'user_prompt') _captureWindow.user_prompt += 1;
+  else if (type === 'assistant_response') _captureWindow.assistant_response += 1;
 }
 
 // Export for site-specific scripts
