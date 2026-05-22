@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  LaunchAgent for the continuous-antfooding loop.
+
+  Install:
+    cp scripts/com.gocloudforge.vigil-antfood.plist.template \
+       ~/Library/LaunchAgents/com.gocloudforge.vigil-antfood.plist
+    # Then edit the ProgramArguments path to point at YOUR clone.
+    launchctl load ~/Library/LaunchAgents/com.gocloudforge.vigil-antfood.plist
+
+  Uninstall:
+    launchctl unload ~/Library/LaunchAgents/com.gocloudforge.vigil-antfood.plist
+    rm ~/Library/LaunchAgents/com.gocloudforge.vigil-antfood.plist
+
+  Logs:
+    ~/.vigil-antfood.out
+    ~/.vigil-antfood.err
+    ~/.vigil-antfood.log    (script's own structured log via tee)
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.gocloudforge.vigil-antfood</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <!-- REPLACE the path below with your antfooded clone's script path. -->
+    <string>/Users/rajanyadav/code/ai-runtime-monitor-enterprise/scripts/antfood-loop.sh</string>
+  </array>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>KeepAlive</key>
+  <true/>
+
+  <key>StandardOutPath</key>
+  <string>/Users/rajanyadav/.vigil-antfood.out</string>
+
+  <key>StandardErrorPath</key>
+  <string>/Users/rajanyadav/.vigil-antfood.err</string>
+
+  <!-- Pass through HOME and PATH so curl, git, gh, python are findable. -->
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+  </dict>
+</dict>
+</plist>
