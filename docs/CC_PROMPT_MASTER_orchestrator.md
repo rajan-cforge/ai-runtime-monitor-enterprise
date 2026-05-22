@@ -25,6 +25,175 @@ These rules override anything written in the prior prompts.
    Never guess on architecture.
 6. If a test you wrote passes immediately without ever failing, delete
    it and write one that actually exercises the code path.
+7. For any file longer than 200 lines, prefer the code-intelligence MCP
+   server (codebase-memory-mcp, already connected) over plain Read.
+   Grep and Glob miss indirect references and inheritance. Use
+   symbol-aware lookups.
+8. Every change goes through a branch. No direct commits to main. The
+   branching strategy below is non-negotiable.
+
+## Phase -1: Tooling foundation (run BEFORE Phase 0)
+
+This phase sets up two foundations the rest of the sprint depends on.
+Skip this and Phase 0 reads will be incomplete and branching will drift.
+
+### A. Use the already-connected code-intelligence MCPs
+
+The repo is large: 1000+ tests, `monitor.py` is 4800 lines. Plain Grep
+and Glob cannot navigate it safely. Symbol-aware lookups are required.
+
+The user already has these connected in Claude Code (verify with `/mcp`):
+
+```
+codebase-memory-mcp        connected. Use for code understanding.
+security-guidance          plugin. Use for security review questions.
+superpowers                plugin. Use for spec-driven workflows.
+```
+
+Do NOT install serena, sourcegraph, or any other code-intel MCP. The
+existing stack is already wired and the user does not want duplicate
+tooling.
+
+First action of Phase -1: discover the actual tools exposed by
+codebase-memory-mcp and the two plugins by running:
+
+```
+/mcp
+```
+
+Then list each connected MCP server's tools and read its description
+inline before using it. Document the actual tool names and one-line
+purposes in `docs/TOOLING.md` so subsequent phases reference correct
+identifiers.
+
+Discipline for the rest of the sprint:
+
+| Task                                          | Approach                              |
+|-----------------------------------------------|---------------------------------------|
+| Read a file under 200 lines whole             | plain Read                            |
+| Read a file over 200 lines                    | codebase-memory-mcp first, drill in   |
+| "What does function X do?"                    | codebase-memory-mcp symbol lookup     |
+| "Who calls function X?"                       | codebase-memory-mcp referencing query |
+| "Find this pattern across the codebase"       | codebase-memory-mcp semantic search   |
+| Security review of changed code               | security-guidance plugin              |
+| Spec-driven feature work (TDD loop)           | superpowers plugin                    |
+| Repo-level operations (issues, PRs, releases) | github CLI (`gh`) until GitHub MCP is added |
+| Quick text grep across small files            | plain Grep                            |
+
+If a tool fails or returns surprising results, prefer falling back to
+plain Read for the affected files rather than fighting the tool.
+Document the failure in `docs/TOOLING.md` so the user can decide
+whether to file an issue against the MCP server.
+
+GitHub MCP is optional. If the user wants it later, the install is a
+single block in `.claude/mcp.json`. For now, `gh` CLI from bash is
+sufficient for the sprint operations needed.
+
+
+### B. Branching strategy
+
+No commits to main. Every change goes through a branch with a PR.
+Branch naming and lifecycle below are enforced by the PR template and
+(in Q3 of quality gates) by branch protection.
+
+#### Naming
+
+```
+main                  protected. signed commits enforced post-Q3. linear history.
+audit/*               adversarial audits (audit/adversarial-self-audit)
+security/*            security fixes (security/audit-criticals, security/c1-bcrypt)
+fix/*                 non-security bug fixes (fix/openclaw-proxy-inheritance)
+feature/*             new features outside the lane sprint
+infra/*               tooling, CI, build harness (infra/quality-gates-q1)
+lane-A | lane-B |     four-lane sprint, used as worktree branches.
+lane-C | lane-D       cut from main, merge via PR after grader sign-off.
+release/*             release prep (release/v0.2.0)
+hotfix/*              emergency post-release fixes
+```
+
+#### Lifecycle
+
+- Cut from main. Always rebase, never merge from main back into a
+  feature branch.
+- Maximum 5 calendar days before rebasing onto latest main.
+- Squash-merge to main by default. Rebase-merge only if the branch
+  has multiple genuinely separable commits worth preserving.
+- Delete the branch immediately after merge.
+- Long-lived branches are forbidden except `main`.
+
+#### Commit conventions
+
+- Conventional commits: `<type>(<scope>): <subject>`
+- Types: feat, fix, security, perf, refactor, test, docs, chore, ci, build
+- For audit criticals, use the audit ID as scope:
+  `security(C1): bcrypt.checkpw constant-time comparison`
+- No `Co-Authored-By: Claude` trailers. The 3 existing trailers
+  from the audit must be addressed per the user's answer to Q7.
+- Subject under 72 chars. Body wraps at 80.
+
+#### PR template
+
+Create `.github/pull_request_template.md`:
+
+```markdown
+## Summary
+<one paragraph: what changed and why>
+
+## Audit / Issue links
+<links to docs/AUDIT_2026-05-21.md sections, GitHub issues>
+
+## How to verify
+<commands a reviewer can run locally>
+
+## Test plan
+<tests added, coverage delta, expected mutation score>
+
+## Risk
+<what could break, blast radius>
+
+## Checklist
+- [ ] make ci-local passes locally
+- [ ] New code has tests
+- [ ] Tests fail without the fix (proves they exercise the code)
+- [ ] No Co-Authored-By: Claude trailer in commits
+- [ ] Conventional commit messages
+- [ ] Updated docs/RECONCILIATION_LOG.md if any assumption shifted
+- [ ] Grader subagent verdict attached (for sprint-lane PRs)
+```
+
+#### Worktree pattern
+
+The four-lane sprint uses git worktrees for parallel work without
+merge conflicts:
+
+```
+ai-runtime-monitor/                  main worktree. lead orchestrator.
+.worktrees/lane-A/  → lane-A branch  Tauri specialist subagent.
+.worktrees/lane-B/  → lane-B branch  Extension scanner specialist.
+.worktrees/lane-D/  → lane-D branch  UI polish specialist.
+../airuntimemonitor-site/            separate repo. brand site (Lane C).
+```
+
+Create worktrees on Day 0 of Phase 3E (lane execution), not now.
+Commands when the time comes:
+
+```bash
+git worktree add .worktrees/lane-A -b lane-A
+git worktree add .worktrees/lane-B -b lane-B
+git worktree add .worktrees/lane-D -b lane-D
+```
+
+#### Exit gate for Phase -1
+
+- `/mcp` shows codebase-memory-mcp connected. security-guidance and
+  superpowers plugins enabled.
+- `docs/TOOLING.md` exists with the actual tool names exposed by each
+  connected MCP and plugin, and a one-line note for each on when to use it.
+- `.github/pull_request_template.md` exists and is committed via a
+  trivial infra branch (e.g., `infra/pr-template`) merged to main via
+  a real PR (this is the dogfood test of the branching policy itself).
+- A `docs/BRANCHING.md` file mirrors this section so contributors
+  outside this prompt can find it.
 
 ## Phase 0: Read everything
 
@@ -42,7 +211,7 @@ docs/CC_PROMPT_04_ui_polish.md
 docs/EXECUTION_PLAYBOOK_one_week.md
 ```
 
-Then read the actual repo state:
+Then read the actual repo state (use codebase-memory-mcp for big files):
 
 ```
 tree -L 3 -I '__pycache__|node_modules|.git|.venv|*.egg-info'
@@ -57,6 +226,13 @@ git log --oneline -20
 git status
 git branch -a
 ```
+
+For `monitor.py` (4800 lines per the prior session), do NOT cat it
+or read it whole. Use codebase-memory-mcp to get a symbol outline
+first, then drill into specific symbols only as needed. The exact
+tool names depend on the codebase-memory-mcp version; discover them
+via `/mcp` at the start of Phase -1 and record them in
+`docs/TOOLING.md`.
 
 Do not start Phase 1 until you have actually run these commands and
 read the outputs.
@@ -345,10 +521,20 @@ End of week 2:
 
 ## Final instruction
 
-Begin Phase 0 now. Read all 9 docs files plus the actual repo state.
+Begin Phase -1 now. Run `/mcp` to verify codebase-memory-mcp is
+connected and the security-guidance and superpowers plugins are
+enabled. Write `docs/TOOLING.md` cataloguing the actual tool names
+each exposes. Commit `.github/pull_request_template.md` and
+`docs/BRANCHING.md` via a real PR on an `infra/pr-template` branch
+to dogfood the branching policy.
+
+Then begin Phase 0: read all 9 docs files plus the actual repo state.
+For any file over 200 lines, use codebase-memory-mcp to get the
+symbol outline first; drill into specific symbols only as needed.
+
 Do not start Phase 1 until you have actually read each file. Do not
-write the reconciliation report until you have actually read the
-repo state.
+write the reconciliation report until you have actually read the repo
+state with symbol-aware tools.
 
 When the reconciliation report is ready, present its headings and key
 tables inline, then STOP. Wait for the user's answers to Q1-Q8 before
