@@ -53,6 +53,19 @@ claude_monitoring = ["*.html"]
 
 [tool.setuptools_scm]
 fallback_version = "0.1.0"
+# Only consider release tags `v*` as version sources. Operational tags
+# like `pre-c1c4` (rollback markers) trip vcs_versioning's tag parser
+# and crash `pip install -e .` with an AssertionError. Filtering at
+# `git describe` time keeps the install path clean.
+git_describe_command = [
+    "git",
+    "describe",
+    "--dirty",
+    "--tags",
+    "--long",
+    "--match",
+    "v[0-9]*",
+]
 
 [tool.ruff]
 target-version = "py39"
