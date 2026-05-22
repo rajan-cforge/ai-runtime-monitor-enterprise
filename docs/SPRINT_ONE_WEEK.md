@@ -74,6 +74,28 @@
   - Rationale: the developer install path (`brew` + `pip install`) hits
     `--daemon` mode; v0.3+'s Tauri setup wizard solves it for the
     consumer install path, but the dev path needs this regardless.
+- **E. Supply Chain install-history prompt access** (added 2026-05-22
+  during Phase 3A antfooding):
+  - Each install row must surface the full originating session prompt,
+    not just the truncated preview.
+  - Two UI options to evaluate together: hover tooltip with full prompt,
+    OR expandable row that reveals full prompt + clickable session-ID
+    link to jump to the originating session in the Sessions tab.
+  - Acceptance: from any Supply Chain install row, the user can in
+    ≤1 click read the exact prompt that triggered the install AND
+    navigate to that session.
+- **F. Alerts cards expandable inline detail pane** (added 2026-05-22
+  during Phase 3A antfooding):
+  - Each Alert card opens inline (no modal) into a details pane
+    containing:
+    - Full context: 5 lines before and 5 lines after the matched span
+    - Session turn link (deep-link into the originating Sessions row)
+    - Classifier reasoning: which rule fired, severity rationale
+    - Recommended remediation (per-rule playbook text)
+    - History of pattern occurrences (count + first/last seen
+      timestamps, optionally a sparkline)
+  - Acceptance: SOC-analyst-style triage of any alert is possible
+    without leaving the Alerts tab.
 
 ### Lane A — Tauri (DEFERRED)
 - Re-evaluate at v0.3 planning. No work this sprint.
