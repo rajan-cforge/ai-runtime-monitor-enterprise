@@ -50,9 +50,16 @@ _SANITIZE_TEXT_FIELDS = {
 class SyncAgent:
     """Background thread that syncs local monitor.db to the control plane."""
 
-    def __init__(self, cp_url, api_key, interval=30):
+    def __init__(self, cp_url, api_key, interval=30, endpoint_key=None):
         self.cp_url = cp_url.rstrip("/")
         self.api_key = api_key
+        # Per-endpoint key (verified by the control plane against the
+        # bcrypt hash in endpoints.api_key_hash). Audit C1 requires this
+        # header on every ingest. If the caller didn't provide a distinct
+        # value we fall back to the fleet key so the first POST registers
+        # the endpoint with that hash — admins can rotate later by
+        # passing --cp-endpoint-key explicitly.
+        self.endpoint_key = endpoint_key or api_key
         self.interval = interval
         self.endpoint_id = None
         self._stop = threading.Event()
@@ -145,7 +152,11 @@ class SyncAgent:
         response = requests.post(
             f"{self.cp_url}/api/v1/ingest",
             json=payload,
-            headers={"X-API-Key": self.api_key, "Content-Type": "application/json"},
+            headers={
+                "X-API-Key": self.api_key,
+                "X-Endpoint-Key": self.endpoint_key,
+                "Content-Type": "application/json",
+            },
             timeout=10,
         )
         response.raise_for_status()
