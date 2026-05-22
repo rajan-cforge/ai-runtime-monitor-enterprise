@@ -734,11 +734,41 @@ function shortPath(cwd) {
   return p;
 }
 
-// Escape HTML
-function esc(s) {
-  if (!s) return '';
-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+// Context-aware escape helpers — see docs/AUDIT_2026-05-21.md C2.
+// `esc` is kept as an alias for HTML-body context so any straggler caller
+// still escapes &/</>. Prefer migrating callers to the explicit name that
+// matches the sink: HTML body → escHtml; HTML attribute → escAttr;
+// JS string literal → escJs; URL (href/src) → escUrl.
+function escHtml(s) {
+  return String(s ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;');
 }
+function escAttr(s) {
+  return String(s ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+function escJs(s) {
+  return String(s ?? '')
+    .replaceAll('\\', '\\\\')
+    .replaceAll('"', '\\"')
+    .replaceAll("'", "\\'")
+    .replaceAll('\n', '\\n')
+    .replaceAll('\r', '\\r')
+    .replaceAll('<', '\\x3c')
+    .replaceAll('>', '\\x3e');
+}
+function escUrl(s) {
+  const v = String(s ?? '');
+  if (/^\s*javascript:/i.test(v) || /^\s*data:/i.test(v) || /^\s*vbscript:/i.test(v)) return '#';
+  return encodeURI(v).replaceAll('"', '%22').replaceAll("'", '%27');
+}
+const esc = escHtml;
 function maskSecrets(s) {
   if (!s) return '';
   // AWS keys: AKIA followed by 16 chars
@@ -900,15 +930,13 @@ async function loadSessions() {
       const title = cleanTitle(s.title) || (isBrowser ? (s.service || 'Browser') : s.session_id.substring(0,8));
       const proj = isBrowser ? '' : projectName(s.cwd);
       const itemClass = isBrowser ? 'session-item browser' : 'session-item';
-      const clickFn = isBrowser
-        ? "loadBrowserSessionDetail('" + (s.conversation_id || s.session_id) + "')"
-        : "loadSessionDetail('" + s.session_id + "')";
+      const detailId = isBrowser ? (s.conversation_id || s.session_id) : s.session_id;
 
       const cwdShort = isBrowser ? '' : shortPath(s.cwd);
       const risk = s.risk_level || 'low';
-      const riskBadge = s.risk_score > 0 ? '<span class="risk-badge risk-'+risk+'">'+risk.toUpperCase()+'</span>' : '';
+      const riskBadge = s.risk_score > 0 ? '<span class="risk-badge risk-'+escAttr(risk)+'">'+escHtml(risk.toUpperCase())+'</span>' : '';
       const activeDot = s.is_live ? '<span class="active-dot"></span>' : '';
-      return '<div class="' + itemClass + '" data-id="'+s.session_id+'" data-risk="'+risk+'" data-score="'+(s.risk_score||0)+'" onclick="' + clickFn + '">'
+      return '<div class="' + itemClass + '" data-id="'+escAttr(s.session_id)+'" data-detail-id="'+escAttr(detailId)+'" data-browser="'+(isBrowser?'1':'0')+'" data-risk="'+escAttr(risk)+'" data-score="'+escAttr(s.risk_score||0)+'">'
         + '<div class="title">'
         + activeDot + riskBadge
         + (isBrowser ? '<span class="service-badge" style="background:#2d1f3d;color:var(--purple)">' + esc(s.service || s.model) + '</span> ' : '')
@@ -916,7 +944,7 @@ async function loadSessions() {
         + (cwdShort ? '<div class="project-path">' + esc(cwdShort) + '</div>' : '')
         + '<div class="meta">'
         + '<span>' + (isBrowser ? esc(s.service || '') : esc(humanModelName(s.model||'unknown'))) + '</span>'
-        + '<span style="color:var(--text2)">' + (isBrowser ? (s.conversation_id||'').substring(0,12) : s.session_id.substring(0,8)) + '</span>'
+        + '<span style="color:var(--text2)">' + escHtml(isBrowser ? (s.conversation_id||'').substring(0,12) : s.session_id.substring(0,8)) + '</span>'
         + (proj ? '<span class="project-badge">'+esc(proj)+'</span>' : '')
         + agentBadge(s.agent_type)
         + '</div>'
@@ -934,6 +962,17 @@ async function loadSessions() {
     }
     recentSessions.forEach(function(s) { html += renderCard(s); });
     container.innerHTML = html;
+    if (!container._sessionCardClickBound) {
+      container.addEventListener('click', function(ev) {
+        const card = ev.target.closest('.session-item');
+        if (!card || !container.contains(card)) return;
+        const detailId = card.dataset.detailId;
+        if (!detailId) return;
+        if (card.dataset.browser === '1') loadBrowserSessionDetail(detailId);
+        else loadSessionDetail(detailId);
+      });
+      container._sessionCardClickBound = true;
+    }
   } catch(e) {}
 }
 
@@ -1238,7 +1277,7 @@ async function pollFeed() {
       const ctxHtml = sessTitle && ev.session_id ? '<span class="session-ctx">['+esc(cleanTitle(sessTitle).substring(0,30))+']</span> ' : '';
       div.innerHTML = '<span class="time">'+fmtTime(ev.timestamp)+'</span>'
         + '<span class="icon">'+(FEED_ICONS[ev.event_type]||'&#x2022;')+'</span>'
-        + '<span class="type">'+ev.event_type.replace(/_/g,' ').toUpperCase()+'</span>'
+        + '<span class="type">'+escHtml(String(ev.event_type||'').replace(/_/g,' ').toUpperCase())+'</span>'
         + '<span class="detail">'+ctxHtml+esc(cleanFeedSummary(ev.summary||''))+'</span>';
       div.style.cursor = 'pointer';
       div.onclick = ((evData) => () => {
@@ -1440,7 +1479,7 @@ async function loadProcesses() {
           + '<td>'+p.cpu_percent+'%</td><td>'+p.memory_percent+'%</td>'
           + '<td>'+esc(p.uptime)+'</td>'
           + '<td><span style="color:'+statusColor+';font-size:11px">'+esc(p.status)+'</span></td>'
-          + '<td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+esc(p.cmdline)+'">'+esc((p.cmdline||'').substring(0,60))+'</td></tr>';
+          + '<td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+escAttr(p.cmdline)+'">'+esc((p.cmdline||'').substring(0,60))+'</td></tr>';
       });
     });
     tbody.innerHTML = html;
@@ -1468,7 +1507,7 @@ async function loadFiles() {
     var files = d.files.filter(function(f) { return !f.path || !/\.tmp\.\w+/.test(f.path); });
     tbody.innerHTML = files.map(f =>
       '<tr><td>'+fmtTime(f.timestamp)+'</td><td>'+esc(f.operation)+'</td>'
-      + '<td style="max-width:400px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+esc(f.path)+'">'+esc(f.path)+'</td>'
+      + '<td style="max-width:400px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+escAttr(f.path)+'">'+esc(f.path)+'</td>'
       + '<td>'+fmtNum(f.size||0)+'</td></tr>'
     ).join('') || '<tr><td colspan="4" style="text-align:center;color:var(--text2)">No file activity recorded</td></tr>';
   } catch(e) {}
@@ -1676,7 +1715,7 @@ function renderCVEPanel(vulns, pkgName, installedVer) {
     else { unknown++; statusHtml = '<span style="color:var(--text2);font-size:11px">?</span>'; }
     var color = sevColors[v.severity] || 'var(--text2)';
     return '<tr>'
-      + '<td><a href="https://osv.dev/vulnerability/' + esc(v.vuln_id) + '" target="_blank" style="color:var(--cyan);font-family:monospace;font-size:11px">' + esc(v.vuln_id) + '</a></td>'
+      + '<td><a href="' + escUrl('https://osv.dev/vulnerability/' + encodeURIComponent(v.vuln_id||'')) + '" target="_blank" style="color:var(--cyan);font-family:monospace;font-size:11px">' + esc(v.vuln_id) + '</a></td>'
       + '<td><span style="color:' + color + ';font-weight:600;text-transform:uppercase">' + esc(v.severity||'unknown') + '</span></td>'
       + '<td>' + (v.cvss_score ? v.cvss_score.toFixed(1) : '-') + '</td>'
       + '<td>' + (v.fix_version ? '<span style="color:var(--green)">' + esc(v.fix_version) + '</span>' : '-') + '</td>'
@@ -1792,7 +1831,7 @@ async function renderRegistryPanel(name, manager) {
     if (!rd || !rd.metadata) return '';
     var m = rd.metadata;
     var regLabel = manager === 'pip' ? 'PyPI' : manager === 'npm' ? 'npm' : manager;
-    var repoLink = m.repository ? '<a href="' + (m.repository.startsWith('http') ? '' : 'https://') + esc(m.repository) + '" target="_blank" style="color:var(--cyan)">' + esc(m.repository.replace('https://','').replace('http://','').substring(0,45)) + ' ↗</a>' : '<span style="color:var(--red)">None</span>';
+    var repoLink = m.repository ? '<a href="' + escUrl((m.repository.startsWith('http') ? '' : 'https://') + m.repository) + '" target="_blank" style="color:var(--cyan)">' + esc(m.repository.replace('https://','').replace('http://','').substring(0,45)) + ' ↗</a>' : '<span style="color:var(--red)">None</span>';
     var descHtml = m.description ? '<span style="color:var(--text)">' + esc(m.description.substring(0,100)) + '</span>' : '<span style="color:var(--red)">None</span>';
     return '<div style="margin-bottom:12px"><strong>Registry intelligence (' + esc(regLabel) + ')</strong></div>'
       + '<div style="display:grid;grid-template-columns:120px 1fr;gap:4px 16px;font-size:12px;margin-bottom:12px">'
@@ -1851,7 +1890,7 @@ async function renderVersionAwareCVEs(pkgName, installedVersion) {
       else if (cmp === false) { notAffected++; statusHtml = '<span style="color:var(--green)">Not affected (fixed in ' + esc(v.fix_version) + ')</span>'; }
       else { unknown++; statusHtml = '<span style="color:var(--text2)">Cannot determine</span>'; }
       return '<tr>'
-        + '<td><a href="https://osv.dev/vulnerability/' + esc(v.vuln_id) + '" target="_blank" style="color:var(--cyan);font-family:monospace;font-size:11px">' + esc(v.vuln_id) + '</a></td>'
+        + '<td><a href="' + escUrl('https://osv.dev/vulnerability/' + encodeURIComponent(v.vuln_id||'')) + '" target="_blank" style="color:var(--cyan);font-family:monospace;font-size:11px">' + esc(v.vuln_id) + '</a></td>'
         + '<td><span style="color:' + ({critical:'var(--red)',high:'var(--orange)',medium:'var(--blue)',malicious:'var(--red)'}[v.severity]||'var(--text2)') + ';font-weight:600">' + esc((v.severity||'?').toUpperCase()) + '</span></td>'
         + '<td>' + (v.cvss_score ? v.cvss_score.toFixed(1) : '-') + '</td>'
         + '<td>' + statusHtml + '</td>'
@@ -1897,7 +1936,7 @@ async function scExpandRow(pkg, mgr, idx) {
           + '<td>' + esc(i.package_version||'latest') + '</td>'
           + '<td>' + (i.pinned ? '<span style="color:var(--green)">Yes</span>' : '<span style="color:var(--orange)">No</span>') + '</td>'
           + '<td>' + sessLink + '</td>'
-          + '<td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc(i.command||'') + '">' + esc((i.command||'').substring(0,80)) + '</td></tr>';
+          + '<td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + escAttr(i.command||'') + '">' + esc((i.command||'').substring(0,80)) + '</td></tr>';
       });
       installHtml += '</tbody></table>';
     }
@@ -2571,8 +2610,8 @@ async function loadTimeline() {
         var evDate = new Date(ev.timestamp).toLocaleDateString([], {weekday:'long',month:'long',day:'numeric'});
         if (evDate !== lastDate) { dateSep = '<div style="padding:8px 12px;color:var(--text2);font-size:11px;border-bottom:1px solid var(--border);font-weight:600">&mdash; ' + evDate + ' &mdash;</div>'; lastDate = evDate; }
       } catch(e) {}
-      return dateSep + '<div class="feed-item ' + ev.event_type + '" style="cursor:pointer;' + alertStyle + '"'
-        + ' onclick="timelineClick(\'' + esc(ev.source) + '\',\'' + esc(ev.session_id || '') + '\')">'
+      return dateSep + '<div class="feed-item ' + escAttr(ev.event_type) + '" style="cursor:pointer;' + alertStyle + '"'
+        + ' data-source="' + escAttr(ev.source||'') + '" data-session-id="' + escAttr(ev.session_id||'') + '" data-timeline-click="1">'
         + '<span class="time">' + fmtTime(ev.timestamp) + '</span>'
         + '<span class="icon">' + (isAlert ? '&#x26a0;&#xfe0f;' : icon) + '</span>'
         + '<span class="type" style="color:' + (isAlert ? 'var(--red)' : color) + ';' + (isAlert ? 'font-weight:700' : '') + '">' + esc(isAlert ? 'ALERT' : ev.source.toUpperCase()) + '</span>'
@@ -2581,6 +2620,14 @@ async function loadTimeline() {
         + esc(ev.summary || '')
         + '</span></div>';
     }).join('');
+    if (!container._timelineClickBound) {
+      container.addEventListener('click', function(ev) {
+        const row = ev.target.closest('[data-timeline-click="1"]');
+        if (!row || !container.contains(row)) return;
+        timelineClick(row.dataset.source || '', row.dataset.sessionId || '');
+      });
+      container._timelineClickBound = true;
+    }
   } catch(e) {}
 }
 
@@ -3060,7 +3107,7 @@ async function loadInsights() {
         var fileName = parts[parts.length-1];
         var shortPath = proj ? proj + '/.../' + fileName : path;
         if (shortPath.length > 60) shortPath = shortPath.substring(0,57) + '...';
-        return '<div style="padding:4px 0;border-bottom:1px solid var(--border)" title="'+esc(f.file)+'">'
+        return '<div style="padding:4px 0;border-bottom:1px solid var(--border)" title="'+escAttr(f.file)+'">'
           + '<span style="color:var(--text2)">'+(i+1)+'.</span> '
           + '<span style="color:var(--blue)">'+esc(shortPath)+'</span>'
           + ' <span style="color:var(--text2)">('+f.count+'x)</span></div>';
