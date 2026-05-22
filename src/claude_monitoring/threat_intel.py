@@ -2,6 +2,8 @@
 # Proprietary and confidential.
 """Threat intelligence — registry metadata, IOC feeds, malicious package detection."""
 
+from __future__ import annotations
+
 import csv
 import io
 import json
