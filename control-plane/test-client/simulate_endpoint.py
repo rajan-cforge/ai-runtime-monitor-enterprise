@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 """Simulate an AI monitoring endpoint sending data to the control plane."""
 
-import json
 import os
 import random
 import sys
 import time
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 
 import requests
 
@@ -17,12 +16,27 @@ SYNC_INTERVAL = int(os.environ.get("SYNC_INTERVAL", "30"))
 
 # Simulated sessions
 SESSIONS = [
-    {"id": "sim-cc-001", "model": "claude-sonnet-4-6", "agent_type": "claude_code",
-     "title": "Refactor auth middleware", "cwd": "~/Projects/webapp"},
-    {"id": "sim-cursor-001", "model": "claude-sonnet-4-6", "agent_type": "cursor",
-     "title": "Fix database migration", "cwd": "~/Projects/api-server"},
-    {"id": "sim-oc-001", "model": "claude-sonnet-4-6", "agent_type": "openclaw",
-     "title": "OpenClaw · Telegram: what's the weather?", "cwd": "~/.openclaw/workspace"},
+    {
+        "id": "sim-cc-001",
+        "model": "claude-sonnet-4-6",
+        "agent_type": "claude_code",
+        "title": "Refactor auth middleware",
+        "cwd": "~/Projects/webapp",
+    },
+    {
+        "id": "sim-cursor-001",
+        "model": "claude-sonnet-4-6",
+        "agent_type": "cursor",
+        "title": "Fix database migration",
+        "cwd": "~/Projects/api-server",
+    },
+    {
+        "id": "sim-oc-001",
+        "model": "claude-sonnet-4-6",
+        "agent_type": "openclaw",
+        "title": "OpenClaw · Telegram: what's the weather?",
+        "cwd": "~/.openclaw/workspace",
+    },
 ]
 
 TOOLS = ["Bash", "Read", "Write", "Edit", "Grep", "Glob", "WebFetch", "WebSearch", "Agent"]
@@ -44,26 +58,30 @@ def make_events(session, count=5):
     for _ in range(count):
         event_counter += 1
         tool = random.choice(TOOLS)
-        events.append({
-            "client_event_id": event_counter,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "session_id": session["id"],
-            "event_type": "tool_use",
-            "source_layer": "jsonl",
-            "data_json": {"name": tool, "input_preview": f"{tool} operation"},
-        })
+        events.append(
+            {
+                "client_event_id": event_counter,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "session_id": session["id"],
+                "event_type": "tool_use",
+                "source_layer": "jsonl",
+                "data_json": {"name": tool, "input_preview": f"{tool} operation"},
+            }
+        )
     # Add a token_usage event
     event_counter += 1
     inp = random.randint(100, 5000)
     outp = random.randint(50, 2000)
-    events.append({
-        "client_event_id": event_counter,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "session_id": session["id"],
-        "event_type": "token_usage",
-        "source_layer": "jsonl",
-        "data_json": {"model": session["model"], "input_tokens": inp, "output_tokens": outp},
-    })
+    events.append(
+        {
+            "client_event_id": event_counter,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "session_id": session["id"],
+            "event_type": "token_usage",
+            "source_layer": "jsonl",
+            "data_json": {"model": session["model"], "input_tokens": inp, "output_tokens": outp},
+        }
+    )
     return events, inp, outp
 
 
@@ -71,7 +89,7 @@ def make_api_call(session, inp, outp):
     """Generate an API call record."""
     global api_call_counter
     api_call_counter += 1
-    cost = (inp * 0.000003 + outp * 0.000015)
+    cost = inp * 0.000003 + outp * 0.000015
     return {
         "client_call_id": api_call_counter,
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -91,17 +109,19 @@ def maybe_alert(session):
         return []
     alert_template = random.choice(ALERT_PATTERNS)
     event_counter += 1
-    return [{
-        "client_event_id": event_counter,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "session_id": session["id"],
-        "severity": alert_template["severity"],
-        "patterns": alert_template["patterns"],
-        "context": alert_template["context"],
-        "snippet": f"Simulated {alert_template['patterns'][0]} detection",
-        "validated": random.choice([True, False]),
-        "confidence": random.choice(["high", "medium", "low"]),
-    }]
+    return [
+        {
+            "client_event_id": event_counter,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "session_id": session["id"],
+            "severity": alert_template["severity"],
+            "patterns": alert_template["patterns"],
+            "context": alert_template["context"],
+            "snippet": f"Simulated {alert_template['patterns'][0]} detection",
+            "validated": random.choice([True, False]),
+            "confidence": random.choice(["high", "medium", "low"]),
+        }
+    ]
 
 
 def main():
@@ -153,19 +173,21 @@ def main():
                 stats["turns"] += 1
                 stats["cost"] += api_call["estimated_cost_usd"]
 
-                session_payloads.append({
-                    "client_session_id": session["id"],
-                    "start_time": (datetime.now(timezone.utc) - timedelta(hours=random.randint(1, 24))).isoformat(),
-                    "cwd": session["cwd"],
-                    "model": session["model"],
-                    "agent_type": session["agent_type"],
-                    "title": session["title"],
-                    "total_input_tokens": stats["inp"],
-                    "total_output_tokens": stats["outp"],
-                    "total_turns": stats["turns"],
-                    "total_cost": round(stats["cost"], 4),
-                    "last_activity": datetime.now(timezone.utc).isoformat(),
-                })
+                session_payloads.append(
+                    {
+                        "client_session_id": session["id"],
+                        "start_time": (datetime.now(timezone.utc) - timedelta(hours=random.randint(1, 24))).isoformat(),
+                        "cwd": session["cwd"],
+                        "model": session["model"],
+                        "agent_type": session["agent_type"],
+                        "title": session["title"],
+                        "total_input_tokens": stats["inp"],
+                        "total_output_tokens": stats["outp"],
+                        "total_turns": stats["turns"],
+                        "total_cost": round(stats["cost"], 4),
+                        "last_activity": datetime.now(timezone.utc).isoformat(),
+                    }
+                )
 
             payload = {
                 "endpoint": {
@@ -188,11 +210,15 @@ def main():
             r = requests.post(
                 f"{CP_URL}/api/v1/ingest",
                 json=payload,
-                headers={"X-API-Key": CP_API_KEY, "Content-Type": "application/json"},
+                headers={
+                    "X-API-Key": CP_API_KEY,
+                    "X-Endpoint-Key": CP_API_KEY,
+                    "Content-Type": "application/json",
+                },
                 timeout=10,
             )
 
-            if r.status_code == 200:
+            if r.status_code in (200, 202):
                 result = r.json()
                 print(f"[SimClient] Synced: {result['stored']} (endpoint: {result['endpoint_id'][:8]}...)")
             else:

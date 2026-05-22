@@ -1,6 +1,8 @@
-from fastapi import Depends, FastAPI
+from __future__ import annotations
 
-from cp.auth import validate_api_key
+from fastapi import Depends, FastAPI, Header
+
+from cp.auth import validate_api_key, verify_endpoint_key
 from cp.dashboard import router as dashboard_router
 from cp.db import get_db
 from cp.ingest import process_ingest
@@ -20,14 +22,24 @@ async def health():
     return {"status": "ok"}
 
 
-@app.post("/api/v1/ingest", response_model=IngestResponse)
+@app.post("/api/v1/ingest", response_model=IngestResponse, status_code=202)
 async def ingest(
     payload: IngestRequest,
     api_key: str = Depends(validate_api_key),
+    x_endpoint_key: str | None = Header(default=None),
     db=Depends(get_db),
 ):
-    """Receive monitoring data from a client endpoint."""
-    endpoint_id = register_or_update_endpoint(db, payload.endpoint, api_key)
+    """Receive monitoring data from a client endpoint.
+
+    Two layers of auth (per audit C1):
+    * Fleet-wide ``X-API-Key`` — proves the request came from a sanctioned
+      monitor binary.
+    * Per-endpoint ``X-Endpoint-Key`` — verified against the bcrypt hash
+      in ``endpoints.api_key_hash`` so individual endpoints can be
+      rotated or revoked without churning the fleet secret.
+    """
+    verify_endpoint_key(db, payload.endpoint.hostname, x_endpoint_key)
+    endpoint_id = register_or_update_endpoint(db, payload.endpoint, x_endpoint_key)
     stored = process_ingest(db, endpoint_id, payload)
     return IngestResponse(
         stored=stored,
