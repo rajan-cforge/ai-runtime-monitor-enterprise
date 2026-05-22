@@ -1,0 +1,77 @@
+name: Smoke
+on:
+  pull_request:
+  push:
+    branches: [main, "integration/phase-3a"]
+
+concurrency:
+  group: smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  e2e-boot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    env:
+      DISABLE_DASHBOARD_AUTH: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: pip install -e ".[dev]"
+      - name: Skip first-run wizard
+        # Daemon mode aborts if the setup marker is missing — see
+        # src/claude_monitoring/monitor.py main() under args.start.
+        run: |
+          mkdir -p ~/claude_watch_output
+          touch ~/claude_watch_output/.setup_complete
+      - name: Start daemon
+        run: |
+          ai-monitor --start --daemon --port 9081 &
+          echo $! > /tmp/daemon.pid
+          for i in $(seq 1 30); do
+            if curl -fsS http://localhost:9081/api/stats >/dev/null 2>&1; then
+              echo "daemon up after ${i}s"
+              break
+            fi
+            sleep 1
+          done
+      - name: /api/stats responds
+        run: |
+          curl -fsS http://localhost:9081/api/stats > /tmp/stats.json
+          test -s /tmp/stats.json
+          python -c "import json; json.loads(open('/tmp/stats.json').read())"
+      - name: Dashboard HTML loads
+        run: |
+          curl -fsS http://localhost:9081/ > /tmp/dash.html
+          grep -q "<title>" /tmp/dash.html
+          grep -q "<body" /tmp/dash.html
+          test "$(wc -c < /tmp/dash.html)" -gt 1000
+      - name: /api/feed responds
+        run: |
+          curl -fsS "http://localhost:9081/api/feed" > /tmp/feed.json
+          python -c "import json; json.loads(open('/tmp/feed.json').read())"
+      - name: /api/extensions (graceful — endpoint may not exist yet pre-Lane-B)
+        run: |
+          curl -fsS http://localhost:9081/api/extensions > /tmp/exts.json || echo "endpoint not present yet — expected pre-Lane-B"
+      - name: No errors / tracebacks in daemon log
+        run: |
+          LOG=$(find ~/claude_watch_output/logs -name '*.log' 2>/dev/null | head -1)
+          if [ -z "$LOG" ]; then
+            echo "no log file found (daemon may not have started fully)"
+            ls -la ~/claude_watch_output/ || true
+            exit 1
+          fi
+          echo "--- daemon log tail ---"
+          tail -50 "$LOG"
+          if grep -iE "Traceback|ERROR:|Exception:" "$LOG"; then
+            echo "FAIL: errors in daemon log"
+            exit 1
+          fi
+      - name: Stop daemon
+        if: always()
+        run: |
+          PID=$(cat /tmp/daemon.pid 2>/dev/null) || true
+          if [ -n "$PID" ]; then kill "$PID" 2>/dev/null || true; fi
