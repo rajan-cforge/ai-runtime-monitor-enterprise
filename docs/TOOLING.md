@@ -102,3 +102,56 @@ against the MCP server.
 ## Known issues
 
 (none yet)
+
+---
+
+## Phase 3.0 capability map — plugins vs CC_PROMPT_00 custom subagents/skills
+
+`docs/CC_PROMPT_00_multi_agent_harness.md` specifies 11 custom subagents
+and 5 custom skills under `.claude/`. Phase 3.0 audit (run 2026-05-22)
+compared them against the 6 connected plugins to eliminate duplicate
+capability before Phase 3C installs `.claude/`.
+
+### Subagents
+
+| Custom (CC_PROMPT_00) | Plugin equivalent | Decision | Rationale |
+|---|---|---|---|
+| `code-reviewer.md` | `feature-dev:code-reviewer` agent + `code-review` plugin `/code-review` command | **DROP custom** | Plugin agent does confidence-scored bug/quality/security review with 0-100 filtering — exactly what the custom def specified, with more discipline. Plugin command handles PR-level reviews via `gh`. |
+| `security-reviewer.md` | `security-guidance` plugin (PreToolUse hook) | **KEEP custom** | Hook is passive in-editor reminder. Adversarial reviewer subagent is a separate role for diff review by fresh-context agent. Different lifecycles. Hook complements, doesn't replace. |
+| `file-explorer.md` | `feature-dev:code-explorer` | **DROP custom** | Plugin agent traces execution paths and maps architecture — identical purpose. |
+| `design-system-curator.md` | `frontend-design` plugin | **KEEP custom** | Plugin generates distinctive components; curator is the Lane D specialist that integrates them into dashboard.html context. Custom workflow CALLS the plugin's skill. |
+| `tauri-rust-engineer.md` | (none) | **DROP** | Lane A deferred to v0.3 per Q3. Re-evaluate when Tauri lane opens. |
+| `extension-scanner-specialist.md` | (none) | **KEEP custom** | Lane B domain specialist for `src/claude_monitoring/extension_scanner/`. |
+| `threat-intel-scout.md` | (none) | **DROP** | Reconciliation log already marked unused. Threat-intel work happens inside extension-scanner-specialist and existing `threat_intel.py`. |
+| `brand-copywriter.md` | (none) | **KEEP custom** | Lane C specialist; brand voice rules are project-specific. |
+| `test-writer.md` | (none direct) | **KEEP custom** | Project-specific test fixtures + conventions. Prompt should reference `superpowers:test-driven-development` for procedure. |
+| `doc-writer.md` | (none) | **KEEP custom** | Scoped writes to `docs/` only. |
+| `orchestrator.md` | (none — superpowers `dispatching-parallel-agents` covers parts) | **KEEP custom** | Project-specific routing logic over AGENTS.md and SPRINT_ONE_WEEK.md. |
+
+Net: 11 custom subagents → 4 dropped (`code-reviewer`, `file-explorer`, `tauri-rust-engineer`, `threat-intel-scout`) → **7 to install in Phase 3C.**
+
+### Skills
+
+| Custom (CC_PROMPT_00) | Plugin equivalent | Decision | Rationale |
+|---|---|---|---|
+| `tdd-loop/SKILL.md` | `superpowers:test-driven-development` | **DROP custom** | Superpowers skill is exactly the red-green-refactor procedure, gets version updates. |
+| `worktree-dispatch/SKILL.md` | `superpowers:using-git-worktrees` | **DROP custom** | Superpowers handles worktree setup canonically. |
+| `security-review/SKILL.md` | `security-guidance` (PreToolUse) + `code-review` `/code-review` command | **DROP custom** | Workflow merges into security-guidance for inline reminders + `/code-review` for handoff. |
+| `brand-voice-check/SKILL.md` | (none) | **KEEP custom** | Project-specific brand rules; no plugin equivalent. |
+| `release-tag/SKILL.md` | (none) | **KEEP custom** | Adapted for CLI + Homebrew flow per Q3 (no Tauri DMG signing this sprint). |
+
+Net: 5 custom skills → 3 dropped → **2 to install in Phase 3C.**
+
+### Implications for Phase 3C harness install
+
+When `.claude/` is installed in Phase 3C, ship:
+- 7 subagents (not 11)
+- 2 skills (not 5)
+- 5 hooks (unchanged from CC_PROMPT_00)
+- Lane rubrics A/B/C/D: rubric A becomes "deferred — see Q3"; rubrics
+  B/C/D reference the resolved capability set above.
+
+The 3 generally-useful plugin agents (`feature-dev:code-reviewer`,
+`feature-dev:code-explorer`, `feature-dev:code-architect`) are invoked
+directly via `Task(subagent_type="feature-dev:code-reviewer", ...)`
+without local re-definition.
