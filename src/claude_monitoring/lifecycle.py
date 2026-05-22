@@ -1036,3 +1036,41 @@ def get_service_state() -> dict:
     except Exception:
         pass
     return state
+
+
+# ─────────────────────────────────────────────────────────────
+# User notifications (macOS) — audit finding C4
+# ─────────────────────────────────────────────────────────────
+
+
+def _escape_applescript_string(s: str) -> str:
+    """Escape `s` for embedding inside an AppleScript `"..."` string literal.
+
+    This is NOT bash escaping. The argv-list passes the script as a single
+    argv element to `osascript -e`, so OS shell metacharacters are inert.
+    What matters is closing the AppleScript string literal — only `"` and
+    `\\` can break out of it.
+    """
+    return s.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def notify(title: str, body: str) -> None:
+    """Display a native macOS notification via `osascript`.
+
+    Uses argv-list invocation (never `shell=True`) and escapes AppleScript
+    string-literal metacharacters in both `title` and `body`. Failures are
+    swallowed: a missing osascript (non-darwin CI runner) or a permission
+    denial must not crash the caller.
+    """
+    applescript = (
+        f'display notification "{_escape_applescript_string(body)}" with title "{_escape_applescript_string(title)}"'
+    )
+    try:
+        subprocess.run(
+            ["osascript", "-e", applescript],
+            check=False,
+            capture_output=True,
+            timeout=5,
+        )
+    except Exception:
+        pass
