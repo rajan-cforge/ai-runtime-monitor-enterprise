@@ -21,6 +21,8 @@ DEPENDENCIES:
   pip3 install watchdog psutil
 """
 
+from __future__ import annotations
+
 import argparse
 import csv
 import hashlib
