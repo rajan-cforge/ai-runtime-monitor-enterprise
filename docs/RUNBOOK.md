@@ -92,6 +92,86 @@ launchctl load ~/Library/LaunchAgents/com.gocloudforge.vigil-antfood.plist
 
 ---
 
+## Python version requirement
+
+The antfood loop requires **Python 3.11 or 3.12**. Python 3.13+ has a
+`setuptools_scm` incompatibility with non-semver tags (e.g. `pre-c1c4`)
+that crashes editable installs with an `AssertionError` deep in
+`vcs_versioning/_scm_version.py`. The loop script refuses to run on
+3.13+ and prints a remediation message.
+
+Check current version:
+
+```bash
+cd ~/code/ai-runtime-monitor-enterprise
+source .venv/bin/activate
+python --version
+```
+
+If you see 3.13 or higher, recreate the venv:
+
+```bash
+deactivate
+rm -rf .venv
+/opt/homebrew/bin/python3.12 -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
+```
+
+If Python 3.12 is not installed:
+
+```bash
+brew install python@3.12
+```
+
+---
+
+## Proxy interaction
+
+Vigil's monitor sets `HTTPS_PROXY` system-wide for traffic interception.
+The antfood loop must run with proxy **unset**, because `pip install`
+and `gh` cannot route through the monitor's proxy (the proxy is what
+the loop is restarting; if it's down, the install fails with a
+`ProxyError: Cannot connect to proxy` and the rollback also fails).
+
+The loop script unsets proxy variables internally — both at the top
+and again inside `start_daemon()` (defense in depth). If you invoke
+the daemon manually outside the loop, unset proxy first in your
+shell:
+
+```bash
+unset HTTPS_PROXY HTTP_PROXY ALL_PROXY NO_PROXY \
+      https_proxy http_proxy all_proxy no_proxy
+```
+
+---
+
+## State file
+
+The loop persists the last successfully-booted SHA at:
+
+```
+~/.vigil-antfood-state
+```
+
+On boot failure, the loop reverts to this SHA, NOT the `pre-c1c4` tag.
+The original tag predates the `setuptools_scm` install fix (PR #11)
+so it's no longer a viable rollback target on Python 3.13+ machines.
+The state file approach is also more accurate — it rolls back to
+whatever was running before the bad pull, not an arbitrary historical
+checkpoint.
+
+To force a different rollback target:
+
+```bash
+echo "<sha-or-tag>" > ~/.vigil-antfood-state
+```
+
+If no state file exists yet (first run on a clean machine), the loop
+falls back to `$ROLLBACK_TAG` (default: `pre-c1c4`).
+
+---
+
 ## Check what's running
 
 ```bash
