@@ -1,27 +1,29 @@
-## What
+## Summary
+<!-- one paragraph: what changed and why -->
 
-<!-- Brief description of the change -->
+## Audit / Issue links
+<!-- links to docs/AUDIT_2026-05-21.md sections, GitHub issues -->
 
-## Why
+## How to verify
+<!-- commands a reviewer can run locally -->
 
-<!-- What problem does this solve? Link to issue if applicable -->
+```bash
+# example
+make ci-fast
+pytest tests/path/to/regression_test.py
+```
 
-Fixes #
+## Test plan
+<!-- tests added, coverage delta, expected mutation score -->
 
-## Type
+## Risk
+<!-- what could break, blast radius -->
 
-- [ ] Bug fix
-- [ ] New feature
-- [ ] Refactor
-- [ ] Documentation
-- [ ] CI/tooling
-
-## Testing
-
-- [ ] Tests added/updated
-- [ ] All tests pass (`make test`)
-- [ ] Linting passes (`make lint`)
-
-## Screenshots
-
-<!-- If UI changes, add before/after screenshots -->
+## Checklist
+- [ ] `make ci-local` passes locally (or `pytest -q` until Q1 gates land)
+- [ ] New code has tests
+- [ ] Tests fail without the fix (proves they exercise the code)
+- [ ] No `Co-Authored-By: Claude` trailer in commits
+- [ ] Conventional commit messages (`<type>(<scope>): <subject>`)
+- [ ] Updated `docs/RECONCILIATION_LOG.md` if any assumption shifted
+- [ ] Grader subagent verdict attached (for sprint-lane PRs only)
