@@ -62,6 +62,18 @@
 - Scope: in-place security fixes + visual cleanup, no framework change
 - C2 XSS fix is the entry work (split into `escHtml`/`escAttr`/`escJs`/`escUrl`)
 - React migration is Lane D2, post-launch
+- **Dashboard URL UX gap** (added 2026-05-22 during Phase 3A antfooding):
+  - Option A — `monitor.py` prints the dashboard URL to stderr before
+    `redirect_stdio_to_log()` runs in `--daemon` mode. Currently the URL
+    only lands in `~/claude_watch_output/logs/monitor.log`, so users who
+    daemon-start can't see it without grepping the log.
+  - Option D — the auth-required failure page reads
+    `~/claude_watch_output/.dashboard_token` and renders the correct
+    `?token=...` URL inline, so users who arrive without a token get
+    unblocked without log spelunking.
+  - Rationale: the developer install path (`brew` + `pip install`) hits
+    `--daemon` mode; v0.3+'s Tauri setup wizard solves it for the
+    consumer install path, but the dev path needs this regardless.
 
 ### Lane A — Tauri (DEFERRED)
 - Re-evaluate at v0.3 planning. No work this sprint.
