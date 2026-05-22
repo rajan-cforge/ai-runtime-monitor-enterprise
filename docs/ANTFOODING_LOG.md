@@ -24,6 +24,27 @@ the most important antfooding finding of the sprint — document it.
 
 **Reproductions / regressions to file**: none yet.
 
+**Baseline expectation** (per Guardrail 4 in
+`docs/CC_DISPATCH_phase_3_safety_addendum.md`): the integration → main
+PR for Phase 3A must show parity against this baseline. The CI smoke
+workflow `.github/workflows/smoke.yml` automates the boot-and-render
+shape check; the manual antfooding entry below covers what CI cannot:
+visual, behavioral, and "feels right" judgment.
+
+What to record when you do the local install (replacing the "to be
+populated" line above):
+
+- Dashboard URL: `http://localhost:9081/?token=$(cat ~/claude_watch_output/.dashboard_token)`
+- Tabs rendering without console errors: Live Feed, Sessions, Supply
+  Chain, Threat Intel, Alerts, Settings, Inventory
+- Daemon log path: `~/claude_watch_output/logs/*.log`
+- Expected log: no `Traceback`, no `ERROR:`, no `Exception:` lines
+- `/api/stats` returns JSON with session/event/alert counters
+- A short (~5 min) Claude Code session populates the Sessions tab
+
+The post-fix entry (after `integration/phase-3a` lands) compares
+against this list. Any regression blocks the integration → main PR.
+
 **Audit findings exercised**: C1–C4 are not yet fixed; the antfooding
 build still exhibits them. Specifically:
 - C2 XSS in `dashboard.html::esc()` — observable by typing
