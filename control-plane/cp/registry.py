@@ -36,7 +36,11 @@ def register_or_update_endpoint(db, endpoint_info, api_key):
         )
     else:
         endpoint_id = str(uuid.uuid4())
-        key_hash = bcrypt.hashpw(api_key.encode(), bcrypt.gensalt()).decode()
+        # rounds=12 is the OWASP-recommended floor; the audit found this
+        # hash was previously written but never verified, making the
+        # cost-factor moot. We now verify on every ingest via
+        # cp.auth.verify_endpoint_key and pin the rounds explicitly.
+        key_hash = bcrypt.hashpw(api_key.encode(), bcrypt.gensalt(rounds=12)).decode()
         db.execute(
             text(
                 """INSERT INTO endpoints
@@ -91,9 +95,7 @@ def get_all_endpoints(db):
                 "os": r.os,
                 "monitor_version": r.monitor_version,
                 "first_seen": r.first_seen.isoformat() if r.first_seen else None,
-                "last_heartbeat": r.last_heartbeat.isoformat()
-                if r.last_heartbeat
-                else None,
+                "last_heartbeat": r.last_heartbeat.isoformat() if r.last_heartbeat else None,
                 "status": r.status,
                 "session_count": r.session_count,
                 "alert_count": r.alert_count,
