@@ -54,3 +54,10 @@ ai-runtime-monitor/
 
 # Node
 node_modules/
+
+# Playwright MCP cache
+.playwright-mcp/
+
+# Pitch decks and binary planning artifacts (kept locally, not in git)
+*.pptx
+*.pdf
