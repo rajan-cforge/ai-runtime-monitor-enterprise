@@ -7,6 +7,7 @@ and POSTs it to the control plane server.
 """
 
 import json
+import logging
 import platform
 import socket
 import sqlite3
@@ -14,6 +15,14 @@ import threading
 
 from claude_monitoring.config import get_db_path
 from claude_monitoring.utils import now_iso
+
+logger = logging.getLogger(__name__)
+
+# Audit C3: cap free-form text scanned/forwarded per field. Oversized
+# payloads are truncated rather than passed through verbatim — both to
+# keep sync requests bounded and to deny attackers the ability to
+# tunnel large blobs through a "sanitized" field.
+_MAX_SANITIZE_LEN = 5000
 
 # Fields that may carry free-form text captured from agent sessions and
 # could incidentally contain secrets (API keys pasted into prompts, AWS
@@ -283,33 +292,49 @@ class SyncAgent:
         return alerts
 
 
-def _sanitize_string(value: str) -> str:
-    """Scan a free-form string for secrets and inline-mask each match.
+def _sanitize_string(value) -> str:
+    """Mask credentials in a string. Returns "" on any failure (sentinel).
 
-    Uses the same scan_sensitive + mask_value pair that the primary
-    capture pipelines use (monitor.py::_check_sensitive). Returns the
-    input unchanged if no matches found or the scan fails.
+    Audit C3 (2026-05-21): the previous implementation returned the raw
+    input when masking raised. That was fail-open — a malformed legacy
+    row (pre-P1-02 raw bytes, or a value whose mask_value crashed) was
+    forwarded to the control plane unmasked. The contract is now:
+
+    - any non-string input (None, bytes, int, list, etc.) → "" + warning
+    - control characters (ASCII 0-31 except tab/newline/return, plus 127)
+      are stripped before scanning
+    - oversized inputs are truncated to ``_MAX_SANITIZE_LEN``
+    - any exception inside the scan/mask pipeline → "" + warning
+
+    Callers MUST treat "" as the failure sentinel — see
+    ``_sanitize_payload`` for the only production call site. The raw
+    input is never echoed into the log line.
     """
-    if not value or not isinstance(value, str):
-        return value
+    if value is None or value == "":
+        return ""
+    if not isinstance(value, str):
+        logger.warning("sanitize failed: non-string input type=%s", type(value).__name__)
+        return ""
     try:
+        cleaned = "".join(ch for ch in value if (ord(ch) >= 32 or ch in "\t\n\r") and ord(ch) != 127)
+        if len(cleaned) > _MAX_SANITIZE_LEN:
+            cleaned = cleaned[:_MAX_SANITIZE_LEN]
+
         from claude_monitoring.security import mask_value
         from claude_monitoring.utils import scan_sensitive
 
-        matches = scan_sensitive(value[:5000])
+        matches = scan_sensitive(cleaned)
         if not matches:
-            return value
-        sanitized = value
+            return cleaned
+        sanitized = cleaned
         for m in matches:
             raw = m.get("matched_value") or ""
             if raw and raw in sanitized:
                 sanitized = sanitized.replace(raw, mask_value(raw))
         return sanitized
-    except Exception:
-        # Fail closed: if scan crashes, return input unchanged rather
-        # than dropping the payload. The primary capture pipeline has
-        # already sanitized most fields; this is belt-and-suspenders.
-        return value
+    except Exception as e:
+        logger.warning("sanitize failed: %s", type(e).__name__)
+        return ""
 
 
 def _sanitize_payload(obj):
