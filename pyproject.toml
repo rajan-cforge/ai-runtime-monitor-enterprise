@@ -25,7 +25,15 @@ watch = ["mitmproxy>=10.0"]
 plot = ["matplotlib>=3.5"]
 security = ["sqlcipher3-binary>=0.5"]  # Optional: DB encryption at rest
 all = ["mitmproxy>=10.0", "matplotlib>=3.5", "sqlcipher3-binary>=0.5"]
-dev = ["pytest>=7.0", "pytest-cov>=4.0", "ruff>=0.4.0", "bandit>=1.7", "pip-audit>=2.7"]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.4.0",
+    "bandit>=1.7",
+    "pip-audit>=2.7",
+    "python-Levenshtein>=0.25",
+]
 
 [project.urls]
 Homepage = "https://github.com/rajan-cforge/ai-runtime-monitor"

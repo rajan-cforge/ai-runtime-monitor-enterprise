@@ -222,3 +222,35 @@ Documented in `docs/TOOLING.md`. Summary:
 Index is 3 days stale (since 5/18). The 4 lane prompts + branching
 infra commits since then are docs-only — no graph changes. Detect-changes
 run unneeded for Phase 1.
+
+---
+
+## Phase 2 → Phase 3 — Q1-Q10 answered (2026-05-22)
+
+User answers landed via `docs/CC_DISPATCH_phase_3_kickoff.md`.
+
+| #   | Question                              | Decision |
+|-----|---------------------------------------|----------|
+| Q1  | Quality Gates Q1/Q2/Q3 triage         | **Accept as triaged.** Q1 this sprint, Q2 next, Q3 post-launch. |
+| Q2  | Lane D scope                          | **(b) Split.** D1 = polish dashboard.html in place this sprint (security fixes + visual cleanup, no framework change). D2 = React migration as its own post-launch week. C2 XSS fix lands in dashboard.html's escape pipeline now. |
+| Q3  | Lane A Tauri                          | **DEFER to v0.3.** Ship CLI + Homebrew tap this sprint. Tauri ships with its own launch moment later. |
+| Q4  | Lane B home                           | **Confirmed**: `src/claude_monitoring/extension_scanner/`. |
+| Q5  | Lane C brand                          | Product name **Vigil**. Domain `vigil.gocloudforge.com` (subdomain under existing Squarespace-managed gocloudforge.com — no domain registration). CLI binary `vigil`. Brew tap `gocloudforge/tap/vigil`. PyPI `vigil-monitor`. Local path `/Users/rajanyadav/code/airuntimemonitor-site`. Vercel hosting via CNAME (DNS handled outside session). Stripe Payment Link deferred to launch day; use placeholder `STRIPE_PRO_LINK` env var. **Rename customer-surface only** — do NOT rename repo, Python package, or internal docs. |
+| Q6  | C1-C4 batching                        | **Four separate branches**: `security/c1-bcrypt`, `security/c2-xss-esc`, `security/c3-sync-fail-open`, `security/c4-osascript-injection`. |
+| Q7  | Co-Authored-By: Claude trailers       | **(c) Defer signed-commits gate** to post-launch (Q3 of quality gates). Document the 3 pre-policy SHAs (`8f07f9e`, `770eef2`, `7a8d712`) as historical exceptions in `docs/COMMIT_HISTORY_EXCEPTIONS.md`. New policy prospective from next commit. |
+| Q8  | Antfooding                            | **Yes**. Day-0 entry in `docs/ANTFOODING_LOG.md` (created in this PR). |
+| Q9  | Lane B API routes                     | **Inline into `monitor.py::DashboardHandler`**. No new `api/` subpackage this sprint. Every new handler tagged `# TODO(M6): extract to api/extension_routes.py during monitor.py split`. |
+| Q10 | Lane B dev deps                       | **Add both** to `pyproject.toml [project.optional-dependencies.dev]`: `pytest-asyncio>=0.23`, `python-Levenshtein>=0.25`. No difflib fallback (R008 typosquat scoring against 100 popular extensions every scan would spike CPU). |
+
+### New phase: Phase 3.0 — plugin integration audit
+
+Per dispatch, runs before Phase 3A. Reconciled CC_PROMPT_00's custom
+subagents/skills against the 6 connected plugins. Net: drop 4 of 11
+subagents, drop 3 of 5 skills. Capability map appended to
+`docs/TOOLING.md`. Phase 3C installs the resolved set.
+
+### Adjustment summary
+
+- C2 XSS fix lands in dashboard.html now (Q2 = (b)), not via React rewrite.
+- Lane A removed from this sprint's parallel execution diagram.
+- 7 subagents + 2 skills install in Phase 3C (not 11+5).
