@@ -6,11 +6,27 @@ Tester:      Claude in Chrome (browser agent)
 Duration:    ~40 minutes (started ~4:05 PM, completed ~4:47 PM)
 Browser:     Chrome 148.0.0.0
 
+## Errata (added 2026-05-23)
+
+**Test 1 (C1 token auth enforcement) verdict was reversed by terminal
+verification.** Server-side enforcement on `/api/*` is correct. The
+probe's 200-response observations were artifacts of the dashboard's
+monkey-patched `fetch` injecting the auth token automatically. See
+`docs/AUDIT_2026-05-21.md` section "C1-FOLLOWUP — RETRACTED" for full
+root-cause analysis.
+
+**Recommendation #1 (server-side token enforcement on `/api/*`) is
+withdrawn.** No code change needed.
+
+Other test results in this report stand. Detection-quality findings
+(Recommendations 2-5) remain valid and have been routed to Lane D1 and
+Lane B scope per `docs/SPRINT_ONE_WEEK.md`.
+
 ## Test results
 
 | # | Test | Result | Notes |
 |---|------|--------|-------|
-| 1 | C1 token auth enforcement | PARTIAL | Auth wall (HTML error page, no leaks) fires for missing/invalid token; all /api/* endpoints return 200 with zero auth enforcement server-side |
+| 1 | C1 token auth enforcement | RETRACTED / PASS (server-side verified) | Initial PARTIAL verdict was a false positive from monkey-patched fetch; terminal curl confirms server returns 401 on all unauthenticated /api/* GETs. See Errata above. |
 | 2 | C2 XSS escape across tabs | PASS | All 9 tabs checked; all script-tag text matches were inside PRE blocks (legitimate code output); no live injected elements or broken attribute contexts |
 | 3 | C2 click-through interactions | PASS | Session row click, Deep Dive open/Esc-close, row-expand toggle, False-positive button all fired via delegated listeners; no console errors on any click |
 | 4 | C3 no sanitize log flood | N/A | Terminal not directly accessible; user to verify: tail -100 ~/claude_watch_output/logs/monitor.log | grep -i sanitize |

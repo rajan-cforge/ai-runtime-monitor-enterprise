@@ -46,6 +46,28 @@
 - Rubric: `.claude/rubrics/lane-B-scanner.md` (installed in Phase 3C)
 - Specialist: `extension-scanner-specialist` (installed in Phase 3C)
 
+#### Lane B — additions from Day 1 antfooding probe (post-launch scope)
+
+- **LB-RESEARCH-PRIOR** (alert quality)
+  - Research-session false-positive prior. When session title contains
+    research indicators ("research", "how does", "best-in-class",
+    "explore the") AND `turn_number ≤ 5` AND context is `tool_result`,
+    apply `confidence: low` override and mark
+    `likely_false_positive: true`. Currently the `env_file` detector
+    does this via a repeat heuristic; extend to multi-pattern clusters
+    in research sessions.
+- **LB-CREDENTIAL-DUMP** (new alert category)
+  - When ≥4 credential pattern types fire simultaneously in a single
+    `tool_result`, emit a higher-level `credential_dump` alert type
+    with consolidated metadata. Currently this fires as N individual
+    alerts; a single "CREDENTIAL DUMP — N patterns" alert is more
+    actionable. Observed at probe Alert #4 (ACMS session, 6 patterns
+    at once).
+- **LB-CONFIDENCE-CONSISTENCY** (alert state machine)
+  - See D1-FP-CONSISTENCY for description. If the Lane D1 fix proves
+    insufficient (e.g., requires broader state-machine rework), this
+    is the post-launch follow-through.
+
 ### Lane C — Vigil brand site
 - Product name: **Vigil**
 - Domain: `vigil.gocloudforge.com` (subdomain via CNAME, DNS by user)
@@ -107,6 +129,33 @@
       timestamps, optionally a sparkline)
   - Acceptance: SOC-analyst-style triage of any alert is possible
     without leaving the Alerts tab.
+
+#### Lane D1 — additions from Day 1 antfooding probe
+
+- **D1-FP-SUPPRESSOR** (alert quality)
+  - Test fixture key suppressor. If a matched key token appears within
+    50 chars of a masking demonstration pattern (`->`, `****`,
+    `[REDACTED]`), set `likely_false_positive: true` regardless of
+    confidence. Catches the `AKIAJ5TESTXXXXXXXXXX` false positive
+    observed in probe.
+- **D1-DEDUP-TURN** (alert quality)
+  - Turn-window deduplication. When multiple `sensitive_data` events
+    fire within a 5-second window in the same session with the same
+    pattern and similar hashes, consolidate into a single alert with
+    `keys_found: N`. Currently 4 separate criticals fire for 1 logical
+    CI log read.
+- **D1-TYPOSQUAT-UI** (UI consistency)
+  - Supply Chain registry intelligence panel: when a package is flagged
+    as typosquat, suppress "Scanned — no known vulnerabilities" and
+    display "N/A — typosquat flagged" instead. CVE absence is irrelevant
+    for typosquat placeholders.
+- **D1-FP-CONSISTENCY** (alert quality)
+  - Confidence re-classification consistency. Same hash should not be
+    reclassified from `low/likely_fp:true` to `critical/likely_fp:false`
+    based on a different search context. Require positive contextual
+    evidence (outbound send, assignment statement, credentials file
+    pattern) for upward reclassification. Observed at probe Alert #2
+    (hash `5acb12837d61733d`).
 
 ### Lane A — Tauri (DEFERRED)
 - Re-evaluate at v0.3 planning. No work this sprint.
