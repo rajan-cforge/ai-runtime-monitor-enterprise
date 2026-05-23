@@ -16,13 +16,18 @@
 | 1     | Reconciliation log                           | DONE        | #3            |
 | H1    | Unscheduled CI rescue (Py3.9 PEP-604 fix)    | DONE        | #4            |
 | 2     | Stop and present Q1-Q10                      | DONE        | (no PR)       |
-| 3.0   | Plugin integration audit (capability map)    | IN-FLIGHT   | #5            |
-| 3.0a  | Q1-Q10 record + governance docs              | IN-FLIGHT   | this PR       |
-| 3A.C1 | Security fix C1 (control-plane bcrypt)       | NOT STARTED |               |
-| 3A.C2 | Security fix C2 (dashboard.html XSS)         | NOT STARTED |               |
-| 3A.C3 | Security fix C3 (sync.py fail-open)          | NOT STARTED |               |
-| 3A.C4 | Security fix C4 (osascript shell=True)       | NOT STARTED |               |
-| 3B    | Quality Gates Q1                             | BLOCKED on 3A |             |
+| 3.0   | Plugin integration audit (capability map)    | DONE        | #5            |
+| 3.0a  | Q1-Q10 record + governance docs              | DONE        | #6            |
+| 3.0b  | Smoke workflow + antfood loop + RUNBOOK      | DONE        | #8, #9, #10   |
+| 3.0c  | setuptools_scm install fix                   | DONE        | #11           |
+| 3.0d  | Antfood loop robustness (Phase B)            | DONE        | #16           |
+| 3A.C1 | Security fix C1 (control-plane bcrypt)       | DONE        | #13 → #20     |
+| 3A.C2 | Security fix C2 (dashboard.html XSS)         | DONE        | #15 → #20     |
+| 3A.C3 | Security fix C3 (sync.py fail-open)          | DONE        | #14 → #20     |
+| 3A.C4 | Security fix C4 (osascript primitive)        | DONE (preventive — see audit annotation) | #12 → #20 |
+| 3A    | Antfood + probe + retraction + incident      | DONE        | #17, #19, #20 |
+| 3A.aux| Liveness roadmap + SSDLC enforcement doc     | DONE / IN-FLIGHT | #18 / #21 |
+| 3B    | Quality Gates Q1                             | READY       | (awaiting proceed) |
 | 3C    | Multi-agent harness install                  | BLOCKED on 3B |             |
 | 3D    | Quality Gates Q2                             | BLOCKED on 3C |             |
 | 3E.B  | Lane B — extension scanner                   | BLOCKED on 3D |             |
@@ -164,18 +169,23 @@
 
 ## Audit critical findings
 
-Per `docs/AUDIT_2026-05-21.md` (lives on `audit/adversarial-self-audit`
-branch). All four locations confirmed extant.
+Per `docs/AUDIT_2026-05-21.md` (now on `main` after PR #17). All four
+fixes merged via the integration → main PR with rebase strategy
+preserving individual commits.
 
-| ID | Branch                          | Status      |
-|----|---------------------------------|-------------|
-| C1 | `security/c1-bcrypt`            | NOT STARTED |
-| C2 | `security/c2-xss-esc`           | NOT STARTED |
-| C3 | `security/c3-sync-fail-open`    | NOT STARTED |
-| C4 | `security/c4-osascript-injection` | NOT STARTED |
+| ID | Branch (deleted post-merge)      | Status    | Commit on main |
+|----|----------------------------------|-----------|----------------|
+| C1 | `security/c1-bcrypt`             | DONE      | `94e3345`      |
+| C2 | `security/c2-xss-esc`            | DONE      | `73232b3`      |
+| C3 | `security/c3-sync-fail-open`     | DONE      | `346115a`      |
+| C4 | `security/c4-osascript-injection`| DONE (preventive — annotated as non-finding in audit doc) | `f99ae4f` |
+| C1-FOLLOWUP | (none — never opened)   | RETRACTED | annotated in `docs/AUDIT_2026-05-21.md` |
 
-After C1-C4 merge: update `docs/AUDIT_2026-05-21.md` (on the audit
-branch) with resolved-status + commit links.
+Phase 3A closed on 2026-05-23 via PR #20 (rebase-merge). Antfood
+evidence at `docs/ANTFOODING_LOG.md` Day 1. Structured probe at
+`docs/CLAUDE_CHROME_PROBE_2026-05-22.md`. Credential discoveries at
+`docs/incidents/2026-05-22-credential-discovery.md` (NOT ROTATING
+disposition).
 
 ---
 
