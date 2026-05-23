@@ -84,6 +84,17 @@
   - Acceptance: from any Supply Chain install row, the user can in
     ≤1 click read the exact prompt that triggered the install AND
     navigate to that session.
+- **D1-NULL-GUARD: `loadProcesses()` classList null TypeError** (added
+  2026-05-22 during Phase 3A antfooding):
+  - Every ~3 seconds the dashboard's `loadProcesses()` poll throws a
+    TypeError attempting `.classList.add(...)` on a null element
+    (the row template doesn't exist on first paint OR the selector
+    misses after a re-render).
+  - Add a null-guard before the `.classList` mutation; ideally also
+    short-circuit the poll's render path if the target row is absent
+    so we don't burn cycles each tick.
+  - Acceptance: open dashboard with empty Sessions, wait 60s, browser
+    console has zero TypeErrors from `loadProcesses`.
 - **F. Alerts cards expandable inline detail pane** (added 2026-05-22
   during Phase 3A antfooding):
   - Each Alert card opens inline (no modal) into a details pane
