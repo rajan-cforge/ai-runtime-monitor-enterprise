@@ -46,6 +46,28 @@
 - Rubric: `.claude/rubrics/lane-B-scanner.md` (installed in Phase 3C)
 - Specialist: `extension-scanner-specialist` (installed in Phase 3C)
 
+#### Lane B — additions from Day 1 antfooding probe (post-launch scope)
+
+- **LB-RESEARCH-PRIOR** (alert quality)
+  - Research-session false-positive prior. When session title contains
+    research indicators ("research", "how does", "best-in-class",
+    "explore the") AND `turn_number ≤ 5` AND context is `tool_result`,
+    apply `confidence: low` override and mark
+    `likely_false_positive: true`. Currently the `env_file` detector
+    does this via a repeat heuristic; extend to multi-pattern clusters
+    in research sessions.
+- **LB-CREDENTIAL-DUMP** (new alert category)
+  - When ≥4 credential pattern types fire simultaneously in a single
+    `tool_result`, emit a higher-level `credential_dump` alert type
+    with consolidated metadata. Currently this fires as N individual
+    alerts; a single "CREDENTIAL DUMP — N patterns" alert is more
+    actionable. Observed at probe Alert #4 (ACMS session, 6 patterns
+    at once).
+- **LB-CONFIDENCE-CONSISTENCY** (alert state machine)
+  - See D1-FP-CONSISTENCY for description. If the Lane D1 fix proves
+    insufficient (e.g., requires broader state-machine rework), this
+    is the post-launch follow-through.
+
 ### Lane C — Vigil brand site
 - Product name: **Vigil**
 - Domain: `vigil.gocloudforge.com` (subdomain via CNAME, DNS by user)
@@ -62,6 +84,78 @@
 - Scope: in-place security fixes + visual cleanup, no framework change
 - C2 XSS fix is the entry work (split into `escHtml`/`escAttr`/`escJs`/`escUrl`)
 - React migration is Lane D2, post-launch
+- **Dashboard URL UX gap** (added 2026-05-22 during Phase 3A antfooding):
+  - Option A — `monitor.py` prints the dashboard URL to stderr before
+    `redirect_stdio_to_log()` runs in `--daemon` mode. Currently the URL
+    only lands in `~/claude_watch_output/logs/monitor.log`, so users who
+    daemon-start can't see it without grepping the log.
+  - Option D — the auth-required failure page reads
+    `~/claude_watch_output/.dashboard_token` and renders the correct
+    `?token=...` URL inline, so users who arrive without a token get
+    unblocked without log spelunking.
+  - Rationale: the developer install path (`brew` + `pip install`) hits
+    `--daemon` mode; v0.3+'s Tauri setup wizard solves it for the
+    consumer install path, but the dev path needs this regardless.
+- **E. Supply Chain install-history prompt access** (added 2026-05-22
+  during Phase 3A antfooding):
+  - Each install row must surface the full originating session prompt,
+    not just the truncated preview.
+  - Two UI options to evaluate together: hover tooltip with full prompt,
+    OR expandable row that reveals full prompt + clickable session-ID
+    link to jump to the originating session in the Sessions tab.
+  - Acceptance: from any Supply Chain install row, the user can in
+    ≤1 click read the exact prompt that triggered the install AND
+    navigate to that session.
+- **D1-NULL-GUARD: `loadProcesses()` classList null TypeError** (added
+  2026-05-22 during Phase 3A antfooding):
+  - Every ~3 seconds the dashboard's `loadProcesses()` poll throws a
+    TypeError attempting `.classList.add(...)` on a null element
+    (the row template doesn't exist on first paint OR the selector
+    misses after a re-render).
+  - Add a null-guard before the `.classList` mutation; ideally also
+    short-circuit the poll's render path if the target row is absent
+    so we don't burn cycles each tick.
+  - Acceptance: open dashboard with empty Sessions, wait 60s, browser
+    console has zero TypeErrors from `loadProcesses`.
+- **F. Alerts cards expandable inline detail pane** (added 2026-05-22
+  during Phase 3A antfooding):
+  - Each Alert card opens inline (no modal) into a details pane
+    containing:
+    - Full context: 5 lines before and 5 lines after the matched span
+    - Session turn link (deep-link into the originating Sessions row)
+    - Classifier reasoning: which rule fired, severity rationale
+    - Recommended remediation (per-rule playbook text)
+    - History of pattern occurrences (count + first/last seen
+      timestamps, optionally a sparkline)
+  - Acceptance: SOC-analyst-style triage of any alert is possible
+    without leaving the Alerts tab.
+
+#### Lane D1 — additions from Day 1 antfooding probe
+
+- **D1-FP-SUPPRESSOR** (alert quality)
+  - Test fixture key suppressor. If a matched key token appears within
+    50 chars of a masking demonstration pattern (`->`, `****`,
+    `[REDACTED]`), set `likely_false_positive: true` regardless of
+    confidence. Catches the `AKIAJ5TESTXXXXXXXXXX` false positive
+    observed in probe.
+- **D1-DEDUP-TURN** (alert quality)
+  - Turn-window deduplication. When multiple `sensitive_data` events
+    fire within a 5-second window in the same session with the same
+    pattern and similar hashes, consolidate into a single alert with
+    `keys_found: N`. Currently 4 separate criticals fire for 1 logical
+    CI log read.
+- **D1-TYPOSQUAT-UI** (UI consistency)
+  - Supply Chain registry intelligence panel: when a package is flagged
+    as typosquat, suppress "Scanned — no known vulnerabilities" and
+    display "N/A — typosquat flagged" instead. CVE absence is irrelevant
+    for typosquat placeholders.
+- **D1-FP-CONSISTENCY** (alert quality)
+  - Confidence re-classification consistency. Same hash should not be
+    reclassified from `low/likely_fp:true` to `critical/likely_fp:false`
+    based on a different search context. Require positive contextual
+    evidence (outbound send, assignment statement, credentials file
+    pattern) for upward reclassification. Observed at probe Alert #2
+    (hash `5acb12837d61733d`).
 
 ### Lane A — Tauri (DEFERRED)
 - Re-evaluate at v0.3 planning. No work this sprint.

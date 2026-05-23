@@ -254,3 +254,29 @@ subagents, drop 3 of 5 skills. Capability map appended to
 - C2 XSS fix lands in dashboard.html now (Q2 = (b)), not via React rewrite.
 - Lane A removed from this sprint's parallel execution diagram.
 - 7 subagents + 2 skills install in Phase 3C (not 11+5).
+
+---
+
+## Architectural decision — dashboard host (2026-05-22)
+
+Decided during Phase 3A antfooding setup.
+
+**Dashboard is HTML served by the Python daemon on `localhost:9081`,
+opened in the user's default browser. Tauri (v0.3) provides menu-bar
+tray, LaunchAgent supervision, setup wizard, and auto-update — but
+never hosts the dashboard. `tauri-plugin-shell::open` delegates to the
+default browser.**
+
+Implications:
+- No Electron, no Tauri WebView for the dashboard.
+- React migration (Lane D2, post-launch) stays a normal SPA, not
+  bundled into a native app.
+- Future Linux/Windows builds get the dashboard for free via browser.
+- Bookmarkable URLs, standard DevTools, no app-update treadmill for UI.
+
+Rejected alternatives:
+- Tauri WebView hosting the dashboard — adds packaging surface, breaks
+  the cross-platform-by-default property, ties UI update cadence to
+  native-app update cadence.
+- Electron shell — same drawbacks, plus larger memory footprint and
+  Chromium update overhead.
