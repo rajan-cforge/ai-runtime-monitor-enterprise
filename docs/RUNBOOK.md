@@ -254,3 +254,51 @@ caller must treat `""` as rejection, not a valid sanitized value.
 Use codebase-memory-mcp's `trace_call_path` to enumerate callers; do
 not rely on grep alone, which misses indirect references and
 inheritance.
+
+---
+
+## Test isolation
+
+Tests for CLI scripts must NOT use module-level `importlib.exec_module`
+on the script under test. The script's import-time side effects
+(`sys.modules` mutation, `cwd` changes, env reads) execute during
+pytest's collection phase and silently perturb the import resolution
+of unrelated tests collected later in the session.
+
+The failure mode is non-obvious: tests still pass individually, the
+total pass/skip counts match, but cumulative coverage drops in modules
+the test doesn't touch — because some other test's `import` now
+resolves to a different code path. We hit this on the coverage-ratchet
+PR itself: `tests/test_coverage_ratchet.py` exec'd
+`scripts/coverage_ratchet.py` at module load, and `wizard.py` lost
+49 hits, with smaller drops in `monitor.py` / `security.py` /
+`status.py`. Same denominator, same skip count — pure pollution.
+
+Use `subprocess.run([sys.executable, str(SCRIPT), ...])` to invoke
+scripts in an isolated process. If you genuinely need to call an
+internal function rather than exercise the CLI surface, wrap the
+`exec_module` call in a fixture that snapshots and restores
+`sys.modules` (and any other mutated state) around it — never at
+module top-level.
+
+---
+
+## Coverage ratchet scope
+
+The ratchet (`scripts/coverage_ratchet.py`, run on every PR via
+`.github/workflows/ci.yml`) gates on **per-file** coverage drops of
+files the PR modifies under `src/`, not overall suite coverage. The
+overall delta is reported for visibility but only fails the gate if it
+exceeds 5% (catastrophic regression).
+
+Reason: two consecutive pytest invocations in the same CI job
+(once on the base branch, once on the PR branch) can produce
+deterministic, non-test-related coverage shifts of ~1% on unrelated
+modules. We observed `wizard.py` losing 49 hits on the PR side of
+every PR even when the PR didn't touch `src/` at all — likely a
+coverage instrumentation quirk specific to switching git refs mid-job.
+
+Per-file gating sidesteps this entirely: an unrelated phantom drop
+on a file the PR didn't modify can't block a merge. If the PR
+genuinely regresses coverage on a file it touches, the gate fires
+as intended.
