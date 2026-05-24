@@ -1,6 +1,6 @@
 # AI Runtime Monitor
 
-**GoCloudForge, Inc. — Proprietary and Confidential**
+**Endpoint security for the AI developer — monitor what AI coding agents actually do on your machine.**
 
 Runtime monitor for AI coding agents. Full visibility into what Claude Code, ChatGPT, Copilot, Cursor, and other AI tools are doing on your machine — network calls, file changes, process activity, token spend, and sensitive data exposure.
 
@@ -15,8 +15,8 @@ python3 -m claude_monitoring.monitor --start
 **From source:**
 
 ```bash
-git clone <private-repo-url>
-cd ai-runtime-monitor
+git clone https://github.com/rajan-cforge/ai-runtime-monitor-enterprise
+cd ai-runtime-monitor-enterprise
 make install   # auto-detects pip3/pip
 make start     # launches dashboard on http://localhost:9081
 ```
@@ -122,10 +122,10 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the full API reference, database sche
 ## Development
 
 ```bash
-git clone <private-repo-url>
+git clone https://github.com/rajan-cforge/ai-runtime-monitor-enterprise
 cd ai-runtime-monitor-enterprise
 make dev       # Install with dev deps
-make test      # Run 962 tests
+make test      # Run the test suite
 make lint      # Lint check
 ```
 
@@ -135,4 +135,6 @@ To report a vulnerability, contact security@gocloudforge.com.
 
 ## License
 
-Proprietary. Copyright 2026 GoCloudForge, Inc. All rights reserved.
+Apache License 2.0. See [LICENSE](LICENSE) for the full text.
+
+Copyright 2026 GoCloudForge, Inc.

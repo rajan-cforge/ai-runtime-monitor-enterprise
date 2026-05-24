@@ -53,7 +53,16 @@ needed unless you can't wait 5 min.
 
 ### 5. Incident note
 
-Write `docs/incidents/<YYYY-MM-DD>-<short-slug>.md`:
+Real-credential incidents and operational records go in **local private
+notes** (`~/Documents/vigil-notes/incidents/<YYYY-MM-DD>-<slug>.md`),
+not in the public repo. Only aggregated, value-free learnings come
+into the repo — for example, "on Day 1 we detected N exposures across
+M categories" — never the credential values, vendor names, or
+session identifiers.
+
+A non-credential public-repo incident (e.g. a CI regression, a build
+break) may still go under `docs/incidents/<YYYY-MM-DD>-<slug>.md`
+with this template:
 
 ```markdown
 # Incident: <short title> — <date>
