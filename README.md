@@ -122,10 +122,10 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the full API reference, database sche
 ## Development
 
 ```bash
-git clone <private-repo-url>
+git clone https://github.com/rajan-cforge/ai-runtime-monitor-enterprise
 cd ai-runtime-monitor-enterprise
 make dev       # Install with dev deps
-make test      # Run 962 tests
+make test      # Run the test suite
 make lint      # Lint check
 ```
 
