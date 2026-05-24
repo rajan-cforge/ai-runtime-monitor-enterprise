@@ -1,5 +1,5 @@
 .PHONY: install dev test lint format clean start start-deep stop status verify configure help coverage e2e security ci \
-        ci-fast ci-local ci-full pre-commit-install pre-commit-run
+        ci-fast ci-local ci-full size-checks pre-commit-install pre-commit-run
 
 # Auto-detect python/pip — prefer .venv, then python3.12, then python3
 PYTHON := $(shell \
@@ -100,7 +100,12 @@ ci-fast: lint ## Fast gates (~30s): lint + format check
 ci-local: ci-fast test ## Local CI (~5 min): ci-fast + full test suite
 	@echo "✓ Local CI passed (Layer 4 equivalent)"
 
-ci-full: ci-local security coverage ## Full CI (~30 min): ci-local + security + coverage gate
+size-checks: ## Size ratchets: file/function ceilings + functional-coverage nudge
+	$(PYTHON) scripts/check_file_size.py
+	$(PYTHON) scripts/check_function_size.py
+	$(PYTHON) scripts/check_functional_coverage.py
+
+ci-full: ci-local security size-checks coverage ## Full CI (~30 min): ci-local + security + size + coverage gate
 	@echo "✓ Full CI passed (Layer 5 equivalent — ready to push)"
 
 pre-commit-install: ## Install pre-commit hooks (run once per clone)
