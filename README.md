@@ -117,7 +117,7 @@ ai-monitor --init-config    # Creates ~/.config/ai-runtime-monitor/config.toml
 
 Output directory: `~/claude_watch_output/`
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for the full API reference, database schema, and security model.
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full API reference, database schema, and security model.
 
 ## Development
 
