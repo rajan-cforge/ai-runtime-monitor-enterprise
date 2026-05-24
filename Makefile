@@ -1,4 +1,5 @@
-.PHONY: install dev test lint format clean start start-deep stop status verify configure help coverage e2e security ci
+.PHONY: install dev test lint format clean start start-deep stop status verify configure help coverage e2e security ci \
+        ci-fast ci-local ci-full pre-commit-install pre-commit-run
 
 # Auto-detect python/pip — prefer .venv, then python3.12, then python3
 PYTHON := $(shell \
@@ -86,7 +87,28 @@ security: ## Run security scans
 	$(PYTHON) -m bandit -r src/ -s B101,B404,B603,B607,B608 --severity-level medium
 	@echo "Security scan complete."
 
-ci: lint test ## Run full CI pipeline locally
+ci: lint test ## Run full CI pipeline locally (alias for ci-local)
+
+# Phase 3B Quality Gates Q1 composite targets.
+# ci-fast: ~30s. Hygiene + lint only. Run before every commit.
+# ci-local: ~5 min. ci-fast + full test suite. Run before every push.
+# ci-full: ~30 min. ci-local + security + coverage gate. Run before release.
+
+ci-fast: lint ## Fast gates (~30s): lint + format check
+	@echo "✓ Fast gates passed (Layer 1-3 equivalent)"
+
+ci-local: ci-fast test ## Local CI (~5 min): ci-fast + full test suite
+	@echo "✓ Local CI passed (Layer 4 equivalent)"
+
+ci-full: ci-local security coverage ## Full CI (~30 min): ci-local + security + coverage gate
+	@echo "✓ Full CI passed (Layer 5 equivalent — ready to push)"
+
+pre-commit-install: ## Install pre-commit hooks (run once per clone)
+	$(PYTHON) -m pip install pre-commit --quiet
+	$(PYTHON) -m pre_commit install --install-hooks
+
+pre-commit-run: ## Run all pre-commit hooks against every tracked file
+	$(PYTHON) -m pre_commit run --all-files
 
 clean: ## Remove build artifacts
 	rm -rf dist/ build/ *.egg-info src/*.egg-info .pytest_cache .coverage htmlcov coverage.xml
