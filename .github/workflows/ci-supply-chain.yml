@@ -1,0 +1,67 @@
+name: CI Supply Chain
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-supply-chain-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  sbom-and-licenses:
+    name: SBOM + license gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Runtime deps only — the SBOM and license gate describe what ships
+      # to users, not what the dev environment needs. dev extras (bandit,
+      # python-Levenshtein, etc.) are intentionally excluded so a GPL'd
+      # dev tool doesn't break the gate.
+      - name: Install runtime deps
+        run: pip install -e .
+      - name: Install SBOM + license tooling
+        run: pip install cyclonedx-bom pip-licenses
+
+      - name: Generate CycloneDX SBOM
+        run: cyclonedx-py environment --of json -o sbom.json
+      - name: Upload SBOM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-${{ github.run_id }}
+          path: sbom.json
+
+      - name: License inventory
+        run: |
+          pip-licenses --format=csv --output-file=licenses.csv
+          cat licenses.csv
+      - name: Upload license inventory
+        uses: actions/upload-artifact@v4
+        with:
+          name: licenses-${{ github.run_id }}
+          path: licenses.csv
+
+      # Block GPL / AGPL family. Explicitly excludes LGPL (compatible with
+      # proprietary linking) and the "Lesser GPL" variant. If a runtime
+      # dep lands with a copyleft license, this gate fires before the
+      # SBOM gets published — buying time to swap the dep or seek waiver.
+      - name: Block GPL/AGPL runtime dependencies
+        run: |
+          set -euo pipefail
+          # CSV format: "Name","Version","License"
+          violations=$(
+            tail -n +2 licenses.csv \
+              | grep -iE '"(GPL-[0-9]|AGPL|GNU General Public|GNU Affero)' \
+              | grep -viE 'LGPL|GNU Lesser' \
+              || true
+          )
+          if [ -n "$violations" ]; then
+            echo "FAIL: GPL/AGPL runtime dependencies detected:"
+            echo "$violations"
+            exit 1
+          fi
+          echo "PASS: no GPL/AGPL runtime dependencies."
