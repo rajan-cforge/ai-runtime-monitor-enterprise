@@ -37,7 +37,7 @@ Coverage levels:
 | V1.1.2 Threat modeling performed | IMPLEMENTED | `docs/spec/THREAT-MODEL.md` documents STRIDE analysis across 5 trust boundaries |
 | V1.1.3 User stories with security ACs | PARTIAL | PRD includes security capabilities; not all user stories have per-AC security criteria |
 | V1.1.4 Trust boundaries identified | IMPLEMENTED | Threat model identifies B1-B5 boundaries with mitigations |
-| V1.1.5 Threat model includes data classification | PARTIAL | Threat model references plaintext sensitive data; formal data classification doc is planned for v1.0 |
+| V1.1.5 Threat model includes data classification | IMPLEMENTED | Threat model references plaintext sensitive data; formal data classification at [DATA-CLASSIFICATION.md](./DATA-CLASSIFICATION.md) |
 | V1.1.6 Centralized security controls | IMPLEMENTED | `security.py` centralizes CA generation, token handling, masking, hashing, permission enforcement |
 | V1.1.7 Secure-by-default architecture | IMPLEMENTED | Bind address defaults to 127.0.0.1; proxy is opt-in; control plane sync is opt-in |
 
@@ -108,7 +108,7 @@ Coverage levels:
 
 | Control | Status | Evidence |
 |---------|--------|----------|
-| V8.1.1 Sensitive data classification | PARTIAL | Plaintext snippets, masked values, and metadata distinguished in code; formal classification doc planned v1.0 |
+| V8.1.1 Sensitive data classification | IMPLEMENTED | Plaintext snippets, masked values, and metadata distinguished in code; formal classification at [DATA-CLASSIFICATION.md](./DATA-CLASSIFICATION.md) |
 | V8.1.6 Data minimization | IMPLEMENTED | Auto-purge strips plaintext from rows older than 30 days |
 | V8.2.1 Client-side caching limits | IMPLEMENTED | Dashboard uses localStorage only for the bearer token; no sensitive content cached client-side |
 | V8.2.2 Browser memory cleared | PARTIAL | Browser holds dashboard data while tab is open; cleared on tab close |
