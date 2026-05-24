@@ -11,8 +11,6 @@ import importlib.util
 import sys
 from pathlib import Path
 
-import pytest
-
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "coverage_ratchet.py"
 
 spec = importlib.util.spec_from_file_location("coverage_ratchet", SCRIPT)
@@ -27,9 +25,7 @@ def _write_cobertura(path: Path, line_rate: float, branch_rate: float | None = N
         attrs = f'line-rate="{line_rate}"'
     else:
         attrs = f'line-rate="{line_rate}" branch-rate="{branch_rate}"'
-    path.write_text(
-        f'<?xml version="1.0" ?>\n<coverage {attrs}><packages/></coverage>\n'
-    )
+    path.write_text(f'<?xml version="1.0" ?>\n<coverage {attrs}><packages/></coverage>\n')
     return path
 
 

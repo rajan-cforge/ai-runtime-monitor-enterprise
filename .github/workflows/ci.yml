@@ -81,11 +81,15 @@ jobs:
           git checkout "origin/${BASE_REF}"
           # --cov-fail-under=0 disables the hard gate for the BASE
           # measurement; the ratchet itself enforces the delta rule.
+          rm -rf .pytest_cache .coverage coverage.xml
           pytest --cov=claude_monitoring --cov-report=xml --cov-fail-under=0 -q
           mv coverage.xml coverage-base.xml
       - name: Coverage on PR branch
         run: |
           git checkout -
+          # Clear pytest+coverage state so the second run doesn't inherit
+          # cached node ids / partial .coverage data from the base run.
+          rm -rf .pytest_cache .coverage coverage.xml
           pytest --cov=claude_monitoring --cov-report=xml --cov-fail-under=0 -q
       - name: Ratchet check
         run: python scripts/coverage_ratchet.py coverage-base.xml coverage.xml

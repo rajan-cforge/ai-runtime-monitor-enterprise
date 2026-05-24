@@ -55,15 +55,9 @@ def ratchet(base_path: Path, pr_path: Path) -> int:
 
     failures: list[str] = []
     if line_drop > LINE_DROP_TOLERANCE:
-        failures.append(
-            f"line coverage dropped by {line_drop:.2f}% "
-            f"(tolerance {LINE_DROP_TOLERANCE:.2f}%)"
-        )
+        failures.append(f"line coverage dropped by {line_drop:.2f}% (tolerance {LINE_DROP_TOLERANCE:.2f}%)")
     if branch_drop > BRANCH_DROP_TOLERANCE:
-        failures.append(
-            f"branch coverage dropped by {branch_drop:.2f}% "
-            f"(tolerance {BRANCH_DROP_TOLERANCE:.2f}%)"
-        )
+        failures.append(f"branch coverage dropped by {branch_drop:.2f}% (tolerance {BRANCH_DROP_TOLERANCE:.2f}%)")
 
     if failures:
         print("\nFAIL:")
