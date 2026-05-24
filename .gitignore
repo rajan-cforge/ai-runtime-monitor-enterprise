@@ -45,7 +45,15 @@ MANIFEST
 .ruff_cache/
 
 # Claude
-.claude/
+.claude/*
+# But track checked-in agent definitions and rubrics — the project's
+# review-intelligence configuration (Layer 8 in docs/SSDLC_ENFORCEMENT.md).
+# Local state (settings.local.json, worktrees, scheduled_tasks.lock,
+# etc.) stays ignored.
+!.claude/agents/
+!.claude/agents/**
+!.claude/rubrics/
+!.claude/rubrics/**
 ai-runtime-monitor/
 
 # Environment files

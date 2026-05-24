@@ -34,6 +34,9 @@ multiple.
 
 ```
         ┌─────────────────────────────────────────────┐
+        │  Layer 8  Review intelligence (multi-agent) │
+        │           grader + architect + performance  │
+        ├─────────────────────────────────────────────┤
         │  Layer 7  Release gates                     │
         │           Notarization, SBOM, attestation   │
         ├─────────────────────────────────────────────┤
@@ -59,6 +62,20 @@ multiple.
 
 Lower layers fail faster and give faster feedback. Higher layers catch
 what lower layers miss. A failure at any layer blocks the work.
+
+### Layer 8: Review intelligence (multi-agent)
+
+Three subagents review every PR in parallel after CI passes:
+
+- **code-reviewer** — mechanical rubric, brevity-bound. Verdict: PASS / REVISE / BLOCK.
+- **architect-reviewer** (`.claude/agents/architect-reviewer.md`) — design quality, API choices, modularity, Protocol conformance. Reads `.claude/rubrics/architecture.md` and `.claude/rubrics/api-choices.md`. Verdict: PASS_WITH_NOTES / SUGGEST_REFACTOR / BLOCK_ARCHITECTURE.
+- **performance-reviewer** (`.claude/agents/performance-reviewer.md`) — algorithmic complexity, hot-path scrutiny, resource leaks, async correctness. Reads `.claude/rubrics/performance.md`. Verdict: PASS / WATCH / OPTIMIZE_RECOMMENDED.
+
+All three are bound by the same brevity policy: surface the 3-5 highest-impact items, never enumerate the full rubric. SUGGEST/WATCH/OPTIMIZE verdicts are advisory; BLOCK-class verdicts (which are rare by design) require human decision. The orchestrator collects all three verdicts and includes them in a single consolidated ping to the maintainer.
+
+The rubrics are the substance — agents are thin loops that apply them. When patterns drift, edit the rubric files; the agent definitions stay short and stable.
+
+Protocol conformance for the `Scanner` interface is enforced by `tests/architecture/test_scanner_conformance.py`, with a meta-test (`test_protocol_inventory.py`) that fails the build if a new Protocol is added without a matching conformance file.
 
 ## Inventory of enforcement controls
 
