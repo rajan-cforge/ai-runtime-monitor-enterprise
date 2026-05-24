@@ -80,9 +80,10 @@ The rotation checklist is removed since no rotation is planned.
 
 ## Disposition update — 2026-05-24
 
-All three `AKIAUSELFJEN*` access key IDs have been deleted from AWS by
-the operator (Rajan Yadav) prior to flipping the repository from
-private to public.
+All three `AKIAUSELFJEN*` access key IDs —
+`AKIAUSELFJEN3L7U3HF3`, `AKIAUSELFJEN7VLI55FK`, and
+`AKIAUSELFJENWMJ2JAVB` — have been deleted from AWS by the operator
+(Rajan Yadav) prior to flipping the repository from private to public.
 
 This supersedes the original "NOT ROTATING" disposition logged on
 2026-05-23. The original disposition was made under the assumption
