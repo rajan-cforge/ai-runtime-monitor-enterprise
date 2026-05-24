@@ -1,61 +1,390 @@
-# AI Runtime Monitor — Architecture & Design
+# Architecture
 
-## Overview
+**Last updated:** 2026-05-24
+**Status:** v0.2 launch candidate
+**Companion specs:** [PRD](./spec/PRD.md), [THREAT-MODEL](./spec/THREAT-MODEL.md), [SECURITY-MANIFEST](./spec/SECURITY-MANIFEST.md), [API-CONTRACTS](./spec/API-CONTRACTS.md)
 
-AI Runtime Monitor is a three-layer observability system for AI coding agents. It provides CrowdStrike-style visibility into what AI tools are doing on your machine: what they're reading, writing, executing, and sending over the network.
+This document is the technical architecture reference for AI Runtime Monitor (Vigil). The repo root `README.md` is the user entry point; this document describes how the system actually works.
+
+## 1. System overview
 
 ```
-                    +---------------------------+
-                    |     Web Dashboard :9081    |
-                    |  (dashboard.html via HTTP) |
-                    +---------------------------+
-                             |  REST API
-                    +---------------------------+
-                    |   DashboardHandler (HTTP)  |
-                    |   /api/sessions            |
-                    |   /api/stats               |
-                    |   /api/events              |
-                    |   /api/browser/*           |
-                    |   /api/processes           |
-                    +---------------------------+
-                             |  SQLite queries
-                    +---------------------------+
-                    |       monitor.db           |
-                    |   (SQLite + WAL mode)      |
-                    +---------------------------+
-                     ^       ^       ^       ^
-                     |       |       |       |
-              +------+  +---+--+  +-+----+ ++--------+
-              |Layer1a| |Layer1b| |Layer2 | |Layer 3  |
-              |JSONL  | |Network| |Files  | |Process  |
-              |Watcher| |Monitor| |Watch  | |Scanner  |
-              +-------+ +------+ +------+ +---------+
-                                                ^
-                                         +------+------+
-                                         | Layer 4     |
-                                         | Chrome      |
-                                         | History     |
-                                         +-------------+
+┌──────────────────┐   JSONL transcripts    ┌─────────────────┐    SQLite     ┌────────────────┐
+│  Claude Code     │ ─────────────────────→ │   monitor.py    │ ───────────→ │   Dashboard    │
+│  Cursor, Aider   │   ~/.claude/projects/  │   (scanners)    │  monitor.db  │   :9081        │
+│  (AI agents)     │                        └─────────────────┘              │   9 tabs       │
+└────────┬─────────┘                               │                        └────────────────┘
+         │                                         │ psutil                         ↑
+         │                                         ▼                               │
+         │                                  ┌─────────────┐                        │
+         │                                  │ Processes    │─── processes table ────┤
+         │                                  │ Connections  │─── connections table ──┤
+         │                                  │ File events  │─── file_events table ──┤
+         │                                  │ Chrome hist  │─── browser_sessions ───┘
+         │                                  └─────────────┘
+         │
+         │  HTTPS_PROXY                    ┌─────────────────┐   dual-write
+         └───────────────────────────────→ │   watch.py      │ ──────┐
+            (optional deep capture)        │   (mitmproxy    │       │
+                                           │    addon)       │       ▼
+                                           └────────┬────────┘  ┌──────────┐
+                                                    │           │monitor.db│──→ api_calls table
+                                                    ▼           └──────────┘
+                                              CSV session
+                                              files (primary)
+
+                                              ┌─────────────────┐  HTTPS + dual auth
+                                              │   sync.py       │ ──────────────→  Control Plane
+                                              │   (background)  │                  (Enterprise)
+                                              └─────────────────┘
 ```
 
-## Source Files
+## 2. Trust boundaries
 
-| File | Purpose | Lines |
-|---|---|---|
-| `monitor.py` | Main engine: all layers, dashboard HTTP server, JSONL processing | ~3000 |
-| `watch.py` | mitmproxy addon for deep API traffic capture (proxy mode) | ~800 |
-| `constants.py` | AI_HOSTS, SENSITIVE_PATTERNS, BROWSER_AI_PATTERNS, process lists | ~350 |
-| `config.py` | TOML config loading, CLI overrides, path resolution | ~300 |
-| `db.py` | SQLite schema, migrations, thread-safe connections | ~150 |
-| `utils.py` | `scan_sensitive()`, `is_ai_process()`, `extract_urls()` | ~120 |
-| `validators.py` | Deep validation for sensitive data (Luhn, entropy, JWT decode) | ~450 |
-| `report.py` | Markdown/HTML/CSV report generation | ~200 |
-| `dashboard.html` | Single-file SPA: session explorer, charts, alerts, live feed | ~1500 |
-| `watch_dashboard.html` | Proxy-mode dashboard for API traffic analysis | ~400 |
+The system crosses five trust boundaries. The threat model document analyzes each in detail; this section is the diagram.
 
-## Monitoring Layers
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ Developer's machine (single OS user)                                        │
+│                                                                             │
+│   ┌─────────────────┐         ┌─────────────────┐        ┌─────────────┐    │
+│   │  AI agents      │   B1    │  Vigil daemon   │   B2   │  SQLite DB  │    │
+│   │  (UNTRUSTED:    │ ──────→ │  (TRUSTED:      │ ─────→ │  (TRUSTED:  │    │
+│   │   could be      │  JSONL  │   our code)     │  WAL   │   chmod 600)│    │
+│   │   prompt-       │  files  │                 │        │             │    │
+│   │   injected)     │         │                 │        │             │    │
+│   └─────────────────┘         └────┬────────────┘        └─────────────┘    │
+│                                    │                                        │
+│   ┌─────────────────┐         B5   │   B1            ┌─────────────────┐    │
+│   │  Browser ext    │  ──────→     ▼  ←─────────     │  Dashboard UI   │    │
+│   │  (UNTRUSTED)    │         ┌─────────────────┐    │  (UNTRUSTED:    │    │
+│   └─────────────────┘         │ DashboardHandler│ ←──│   could be      │    │
+│                               │ (HTTP + token)  │    │   spoofed)      │    │
+│                               └────┬────────────┘    └─────────────────┘    │
+│                                    │                                        │
+│                                    │ B3: HTTPS + bearer tokens              │
+└────────────────────────────────────┼────────────────────────────────────────┘
+                                     ▼
+                          ┌─────────────────────┐
+                          │  Control Plane      │
+                          │  (separate trust    │
+                          │   domain — even     │
+                          │   from us)          │
+                          └─────────────────────┘
 
-### Layer 1a: JSONL Session Watcher (`JSONLSessionWatcher`)
+                          B4: Proxy ↔ AI APIs
+                          ──────────────────────────
+                          Cryptographically constrained via X.509 NameConstraints
+                          Can only sign leaf certs for ~10 AI domains
+```
+
+- **B1 — User/Agents ↔ Daemon (HTTP API):** Token-authenticated, constant-time compared, bound to 127.0.0.1 by default
+- **B2 — Daemon ↔ Database (file system):** Chmod 600/700 enforcement, WAL mode, planned SQLCipher in v0.3
+- **B3 — Daemon ↔ Control Plane (HTTPS):** Bearer token + per-endpoint key (bcrypt verified server-side), sanitized payloads
+- **B4 — Proxy ↔ AI APIs (TLS termination):** Cryptographic enforcement via X.509 NameConstraints, addon-level host filter
+- **B5 — Browser Extension ↔ Daemon (HTTP):** Same bearer token model as B1, treats extension data as untrusted
+
+Each boundary's STRIDE analysis is in [spec/THREAT-MODEL.md](./spec/THREAT-MODEL.md).
+
+## 3. Data flows
+
+### 3.1 Capture flow: JSONL → DB → Dashboard
+
+```
+AI agent             JSONLSessionWatcher         monitor.db          Dashboard
+──────────           ──────────────────         ──────────          ─────────
+Writes JSONL  ───→   Tail file        ───→     INSERT into
+event                Parse line                events, sessions
+                     Scan sensitive  ───→      INSERT into
+                     patterns                  events (sensitive_data)
+                                                                    Browser polls
+                                                                    /api/feed
+                                                                    Returns JSON
+                                                                    rows
+```
+
+Volume: each Claude Code turn produces ~5-15 JSONL events. A heavy session produces ~500 events. Total events per developer per day: 5,000-50,000.
+
+The "Scan sensitive patterns" step in this flow is detailed in §3.5 (filter chain: regex → validators → confidence filter → context-aware downgrade).
+
+### 3.2 Proxy capture flow: HTTPS → CSV + DB
+
+```
+AI agent             mitmproxy              ClaudeWatchAddon         monitor.db
+──────────           ────────               ────────────────         ──────────
+HTTP request  ───→   TLS terminate ───→     Filter host
+through proxy        with CA cert           Capture body
+                                            Scan sensitive
+                                            Write CSV       ───→    INSERT into
+                                            (primary)               api_calls
+                                                                    (dual-write,
+                                                                     best-effort)
+```
+
+The CSV is the source of truth. The DB write is best-effort and used by the dashboard for fast queries. If the DB write fails, the data is still in the CSV and recoverable.
+
+### 3.3 Control plane sync flow
+
+```
+SyncAgent           monitor.db          Sanitizer            Control Plane
+─────────           ──────────          ─────────            ──────────────
+Every 30s
+Read watermarks ───→ SELECT from
+                     sync_state
+SELECT new rows ───→ Events, sessions,
+                     api_calls
+                                        _sanitize_payload
+                                        (fail-closed)
+                                        Mask sensitive
+                                        Truncate oversized
+                                        Strip control chars
+                                                              POST /api/v1/ingest
+                                                              X-API-Key: <fleet>
+                                                              X-Endpoint-Key: <ep>
+                                                              ────────────────→
+                                        Receive response
+                                        Get endpoint_id
+Update watermarks ←── UPDATE sync_state
+                     last_synced_id = max_id_seen
+```
+
+On error: exponential backoff 1s → 2s → 4s → ... → 60s cap. Watermarks are never advanced if the POST fails (at-least-once semantics).
+
+### 3.4 Dashboard request flow
+
+```
+Browser              DashboardHandler         security.py            monitor.db
+───────              ────────────────         ──────────             ──────────
+GET /api/sessions
+?token=xxx
+                     verify_token() ───→      hmac.compare_digest
+                                              (constant-time)
+                     parse query params
+                                                                     SELECT ... ORDER BY
+                     execute query  ─────────────────────────────→   ... LIMIT ?
+                     ←─────────────────────────────────────────────  rows
+                     Serialize to JSON
+                     Write response
+Receive JSON
+Render in tab
+```
+
+Hot path: every dashboard refresh hits 3-5 endpoints. Round-trip latency < 50ms on a developer machine.
+
+### 3.5 Sensitive Data Detection Pipeline
+
+The data-flow walkthrough for sensitive-pattern matching as text moves from a captured event into the database. Preserved from the prior architecture revision because the per-stage filter chain doesn't appear elsewhere and reviewers ask about it.
+
+```
+Text input
+  |
+  v
+scan_sensitive() [utils.py]
+  |-- Regex match against SENSITIVE_PATTERNS (constants.py)
+  |-- Validator check (validators.py) — Luhn, entropy, JWT decode, etc.
+  |-- Only "high" / "medium" confidence matches pass
+  |
+  v
+_check_sensitive() [monitor.py]
+  |-- Filter KNOWN_EXAMPLE_SECRETS
+  |-- Filter phone_number when near "sender_id" (Telegram IDs)
+  |-- Filter credit_card when near API metadata keywords
+  |-- _adjust_alert_severity() — context-aware downgrade
+  |     |-- tool_result in /tests/ -> "low"
+  |     |-- assistant discussing security -> "medium"
+  |     |-- tool writes to test files -> "low"
+  |
+  v
+Store sensitive_data event in DB
+```
+
+## 4. Module dependency graph
+
+```
+                         ┌──────────┐
+                         │ config   │ ◀────── (everyone depends on this)
+                         └──────────┘
+                              ▲
+              ┌───────────────┼───────────────┐
+              │               │               │
+        ┌──────────┐    ┌──────────┐    ┌──────────┐
+        │constants │    │  utils   │    │ security │
+        └──────────┘    └──────────┘    └──────────┘
+              ▲               ▲               ▲
+              │               │               │
+              └───────┬───────┴───────┬───────┘
+                      │               │
+                ┌──────────┐    ┌──────────┐
+                │   db     │    │validators│
+                └──────────┘    └──────────┘
+                      ▲               ▲
+                      │               │
+        ┌─────────────┼───────────────┼─────────────┐
+        │             │               │             │
+   ┌──────────┐  ┌──────────┐    ┌──────────┐  ┌──────────┐
+   │  watch   │  │ monitor  │    │  sync    │  │  status  │
+   └──────────┘  └──────────┘    └──────────┘  └──────────┘
+                      ▲                              ▲
+                      │                              │
+              ┌──────────┐                     ┌──────────┐
+              │  wizard  │                     │lifecycle │
+              └──────────┘                     └──────────┘
+
+   Specialized scanners (called from monitor.py):
+   ┌──────────────┐  ┌──────────────┐  ┌──────────────┐
+   │supply_chain  │  │threat_intel  │  │vuln_scanner  │
+   └──────────────┘  └──────────────┘  └──────────────┘
+   ┌──────────────┐
+   │   report     │
+   └──────────────┘
+```
+
+Layer rules (enforced via planned import-linter):
+
+- **Foundation layer** (`config`, `constants`, `utils`) — no project imports
+- **Primitives layer** (`security`, `db`, `validators`) — depends only on foundation
+- **Scanners layer** (`supply_chain`, `threat_intel`, `vuln_scanner`, `report`) — depends on foundation + primitives
+- **Application layer** (`monitor`, `watch`, `sync`, `status`, `wizard`, `lifecycle`) — depends on everything below
+
+Forbidden imports (enforced post-Phase-3F):
+
+- Primitives layer importing from application layer (would create a cycle)
+- Foundation layer importing from anywhere else
+- Scanners importing from each other (each scanner is self-contained)
+
+## 5. Module structure
+
+```
+src/claude_monitoring/
+├── __init__.py           Package init
+├── config.py             TOML config loading, defaults, accessors
+├── constants.py          AI_HOSTS, SENSITIVE_PATTERNS, MODEL_PRICING, CSV_COLUMNS
+├── utils.py              estimate_cost, scan_sensitive, extract_file_paths, now_iso
+├── db.py                 init_db (7 tables + indexes), insert_api_call, get_thread_db
+├── security.py           CA generation, token mgmt, masking, purge, perm enforcement
+├── validators.py         Per-pattern validators (Luhn, JWT, entropy, etc.)
+├── lifecycle.py          Heartbeat, crash tracking, LaunchAgent integration
+├── monitor.py            Main entry point: scanners, dashboard HTTP server, API
+├── watch.py              mitmproxy addon, CLI analysis tools, proxy setup/verify
+├── sync.py               Control plane sync agent (background thread)
+├── status.py             ai-monitor --status diagnostic
+├── wizard.py             First-run setup + secure uninstall
+├── supply_chain.py       Package inventory across 19 managers
+├── threat_intel.py       ThreatFox, URLhaus, IOC ingestion
+├── vuln_scanner.py       pip-audit + OSV.dev integration
+├── report.py             Markdown / HTML / CSV report generation
+├── dashboard.html        Self-contained HTML/CSS/JS dashboard (embedded)
+└── watch_dashboard.html  Standalone watch session dashboard
+
+src/claude_monitoring/protocols/   (Phase 3F target)
+├── __init__.py
+├── scanner.py            Scanner Protocol + Finding + ScannerHealth
+├── collector.py          Collector Protocol (planned)
+└── detector.py           Detector Protocol (planned)
+
+src/claude_monitoring/scanners/    (Phase 3F target, M6 split)
+├── jsonl_session.py      Currently in monitor.py
+├── process.py            Currently in monitor.py
+├── network.py            Currently in monitor.py
+├── filesystem.py         Currently in monitor.py
+└── browser_history.py    Currently in monitor.py
+```
+
+## 6. Deployment model
+
+### 6.1 v0.2 — single-process daemon
+
+Everything runs in one Python process on the developer's machine:
+
+- Main thread: HTTP dashboard server
+- Scanner threads: one per scanner (JSONL, process, network, filesystem, browser history)
+- Watchdog thread: heartbeat updater
+- Optional sync thread: control plane delivery
+- Optional mitmproxy subprocess: HTTPS interception (when `--with-proxy`)
+
+The process is started by the user (`ai-monitor --start`) or by a macOS LaunchAgent on login.
+
+### 6.2 v0.2 — control plane (Enterprise tier)
+
+Customer-hosted server (single Docker container in v0.2, scaling out in v1.0). Receives ingest from N endpoints. Stores in PostgreSQL. Exposes a fleet dashboard.
+
+Authentication: bearer fleet API key (org-scoped) + bcrypt-verified per-endpoint key.
+
+### 6.3 v0.3+ — packaged distributions
+
+- Homebrew formula: `brew install vigil`
+- macOS .dmg with signed installer
+- Linux: Debian and RPM packages (best-effort; macOS is primary)
+- Windows: planned v0.3 (process and network monitoring); proxy in v0.4
+
+### 6.4 v1.0+ — cloud control plane (optional)
+
+A managed control plane SaaS for customers who don't want to self-host. Same API, same data model. Customer chooses self-hosted or cloud at procurement time.
+
+### 6.5 Startup Sequence
+
+The `start_monitoring()` entry point in `monitor.py` wires the daemon together. All scanner classes referenced below live in `monitor.py` — see Section 5 for the module inventory. Preserved from the prior architecture revision because the dependency order between watchers, scanners, and the HTTP server matters for operators debugging stuck startups.
+
+```
+start_monitoring()
+  |-- init_db() — create tables + migrations
+  |-- detect_plan_info() — check subscription tier
+  |-- Create JSONLSessionWatcher + watchdog observer
+  |     |-- Watch ~/.claude/projects/ (Claude Code)
+  |     |-- Watch ~/.openclaw/agents/main/sessions/ (OpenClaw)
+  |-- backfill_existing_sessions() — process all existing JSONL files (background thread)
+  |-- Create FileActivityHandler + watchdog observer
+  |-- Create ProcessScanner (2s loop, background thread)
+  |-- Create NetworkMonitor (5s loop, background thread)
+  |-- Create ChromeHistoryWatcher (60s loop, background thread)
+  |-- Start ReusableHTTPServer on port 9081
+  |-- Initial process scan + print found AI processes
+  |-- Block main thread (Ctrl+C to stop)
+```
+
+## 7. Data sources
+
+### Layer 1: JSONL Transcript Tailing (passive, no proxy needed)
+
+`JSONLSessionWatcher` tails `~/.claude/projects/*/` and `~/.openclaw/sessions/*/` for `.jsonl` files written by AI agents. Each line is a structured event (user message, assistant response, tool call, result). Extracted data:
+
+- Session metadata (model, cwd, start time, title)
+- Turn-by-turn token usage and cost
+- Tool calls (Bash, Read, Write, Edit, Glob, Grep, etc.)
+- Sensitive pattern detection in message content
+- File paths read/written
+
+Stored in: `sessions`, `events` tables.
+
+### Layer 2: System Monitoring (psutil + watchdog)
+
+- **ProcessScanner**: polls `psutil.process_iter()` every 30s for known AI process names (claude, cursor, copilot, aider, etc.)
+- **NetworkMonitor**: polls `psutil.net_connections()` for connections to known AI API hosts
+- **FileSystemWatcher**: uses `watchdog` FSEvents to detect file modifications
+- **ChromeHistoryWatcher**: reads Chrome's `History` SQLite DB for visits to AI service URLs
+
+Stored in: `processes`, `connections`, `file_events`, `browser_sessions` tables.
+
+### Layer 3: HTTPS Proxy Interception (optional, requires setup)
+
+`ClaudeWatchAddon` is a mitmproxy addon that intercepts HTTPS traffic when agents are configured with `HTTPS_PROXY`. Captures full request/response payloads:
+
+- Exact input/output/cache token counts from API response headers
+- System prompt character count
+- Message previews (user + assistant)
+- Tool call names and arguments
+- Sensitive pattern detection in payloads
+- Latency, HTTP status, stop reason, request ID
+
+Stored in: CSV files (primary) + `api_calls` table (dual-write, best-effort).
+
+### 7.5 Monitoring Layer Implementation Detail
+
+Per-scanner implementation reference. The high-altitude flow lives in Sections 3 and 7 above; this section is the concrete "how" each scanner is wired, what library it depends on, and where its data lands. Preserved from the prior architecture revision because the per-scanner subsections are the canonical answer to "how does Vigil actually see this?" — and they don't exist elsewhere in the spec corpus.
+
+Section 7 above uses "Layer 1/2/3" for the data-source taxonomy (JSONL / system-monitoring / proxy). The subsections below use the scanner class names directly — `JSONLSessionWatcher`, `NetworkMonitor`, `FileActivityHandler`, `ProcessScanner`, `ChromeHistoryWatcher` — to avoid colliding with Section 7's numbering.
+
+#### JSONL Session Watcher (`JSONLSessionWatcher`)
 
 **What it monitors:** Claude Code and OpenClaw JSONL transcript files.
 
@@ -72,7 +401,7 @@ AI Runtime Monitor is a three-layer observability system for AI coding agents. I
    - `stopReason` -> `stop_reason`
    - `usage.input` -> `usage.input_tokens`, `cacheRead` -> `cache_read_input_tokens`
 5. Events are stored in the `events` table; session metadata updated in `sessions` table
-6. Text content is scanned for sensitive data patterns via `_check_sensitive()`
+6. Text content is scanned for sensitive data patterns via `_check_sensitive()` (see Section 3.5)
 
 **Data flow:**
 ```
@@ -88,7 +417,7 @@ JSONL file change -> watchdog event -> process_jsonl_file()
 
 **Backfill:** On startup, `backfill_existing_sessions()` scans all existing JSONL files to populate the database with historical data.
 
-### Layer 1b: Network Monitor (`NetworkMonitor`)
+#### Network Monitor (`NetworkMonitor`)
 
 **What it monitors:** Active TCP connections from AI processes.
 
@@ -101,7 +430,7 @@ JSONL file change -> watchdog event -> process_jsonl_file()
 
 **Known AI hosts tracked:** Anthropic, OpenAI, Google/Gemini, AWS Bedrock, Mistral, Cohere, Groq, Together AI, Perplexity, DeepSeek, xAI/Grok, HuggingFace, Replicate, Fireworks, Ollama (local), LM Studio (local), OpenClaw (local), OpenRouter, Azure OpenAI, plus telemetry services (Sentry, Statsig, Segment, Amplitude).
 
-### Layer 2: File Activity Monitor (`FileActivityHandler`)
+#### File Activity Monitor (`FileActivityHandler`)
 
 **What it monitors:** File system operations in project directories.
 
@@ -111,7 +440,7 @@ JSONL file change -> watchdog event -> process_jsonl_file()
 3. Records file creates, modifications, and deletes in the `file_events` table
 4. Filters out noise: `.git/`, `__pycache__/`, `node_modules/`, `.pyc` files
 
-### Layer 3: Process Scanner (`ProcessScanner`)
+#### Process Scanner (`ProcessScanner`)
 
 **What it monitors:** Running AI-related processes.
 
@@ -125,7 +454,7 @@ JSONL file change -> watchdog event -> process_jsonl_file()
 5. Records CPU%, memory%, cmdline in `processes` table
 6. Skips macOS system services (`/System/Library/`, `/usr/libexec/`)
 
-### Layer 4: Chrome History Watcher (`ChromeHistoryWatcher`)
+#### Chrome History Watcher (`ChromeHistoryWatcher`)
 
 **What it monitors:** Browser visits to AI services (ChatGPT, Gemini, Claude Web, etc.).
 
@@ -170,133 +499,321 @@ JSONL file change -> watchdog event -> process_jsonl_file()
 - No content capture — only URLs and titles
 - Conversation grouping depends on URL pattern; services that don't put IDs in URLs show as individual visits
 
-## Database Schema
+## 8. Database schema
 
-```sql
--- Agent sessions (Claude Code, OpenClaw, etc.)
-sessions (session_id PK, start_time, cwd, model, total_cost,
-          total_input_tokens, total_output_tokens, total_turns,
-          jsonl_path, last_activity, title)
+All tables live in `~/claude_watch_output/monitor.db` (SQLite, WAL mode).
 
--- All events from all layers
-events (id PK, timestamp, session_id, event_type, source_layer, data_json)
+### sessions
+| Column | Type | Description |
+|--------|------|-------------|
+| session_id | TEXT PK | Claude session UUID |
+| start_time | TEXT | ISO 8601 timestamp |
+| cwd | TEXT | Working directory |
+| model | TEXT | Model name (claude-sonnet-4, etc.) |
+| total_cost | REAL | Cumulative estimated cost USD |
+| total_input_tokens | INTEGER | Cumulative input tokens |
+| total_output_tokens | INTEGER | Cumulative output tokens |
+| total_turns | INTEGER | Number of conversation turns |
+| jsonl_path | TEXT | Path to source JSONL file |
+| last_activity | TEXT | Most recent event timestamp |
+| title | TEXT | Session title / first user message |
 
--- Network connections from AI processes
-connections (id PK, timestamp, pid, process_name, remote_host,
-             remote_port, status, service)
+### events
+| Column | Type | Description |
+|--------|------|-------------|
+| id | INTEGER PK | Auto-increment |
+| timestamp | TEXT | ISO 8601 |
+| session_id | TEXT | FK to sessions |
+| event_type | TEXT | user_prompt, assistant_response, tool_use, token_usage, sensitive_data |
+| source_layer | TEXT | jsonl, network, process, filesystem |
+| data_json | TEXT | JSON payload with event-specific fields |
 
--- Running AI processes
-processes (id PK, pid, name, cmdline, start_time, end_time,
-           cpu_percent, memory_percent, status)
+### api_calls
+| Column | Type | Description |
+|--------|------|-------------|
+| id | INTEGER PK | Auto-increment |
+| timestamp | TEXT | ISO 8601 |
+| session_id | TEXT | Claude session ID |
+| turn_id | TEXT | Turn identifier |
+| turn_number | INTEGER | Sequential turn number |
+| destination_host | TEXT | API hostname |
+| destination_service | TEXT | Service classifier (anthropic_api, openai_api, etc.) |
+| endpoint_path | TEXT | /v1/messages, /v1/chat/completions, etc. |
+| http_method | TEXT | POST, GET |
+| http_status | INTEGER | 200, 429, 500, etc. |
+| model | TEXT | Model name |
+| stream | TEXT | true/false |
+| input_tokens | INTEGER | Input token count |
+| output_tokens | INTEGER | Output token count |
+| cache_read_tokens | INTEGER | Cache read token count |
+| cache_write_tokens | INTEGER | Cache write token count |
+| estimated_cost_usd | REAL | Estimated cost |
+| request_size_bytes | INTEGER | HTTP request body size |
+| response_size_bytes | INTEGER | HTTP response body size |
+| latency_ms | INTEGER | Request latency |
+| num_messages | INTEGER | Messages in conversation |
+| system_prompt_chars | INTEGER | System prompt length |
+| last_user_msg_preview | TEXT | Truncated last user message |
+| assistant_msg_preview | TEXT | Truncated assistant response |
+| tool_calls | TEXT | JSON list of tool call names |
+| tool_call_count | INTEGER | Number of tool calls |
+| bash_commands | TEXT | Bash commands extracted |
+| files_read | TEXT | Files read in this turn |
+| files_written | TEXT | Files written in this turn |
+| urls_fetched | TEXT | URLs fetched |
+| sensitive_patterns | TEXT | Detected sensitive patterns |
+| sensitive_pattern_count | INTEGER | Count of sensitive patterns |
+| stop_reason | TEXT | end_turn, tool_use, max_tokens |
+| request_id | TEXT | API request ID header |
 
--- File operations in project directories
-file_events (id PK, timestamp, path, operation, session_id, size)
+### processes
+| Column | Type | Description |
+|--------|------|-------------|
+| id | INTEGER PK | Auto-increment |
+| pid | INTEGER | OS process ID |
+| name | TEXT | Process name |
+| cmdline | TEXT | Full command line |
+| start_time | TEXT | Process start time |
+| end_time | TEXT | Process end time (if terminated) |
+| cpu_percent | REAL | CPU usage percentage |
+| memory_percent | REAL | Memory usage percentage |
+| status | TEXT | running / terminated |
 
--- Browser visits to AI services
-browser_sessions (id PK, service, url, title, conversation_id,
-                  visit_time, duration_seconds, foreground_seconds,
-                  tab_id, window_id)
+### connections
+| Column | Type | Description |
+|--------|------|-------------|
+| id | INTEGER PK | Auto-increment |
+| timestamp | TEXT | When connection was observed |
+| pid | INTEGER | Process ID |
+| process_name | TEXT | Process name |
+| remote_host | TEXT | Remote IP/hostname |
+| remote_port | INTEGER | Remote port |
+| status | TEXT | ESTABLISHED, etc. |
+| service | TEXT | Classified service name |
 
--- Deep API traffic capture (proxy mode only)
-api_calls (id PK, timestamp, session_id, turn_id, turn_number,
-           destination_host, destination_service, endpoint_path,
-           http_method, http_status, model, stream, input_tokens,
-           output_tokens, cache_read_tokens, cache_write_tokens, ...)
+### file_events
+| Column | Type | Description |
+|--------|------|-------------|
+| id | INTEGER PK | Auto-increment |
+| timestamp | TEXT | ISO 8601 |
+| path | TEXT | File path |
+| operation | TEXT | created, modified, deleted |
+| session_id | TEXT | Associated session |
+| size | INTEGER | File size in bytes |
+
+### browser_sessions
+| Column | Type | Description |
+|--------|------|-------------|
+| id | INTEGER PK | Auto-increment |
+| service | TEXT | ChatGPT, Gemini, Claude Web, etc. |
+| url | TEXT | Full URL |
+| title | TEXT | Page title |
+| conversation_id | TEXT | Extracted conversation/chat ID |
+| visit_time | TEXT | ISO 8601 |
+| duration_seconds | REAL | Time on page |
+| foreground_seconds | REAL | Active tab time |
+| tab_id | INTEGER | Chrome tab ID |
+| window_id | INTEGER | Chrome window ID |
+
+### sync_state (control plane integration)
+| Column | Type | Description |
+|--------|------|-------------|
+| table_name | TEXT PK | Source table name (sessions, events, api_calls) |
+| last_synced_id | INTEGER | Highest rowid synced to control plane |
+| last_sync_time | TEXT | ISO 8601 of last successful sync |
+
+### Indexes
+
+- `idx_events_ts` — events(timestamp)
+- `idx_events_session` — events(session_id)
+- `idx_events_type` — events(event_type)
+- `idx_sessions_last` — sessions(last_activity)
+- `idx_file_events_ts` — file_events(timestamp)
+- `idx_processes_pid` — processes(pid)
+- `idx_browser_conv` — browser_sessions(conversation_id)
+- `idx_browser_visit` — browser_sessions(visit_time)
+- `idx_connections_pid` — connections(pid)
+- `idx_connections_ts` — connections(timestamp)
+- `idx_api_calls_ts` — api_calls(timestamp)
+- `idx_api_calls_session` — api_calls(session_id)
+- `idx_api_calls_service` — api_calls(destination_service)
+
+## 9. API reference
+
+All endpoints are served by the built-in HTTP server on the dashboard port (default 9081). Responses are JSON unless noted.
+
+Full machine-readable spec: [spec/openapi.yaml](./spec/openapi.yaml). Human narrative: [spec/API-CONTRACTS.md](./spec/API-CONTRACTS.md).
+
+### Sessions
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/sessions` | List sessions. Params: `search`, `sort` (recent/cost/tokens), `limit`, `offset` |
+| GET | `/api/session/<id>` | Session detail with metadata + event summary |
+| GET | `/api/session/<id>/turns` | Turn-by-turn breakdown for Deep Dive |
+| GET | `/api/session/<id>/traffic` | API calls for a specific session |
+
+### Monitoring
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/stats` | Aggregate stats (process count, connections, files, cost) |
+| GET | `/api/feed` | Live event feed. Params: `limit`, `offset` |
+| GET | `/api/processes` | Running/recent AI processes |
+| GET | `/api/process/<pid>` | Process detail |
+| GET | `/api/connections` | Network connections |
+| GET | `/api/files` | File events. Params: `limit`, `offset` |
+
+### API Traffic (from proxy)
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/traffic` | Paginated API call list. Params: `service`, `limit`, `offset` |
+| GET | `/api/traffic/stats` | Aggregated traffic stats (total calls, cost, tokens by service/model) |
+
+### Security
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/alerts` | Sensitive data alerts. Params: `severity`, `category`, `session_id`, `limit`, `offset` |
+
+### Browser
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/browser` | Browser AI activity summary |
+| GET | `/api/browser/sessions` | List browser AI sessions |
+| GET | `/api/browser/session/<conversation_id>` | Browser session detail |
+
+### Timeline & Export
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/activity/timeline` | Unified chronological feed across all sources |
+| GET | `/api/export` | Export data. Params: `type` (events/alerts/connections/sessions), `format` (json/ndjson/csv), `session_id` |
+
+## 10. Configuration
+
+Config file: `~/.config/ai-runtime-monitor/config.toml` (XDG), fallback `~/claude_watch_output/config.toml`.
+
+Generate a default config:
+```bash
+ai-monitor --init-config
 ```
 
-## Dashboard Architecture
+Priority: CLI flags > config file > built-in defaults.
 
-The dashboard is a single HTML file (`dashboard.html`) that serves as a self-contained SPA:
+See [config.py](src/claude_monitoring/config.py) for the full default config template.
 
-- **No build step** — vanilla JS, no framework
-- **Chart.js** for graphs (loaded from CDN)
-- **Polling** — fetches `/api/stats` and `/api/sessions` periodically
-- **Live feed** — in-memory deque (`live_feed`, 500 items) pushed via polling
+### Key settings
 
-### Dashboard Tabs
-1. **Overview** — stat cards (sessions, events, tokens, alerts, processes, browser visits), token timeline chart, tool usage chart, browser AI usage chart
-2. **Session Explorer** — unified list of CLI sessions + browser sessions, searchable, sortable; click to see full event timeline
-3. **Processes** — live AI process list with CPU/memory
-4. **Network** — active connections to AI hosts
-5. **Alerts** — sensitive data detections with severity filtering
-6. **Live Feed** — real-time event stream
+| Section | Key | Default | Description |
+|---------|-----|---------|-------------|
+| server | dashboard_port | 9081 | Dashboard HTTP port |
+| server | proxy_port | 9080 | mitmproxy HTTPS proxy port |
+| server | bind_address | 127.0.0.1 | Bind address (localhost only by default) |
+| paths | output_dir | ~/claude_watch_output | Data directory |
+| paths | db_name | monitor.db | SQLite database filename |
+| proxy | enabled | false | Start proxy with dashboard |
+| proxy | cert_path | ~/.mitmproxy/mitmproxy-ca-cert.pem | CA cert location |
 
-### Browser Sessions in Dashboard
-Browser sessions appear in the Session Explorer alongside CLI sessions:
-- Purple left border and "service badge" (e.g., "ChatGPT", "Gemini")
-- Shows visit count instead of turn count
-- Shows duration instead of token count
-- Click opens a detail view with:
-  - All visits to that conversation
-  - Temporally correlated network connections (within +/- 5 minutes)
+## 11. Security model
 
-### API Endpoints
-| Endpoint | Purpose |
-|---|---|
-| `GET /api/stats` | Overview stats: totals, timelines, browser daily breakdown |
-| `GET /api/sessions` | Session list (CLI + browser when `include_browser=true`) |
-| `GET /api/session/{id}` | Session detail with events |
-| `GET /api/browser` | Raw browser visit list |
-| `GET /api/browser/sessions` | Browser visits grouped by conversation |
-| `GET /api/browser/session/{conv_id}` | Browser conversation detail + correlated connections |
-| `GET /api/processes` | Running AI processes |
-| `GET /api/connections` | Active network connections |
-| `GET /api/events` | Event stream for a session |
-| `GET /api/alerts` | Sensitive data alerts |
-| `GET /api/feed` | Live event feed |
+- Dashboard and proxy bind to `127.0.0.1` by default (localhost only)
+- Remote access requires explicit `--bind 0.0.0.0` opt-in
+- mitmproxy CA cert is scoped to AI domains via X.509 NameConstraints (cryptographic enforcement)
+- No secrets stored in config file
+- Config file permissions are checked (warns if world-readable)
+- `proxy_env.sh` is generated with `chmod 600`
+- All SQL queries use parameterized statements (no string interpolation with user input)
+- Dashboard authentication via per-install bearer token (constant-time compared)
+- Sensitive data masked at capture, auto-purged after 30 days
+- Sync agent sanitizes payloads as defense-in-depth before transmission
 
-## Sensitive Data Detection Pipeline
+Full security control inventory: [spec/SECURITY-MANIFEST.md](./spec/SECURITY-MANIFEST.md). STRIDE threat analysis: [spec/THREAT-MODEL.md](./spec/THREAT-MODEL.md).
 
+## 12. Extensibility points
+
+The product is designed for these extension paths:
+
+### 12.1 Adding a new AI service to detect
+
+- Add the hostname to `constants.AI_HOSTS` and `constants.AI_PROXY_DOMAINS`
+- Add a service classifier rule in `constants.SERVICE_CLASSIFICATION`
+- No code changes elsewhere; the scanners and proxy auto-pick up the new entries
+- Update `docs/spec/PRD.md` capability list (caught by spec-requirements CI)
+
+### 12.2 Adding a new scanner (e.g., container monitoring)
+
+Post-Phase-3F (M6 split), this becomes a clean path:
+
+- Create a class in `scanners/` implementing the `Scanner` Protocol from `protocols/scanner.py`
+- Add to `monitor.py::run` scanner list
+- Add conformance test to `tests/architecture/`
+- Update `docs/spec/functional/<scanner_name>.md`
+
+### 12.3 Adding a new sensitive data pattern
+
+- Add to `constants.SENSITIVE_PATTERNS` with name, regex, severity, category
+- Optionally add a validator to `validators.py` to reduce false positives
+- Add unit test with positive and negative examples
+
+### 12.4 Adding a new API endpoint
+
+- Add the route handler method to `DashboardHandler`
+- Dispatch from `do_GET` (or `do_POST` for control plane)
+- Add to `docs/spec/openapi.yaml` (CI enforces this)
+- Add to `docs/spec/API-CONTRACTS.md` if the contract has design rationale
+
+### 12.5 Supporting a new AI agent for configuration
+
+- Add an entry to the per-agent config table in `watch.py::cli_configure`
+- Document the proxy injection method (shell_rc, app_config, env_file)
+- Add unit test with mocked shell profile
+
+### 12.6 Adding a new validator
+
+- Add a function to `validators.py` that takes `(matched_text, full_text)` and returns `{"valid": bool, "confidence": "high"|"medium"|"low"}`
+- Register in `VALIDATORS` dict keyed by pattern name
+- Add unit tests with positive cases (real-format values) and negative cases (lookalikes)
+
+## 13. CLI commands
+
+### ai-monitor (main dashboard)
 ```
-Text input
-  |
-  v
-scan_sensitive() [utils.py]
-  |-- Regex match against SENSITIVE_PATTERNS (constants.py)
-  |-- Validator check (validators.py) - Luhn, entropy, JWT decode, etc.
-  |-- Only "high" / "medium" confidence matches pass
-  |
-  v
-_check_sensitive() [monitor.py]
-  |-- Filter KNOWN_EXAMPLE_SECRETS
-  |-- Filter phone_number when near "sender_id" (Telegram IDs)
-  |-- Filter credit_card when near API metadata keywords
-  |-- _adjust_alert_severity() — context-aware downgrade
-  |     |-- tool_result in /tests/ -> "low"
-  |     |-- assistant discussing security -> "medium"
-  |     |-- tool writes to test files -> "low"
-  |
-  v
-Store sensitive_data event in DB
+ai-monitor --start              # Start monitoring + dashboard
+ai-monitor --start --with-proxy # Start with HTTPS proxy
+ai-monitor --port 9082          # Custom port
+ai-monitor --status             # Diagnostic report
+ai-monitor --status-json        # Machine-readable status
+ai-monitor --install-agent      # macOS LaunchAgent (auto-start)
+ai-monitor --uninstall-agent    # Remove LaunchAgent
+ai-monitor --init-config        # Generate config.toml
+ai-monitor --setup              # Run first-run wizard (force)
+ai-monitor --purge              # Secure uninstall
 ```
 
-## Startup Sequence
-
+### claude-watch (proxy + analysis)
 ```
-start_monitoring()
-  |-- init_db() — create tables + migrations
-  |-- detect_plan_info() — check subscription tier
-  |-- Create JSONLSessionWatcher + watchdog observer
-  |     |-- Watch ~/.claude/projects/ (Claude Code)
-  |     |-- Watch ~/.openclaw/agents/main/sessions/ (OpenClaw)
-  |-- backfill_existing_sessions() — process all existing JSONL files (background thread)
-  |-- Create FileActivityHandler + watchdog observer
-  |-- Create ProcessScanner (2s loop, background thread)
-  |-- Create NetworkMonitor (5s loop, background thread)
-  |-- Create ChromeHistoryWatcher (60s loop, background thread)
-  |-- Start ReusableHTTPServer on port 9081
-  |-- Initial process scan + print found AI processes
-  |-- Block main thread (Ctrl+C to stop)
+claude-watch --setup             # First-time: install mitmproxy, trust cert
+claude-watch --start             # Start mitmproxy interceptor
+claude-watch --verify            # Health check proxy setup
+claude-watch --configure <agent> # Configure HTTPS_PROXY for an agent
+claude-watch --unconfigure       # Remove proxy config from shell
+claude-watch --analyze           # Terminal analysis of latest session
+claude-watch --plot              # Generate PNG charts
+claude-watch --dashboard         # Standalone web dashboard
+claude-watch --scan              # Detect running AI agents
+claude-watch --generate-test     # Create synthetic test data
 ```
 
-## Test Coverage
+## 14. Testing posture
 
-682 tests across 15 test files:
-- `test_jsonl_watcher.py` — 113 tests (JSONL processing, OpenClaw normalization, sensitive data filtering)
-- `test_monitor_main.py` — 51 tests (Chrome history, process scanning, dashboard APIs)
-- `test_validators.py` — 85 tests (Luhn, entropy, all 12 validators, integration)
-- `test_config.py` — 57 tests
-- `test_watch_parsing.py` — 80 tests (API response parsing)
-- `test_sensitive.py` — 20 tests
-- `test_chrome.py` — 9 tests (timestamp conversion, URL parsing)
-- And more...
+Test coverage is tracked via per-file ratchet (see PR #27) and reported in the CI workflow output. Per-module testing detail lives in the corresponding `docs/spec/functional/<module>.md`.
+
+> The prior architecture revision included a "Test Coverage" section enumerating test counts and per-file inventories. That section was dropped here because the counts went stale within a sprint and the ratchet + per-module specs are the canonical homes.
+
+## 15. Related documents
+
+- [README.md](./README.md) — product entry point for users
+- [spec/PRD.md](./spec/PRD.md) — product requirements, target users, roadmap
+- [spec/openapi.yaml](./spec/openapi.yaml) — machine-readable API spec
+- [spec/API-CONTRACTS.md](./spec/API-CONTRACTS.md) — API design narrative
+- [spec/THREAT-MODEL.md](./spec/THREAT-MODEL.md) — STRIDE analysis
+- [spec/SECURITY-MANIFEST.md](./spec/SECURITY-MANIFEST.md) — controls mapped to OWASP ASVS / NIST SSDF
+- [spec/functional/](./spec/functional/) — per-module functional specs
+- [SSDLC_ENFORCEMENT.md](./SSDLC_ENFORCEMENT.md) — engineering process and CI controls
