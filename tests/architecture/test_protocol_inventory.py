@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import inspect
 from pathlib import Path
-from typing import get_type_hints
 
 from claude_monitoring import protocols
 
@@ -62,16 +61,18 @@ def test_data_classes_in_protocols_module_not_treated_as_protocols() -> None:
     assert _is_protocol_class(protocols.Scanner)
 
 
-def test_get_type_hints_works_on_exports() -> None:
-    """Sanity: every exported name resolves to a usable object.
+def test_every_exported_name_resolves() -> None:
+    """Sanity: every name in ``__all__`` resolves to a real attribute.
 
     Catches the case where someone adds a name to ``__all__`` but
     forgets to import it, which would crash at first ``from
     claude_monitoring.protocols import X``.
+
+    Avoids ``typing.get_type_hints`` here because resolving PEP 604
+    annotations (``float | None``) under Python 3.9 raises at runtime
+    even with ``from __future__ import annotations`` — the future
+    import only defers parsing, not evaluation.
     """
     for name in protocols.__all__:
         obj = getattr(protocols, name)
-        assert obj is not None
-        if inspect.isclass(obj):
-            # get_type_hints raises if forward refs are unresolved.
-            get_type_hints(obj)
+        assert obj is not None, f"protocols.__all__ lists {name!r} but it's None"
