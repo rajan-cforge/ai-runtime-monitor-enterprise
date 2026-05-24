@@ -7,7 +7,7 @@ name = "ai-runtime-monitor"
 dynamic = ["version"]
 description = "CrowdStrike-style runtime monitor for AI coding agents"
 readme = "README.md"
-license = { text = "Proprietary" }
+license = { text = "Apache-2.0" }
 requires-python = ">=3.9"
 authors = [{ name = "GoCloudForge, Inc." }]
 keywords = ["ai", "monitoring", "security", "observability", "supply-chain"]
@@ -16,7 +16,7 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Topic :: Security",
     "Topic :: System :: Monitoring",
-    "License :: Other/Proprietary License",
+    "License :: OSI Approved :: Apache Software License",
 ]
 dependencies = ["psutil>=5.9.0", "watchdog>=3.0", "cryptography>=42.0"]
 
@@ -38,10 +38,10 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/rajan-cforge/ai-runtime-monitor"
-Repository = "https://github.com/rajan-cforge/ai-runtime-monitor"
-Issues = "https://github.com/rajan-cforge/ai-runtime-monitor/issues"
-Changelog = "https://github.com/rajan-cforge/ai-runtime-monitor/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/rajan-cforge/ai-runtime-monitor-enterprise"
+Repository = "https://github.com/rajan-cforge/ai-runtime-monitor-enterprise"
+Issues = "https://github.com/rajan-cforge/ai-runtime-monitor-enterprise/issues"
+Changelog = "https://github.com/rajan-cforge/ai-runtime-monitor-enterprise/blob/main/CHANGELOG.md"
 
 [project.scripts]
 ai-monitor = "claude_monitoring.monitor:main"

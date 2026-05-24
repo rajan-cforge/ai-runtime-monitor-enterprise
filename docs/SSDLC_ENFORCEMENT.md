@@ -426,14 +426,28 @@ what lower layers miss. A failure at any layer blocks the work.
 - *Status*: pattern documented after the false positive; next probe
   must reference and follow.
 
-**Rule: incident response goes through doc PRs.**
+**Rule: incident response goes through doc records — public/private split required.**
 
-- *Why*: incidents need permanent records, not Slack messages.
-- *Mechanism*: `docs/incidents/<date>-<title>.md` for each. Created
-  via branch + PR. Disposition decisions documented in the same file.
-- *Reversibility*: disposition decisions explicit. If "not rotating"
-  proves wrong later, the decision is in the file and can be reopened
-  via a new PR.
+- *Why*: incidents need permanent records, not Slack messages. But
+  records that contain real credential values, vendor names, or
+  customer session IDs do NOT belong in a public repo even if the
+  values are inert. Mixing security-incident details with public
+  source is a category error.
+- *Mechanism — private*: real-credential incidents and operational
+  records live in **local private notes** at
+  `~/Documents/vigil-notes/incidents/<YYYY-MM-DD>-<slug>.md`. Each
+  record carries the same fields (symptom, cause, recovery,
+  disposition, reversibility) — they're just kept off the public repo.
+- *Mechanism — public*: only aggregated, value-free learnings come
+  into the public repo (e.g. an audit-doc table that says "Detector
+  X had Y% TP rate on N samples" with no individual values, or a
+  changelog entry "fixed false-positive class FP-7"). Build-break /
+  CI-regression incidents that contain no sensitive content may
+  still live in `docs/incidents/<date>-<title>.md`.
+- *Reversibility*: disposition decisions explicit in the private
+  record. If "not rotating" proves wrong later, reopen the private
+  incident with the new disposition. Public visibility never gates
+  the recovery path.
 
 ### Release controls (Phase 3G, post-launch)
 
@@ -586,8 +600,9 @@ IS the code.
 - `docs/SPRINT_ONE_WEEK.md` — current sprint state and phase plan
 - `docs/COMMIT_HISTORY_EXCEPTIONS.md` — historical exceptions to
   current policy
-- `docs/incidents/` — incident records
-- `docs/ANTFOODING_LOG.md` — daily antfooding observations
+- `docs/incidents/` — public-safe incident records (CI breaks, build
+  regressions). Real-credential incidents live in private notes at
+  `~/Documents/vigil-notes/incidents/` outside the repo.
 - `.claude/agents/` — subagent definitions
 - `.claude/skills/` — reusable workflow skills with Gotchas sections
 - `.claude/rubrics/` — per-lane grading rubrics

@@ -61,3 +61,7 @@ node_modules/
 # Pitch decks and binary planning artifacts (kept locally, not in git)
 *.pptx
 *.pdf
+
+# Local-only operational notes, never committed
+docs/notes/
+docs/internal/
