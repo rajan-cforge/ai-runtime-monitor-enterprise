@@ -78,6 +78,30 @@ usage anomaly, rotate immediately and reopen this incident.
 
 The rotation checklist is removed since no rotation is planned.
 
+## Disposition update — 2026-05-24
+
+All three `AKIAUSELFJEN*` access key IDs have been deleted from AWS by
+the operator (Rajan Yadav) prior to flipping the repository from
+private to public.
+
+This supersedes the original "NOT ROTATING" disposition logged on
+2026-05-23. The original disposition was made under the assumption
+that the repository would remain private and that no abuse evidence
+existed. The decision to go public required reconsidering the
+residual risk: even if the keys were demonstrably inert, public
+exposure of real-format key IDs creates noise for AWS abuse-detection
+systems and provides zero defensible benefit to the project.
+
+Deletion was performed via AWS IAM console on 2026-05-24 across the
+affected AWS account(s). The talosAI repository's CI pipeline may
+temporarily fail on workflows that referenced these keys; this
+breakage is acceptable and will be repaired in a follow-up by
+rotating to fresh keys in talosAI's GitHub Actions secrets.
+
+The keys remain in this incident document and in `tests/test_*.py`
+fixtures as historical reference. They cannot authenticate against
+any AWS resource as of this disposition update.
+
 ## Significance for Vigil
 
 This incident is also the strongest validation signal Vigil has
