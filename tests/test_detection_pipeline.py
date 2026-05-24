@@ -34,8 +34,8 @@ class TestConfidenceScoring:
     def test_assistant_discussing_keys_is_low(self):
         from claude_monitoring.monitor import JSONLSessionWatcher
 
-        text = "maskSecrets() redacts AWS keys like AKIAUSEL...JAVB from the dashboard"
-        conf = JSONLSessionWatcher._calculate_confidence("assistant_response", "aws_key", "AKIAUSELFJENWMJ2JAVB", text)
+        text = "maskSecrets() redacts AWS keys like AKIATEST...XXXX from the dashboard"
+        conf = JSONLSessionWatcher._calculate_confidence("assistant_response", "aws_key", "AKIATESTFIXTUREXXXXX", text)
         assert conf == "low"
 
     def test_assistant_default_is_low(self):
@@ -63,8 +63,8 @@ class TestConfidenceScoring:
     def test_real_key_in_aws_command_is_high(self):
         from claude_monitoring.monitor import JSONLSessionWatcher
 
-        text = "aws iam delete-access-key --access-key-id AKIAUSELFJENWMJ2JAVB"
-        conf = JSONLSessionWatcher._calculate_confidence("tool:Bash", "aws_key", "AKIAUSELFJENWMJ2JAVB", text)
+        text = "aws iam delete-access-key --access-key-id AKIATESTFIXTUREXXXXX"
+        conf = JSONLSessionWatcher._calculate_confidence("tool:Bash", "aws_key", "AKIATESTFIXTUREXXXXX", text)
         assert conf == "high"
 
     def test_tool_read_is_medium(self):
@@ -111,7 +111,7 @@ class TestMatchedValueCapture:
         db.execute("INSERT INTO sessions (session_id, start_time) VALUES ('test-mv', 'now')")
         db.commit()
         w._check_sensitive(
-            "Here is AKIAUSELFJENWMJ2JAVB the key",
+            "Here is AKIATESTFIXTUREXXXXX the key",
             "test-mv",
             "2026-04-04T00:00:00Z",
             "tool_result",
@@ -128,9 +128,9 @@ class TestMatchedValueCapture:
             # asterisked. We must NEVER store the raw credential.
             assert data["matched_value"].startswith("AKIA")
             assert "*" in data["matched_value"]
-            assert "JAVB" in data["matched_value"]
+            assert "XXXX" in data["matched_value"]
             # The raw value must not appear anywhere in the stored payload
-            assert "AKIAUSELFJENWMJ2JAVB" not in row["data_json"]
+            assert "AKIATESTFIXTUREXXXXX" not in row["data_json"]
             assert "matched_hash" in data and len(data["matched_hash"]) == 16
             assert "confidence" in data
 
@@ -143,8 +143,8 @@ class TestAlertDedup:
         w.db = db
         db.execute("INSERT INTO sessions (session_id, start_time) VALUES ('dedup-s', 'now')")
         db.commit()
-        w._check_sensitive("key AKIAUSELFJENWMJ2JAVB here", "dedup-s", "2026-04-04T00:00:00Z", "tool_result")
-        w._check_sensitive("key AKIAUSELFJENWMJ2JAVB again", "dedup-s", "2026-04-04T00:00:01Z", "tool_result")
+        w._check_sensitive("key AKIATESTFIXTUREXXXXX here", "dedup-s", "2026-04-04T00:00:00Z", "tool_result")
+        w._check_sensitive("key AKIATESTFIXTUREXXXXX again", "dedup-s", "2026-04-04T00:00:01Z", "tool_result")
         db.commit()
         rows = db.execute(
             "SELECT data_json FROM events WHERE event_type='sensitive_data' AND session_id='dedup-s'"
@@ -160,8 +160,8 @@ class TestAlertDedup:
         db.execute("INSERT INTO sessions (session_id, start_time) VALUES ('ds1', 'now')")
         db.execute("INSERT INTO sessions (session_id, start_time) VALUES ('ds2', 'now')")
         db.commit()
-        w._check_sensitive("AKIAUSELFJENWMJ2JAVB", "ds1", "2026-04-04T00:00:00Z", "tool_result")
-        w._check_sensitive("AKIAUSELFJENWMJ2JAVB", "ds2", "2026-04-04T00:00:00Z", "tool_result")
+        w._check_sensitive("AKIATESTFIXTUREXXXXX", "ds1", "2026-04-04T00:00:00Z", "tool_result")
+        w._check_sensitive("AKIATESTFIXTUREXXXXX", "ds2", "2026-04-04T00:00:00Z", "tool_result")
         db.commit()
         count = db.execute(
             "SELECT COUNT(*) FROM events WHERE event_type='sensitive_data' AND session_id IN ('ds1','ds2')"

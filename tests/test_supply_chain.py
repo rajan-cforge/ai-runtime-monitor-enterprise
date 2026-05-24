@@ -322,7 +322,7 @@ class TestCategorization:
 
 class TestProjectExtraction:
     def test_documents_path(self):
-        assert extract_project("/Users/x/Documents/talosAI/ui") == "talosAI"
+        assert extract_project("/Users/x/Documents/example-project/ui") == "example-project"
 
     def test_projects_path(self):
         p = extract_project("/Users/x/Projects/ai-runtime-monitor-enterprise/src")

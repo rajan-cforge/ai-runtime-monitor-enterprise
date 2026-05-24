@@ -143,7 +143,7 @@ class TestRevealButtonConditional:
         assert not alert["matched_value"]  # falsy = hide reveal
 
     def test_populated_matched_value(self):
-        alert = {"matched_value": "AKIAUSELFJENWMJ2JAVB"}
+        alert = {"matched_value": "AKIATESTFIXTUREXXXXX"}
         assert alert["matched_value"]  # truthy = show reveal
 
 
