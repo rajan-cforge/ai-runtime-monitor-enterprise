@@ -302,3 +302,27 @@ Per-file gating sidesteps this entirely: an unrelated phantom drop
 on a file the PR didn't modify can't block a merge. If the PR
 genuinely regresses coverage on a file it touches, the gate fires
 as intended.
+
+---
+
+## Pre-PR review loop
+
+Before opening any PR with substantive changes (anything touching
+`.py`, `.yml`, `.toml`, `.json`, or `Makefile`), the orchestrator
+runs the three reviewer agents (grader, architect, performance)
+against the **local** diff and folds the fixes back into the same
+commit. The PR pushed to GitHub is the validated final state, not
+an iteration in progress.
+
+The full procedure is in `.claude/workflows/pre-pr-review.md`. The
+shell-side helper is `scripts/dev/pre_pr_review.sh`, which captures
+the local diff into a timestamped workspace under
+`~/.vigil-pre-pr-review/<timestamp>/` for the reviewers to consume.
+
+Skip the loop only for:
+- pure docs PRs (one file, prose-only),
+- one-line typo fixes,
+- reverting a known-bad commit.
+
+See `docs/SSDLC_ENFORCEMENT.md` Layer 8a for the architectural
+framing.

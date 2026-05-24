@@ -54,6 +54,8 @@ MANIFEST
 !.claude/agents/**
 !.claude/rubrics/
 !.claude/rubrics/**
+!.claude/workflows/
+!.claude/workflows/**
 ai-runtime-monitor/
 
 # Environment files

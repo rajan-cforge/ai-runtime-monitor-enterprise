@@ -77,6 +77,24 @@ The rubrics are the substance — agents are thin loops that apply them. When pa
 
 Protocol conformance for the `Scanner` interface is enforced by `tests/architecture/test_scanner_conformance.py`, with a meta-test (`test_protocol_inventory.py`) that fails the build if a new Protocol is added without a matching conformance file.
 
+### Layer 8a: Pre-PR review loop
+
+Reviewers run against the **local** diff before push, not only against the opened PR. The flow:
+
+1. Implementation complete, local tests + lint pass.
+2. `scripts/dev/pre_pr_review.sh` captures the diff into `~/.vigil-pre-pr-review/<timestamp>/`.
+3. Orchestrator dispatches all three reviewers in local mode (they read the workspace + working tree, write verdicts to disk).
+4. Each finding is tagged `FIX-BEFORE-MERGE`, `DEFER-TO-FOLLOWUP`, or `INFORMATIONAL`.
+5. The orchestrator applies `FIX-BEFORE-MERGE` fixes to the working tree, re-runs targeted tests, and re-dispatches the reviewers to verify (cycle cap: 2).
+6. All work — original change plus local fixes — commits as ONE commit.
+7. Push and open the PR. The PR-time reviewers then run as final verification (should return PASS or PASS_WITH_NOTES with only `INFORMATIONAL` items).
+
+Effect: PRs arrive on GitHub already-reviewed, CI runs once instead of twice per fix iteration, and the public git history is one commit per logical change. Review moves from "ask forgiveness" (PR opens, finds issues, amends) to "ask permission" (local review, fix, push clean).
+
+The full procedure with the commit-message convention and skip rules is in `.claude/workflows/pre-pr-review.md`.
+
+This layer is **procedural**, not mechanical — it relies on the orchestrator following the workflow document. The mechanical end-state is a GitHub App that auto-runs the loop on PR open without anyone dispatching it; that's Phase 3G work after launch.
+
 ## Inventory of enforcement controls
 
 ### Branching and history controls
