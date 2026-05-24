@@ -79,6 +79,12 @@ def test_scanner_class_satisfies_protocol(modname: str, classname: str, cls: typ
         # Protocol). That is acceptable; the meta-test enforces that
         # *adding* a scanner adds a conformance check.
         pytest.skip("no *Scanner classes found yet")
-    assert hasattr(cls, "scan"), f"{classname} missing scan() method"
-    assert hasattr(cls, "health_check"), f"{classname} missing health_check() method"
+    # Stricter than hasattr: require the members to be callable methods,
+    # not just any attribute that happens to share the name. Catches the
+    # case where a class defines `scan = "not implemented"` and would
+    # otherwise pass hasattr.
+    scan_attr = getattr(cls, "scan", None)
+    health_attr = getattr(cls, "health_check", None)
+    assert callable(scan_attr), f"{classname}.scan must be callable, got {type(scan_attr).__name__}"
+    assert callable(health_attr), f"{classname}.health_check must be callable, got {type(health_attr).__name__}"
     assert hasattr(cls, "name"), f"{classname} missing 'name' attribute"
