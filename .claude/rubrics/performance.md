@@ -13,12 +13,18 @@ Applied by `performance-reviewer` on every PR. The reviewer picks 3-5 highest-im
 
 When reviewing a diff, identify whether any changed lines fall into one of these hot paths. If they do, scrutinize harder. If not, only flag glaring issues.
 
+**Current hot paths:**
+
 - `src/claude_monitoring/monitor.py` — `DashboardHandler` HTTP request handling: every HTTP request
-- `src/claude_monitoring/sync.py` — event processing loop: every captured tool call
-- `src/claude_monitoring/collectors/` (future) — every tool-call collector path
-- `src/claude_monitoring/detectors/` (future) — sensitive-data and supply-chain scanners: every text body
-- `src/claude_monitoring/extension_scanner/` (future) — moderate (every scan invocation)
 - `src/claude_monitoring/monitor.py::JSONLSessionWatcher` — continuous JSONL tailing
+- `src/claude_monitoring/sync.py` — event processing loop: every captured tool call (when `sync.py` is in active use)
+- `src/claude_monitoring/sensitive.py`, `supply_chain.py`, `threat_intel.py`, `vuln_scanner.py` — detector surface: every event / install command / text body
+
+**Planned hot paths (do not exist in `src/` yet — add when the directories land):**
+
+- `src/claude_monitoring/collectors/` — every tool-call collector path
+- `src/claude_monitoring/detectors/` — unified sensitive-data and supply-chain scanners
+- `src/claude_monitoring/extension_scanner/` — moderate (every scan invocation)
 
 In hot paths, check:
 - No regex compilation inside the loop (compile once at module load, reuse)

@@ -12,6 +12,11 @@ Adding a new Protocol:
      this step.
 """
 
-from claude_monitoring.protocols.scanner import Finding, Scanner, ScannerHealth
+from claude_monitoring.protocols.scanner import (
+    Finding,
+    Scanner,
+    ScannerHealth,
+    Severity,
+)
 
-__all__ = ["Finding", "Scanner", "ScannerHealth"]
+__all__ = ["Finding", "Scanner", "ScannerHealth", "Severity"]
