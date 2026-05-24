@@ -1,0 +1,61 @@
+name: CI Security
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-security-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pip-audit:
+    name: pip-audit (CVE scan)
+    runs-on: ubuntu-latest
+    # Informational until the deps-upgrade PR lands. Today the env carries
+    # 12 known vulnerabilities in transitive deps (urllib3, tornado, idna,
+    # cryptography, flask, mitmproxy, pyopenssl, pytest) — all minor version
+    # bumps. We surface them on every PR for visibility, then flip this to
+    # a hard gate once the upgrade lands. Remove `continue-on-error` then.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[dev]"
+      # `--skip-editable` keeps pip-audit from trying to look up the
+      # local in-tree package (ai-runtime-monitor) on PyPI, which fails
+      # because it's not published. `--desc` gives reviewers the CVE
+      # description inline.
+      - run: pip-audit --skip-editable --desc
+
+  bandit:
+    name: bandit (SAST)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install bandit
+      # B310 (urlopen scheme audit) is suppressed because every urlopen call
+      # in this codebase points at a hardcoded loopback URL or a fixed
+      # trusted upstream (PyPI, OSV, ThreatFox) — never user input.
+      - run: bandit -r src/ -s B101,B404,B603,B607,B310 --severity-level medium
+
+  trufflehog:
+    name: trufflehog (secret history)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      # --only-verified blocks on credentials TruffleHog could actually
+      # authenticate with (live, not example/test). Pattern-only matches
+      # still print as warnings but do not fail the gate.
+      - name: TruffleHog scan
+        uses: trufflesecurity/trufflehog@main
+        with:
+          path: ./
+          extra_args: --only-verified
