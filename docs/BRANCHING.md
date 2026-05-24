@@ -126,6 +126,13 @@ Always pass `--subject "$PR_TITLE (#N)"` on squash merges. Without it,
 commit message instead of the PR title, leaving the `(#N)` suffix off
 the resulting commit on main.
 
+**Symptom case**: PR #22 was squash-merged via `gh pr merge --squash`
+without `--subject` and landed on main as
+`1ee83d0 docs(sprint): mark Phase 3A DONE — C1-C4 merged, antfood evidence on main`
+— note the missing `(#22)` suffix. Every other squashed PR in main's
+history carries `(#N)`; PR #22 is the lone exception. This convention
+prevents the recurrence.
+
 Why it matters: `git log --oneline | grep "(#"` then becomes a
 reliable "find the PR that introduced this commit" query.
 
