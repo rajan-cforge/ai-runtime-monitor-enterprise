@@ -93,3 +93,11 @@ jobs:
           pytest --cov=claude_monitoring --cov-report=xml --cov-fail-under=0 -q
       - name: Ratchet check
         run: python scripts/coverage_ratchet.py coverage-base.xml coverage.xml
+      - name: Upload coverage XMLs (debug)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-xmls-${{ github.run_id }}
+          path: |
+            coverage-base.xml
+            coverage.xml
