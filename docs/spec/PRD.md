@@ -138,7 +138,7 @@ The product explicitly does NOT do the following:
 - **Replace SAST/DAST tools.** Vigil is runtime, not static. Code quality scanning belongs to other products.
 - **Replace LLM observability for owned applications.** If a developer writes a LangChain app, they should use LangSmith or Langfuse to monitor it. Vigil monitors the AI agent the developer uses, not the AI app the developer builds.
 - **Monitor inside agent containers or sandboxes.** v0.2 monitors the developer's primary machine. Container-scoped agents are a v0.3+ feature.
-- **Enforce policies in v0.2.** Detection only. Prevention features (blocking OAuth scopes, blocking malicious packages, allowlisting AI tools) ship in v1.5.
+- **Enforce policies in v0.2.** Detection only. AI-agent allowlist enforcement ships in v0.3 — the first concrete prevention capability — per [docs/design/agent-detection.md](../design/agent-detection.md). Broader prevention features (blocking OAuth scopes, blocking malicious packages) ship in v1.5.
 - **Monitor mobile devices.** v0.2 is macOS and Linux. Windows is v0.3. iOS/Android are not in the roadmap.
 - **Monitor agents inside CI/CD pipelines.** That's a server-side problem; Vigil is endpoint-side.
 
@@ -168,6 +168,8 @@ The product explicitly does NOT do the following:
 - Encrypted database at rest (SQLCipher).
 - Container-scoped agent monitoring.
 
+Plus: **agent provenance and behavior classification** — detect AI agents on the system (including hidden/renamed processes, /tmp scripts, scheduled tasks), verify their identity via code signature and known-binary registry, and apply behavior policies (e.g., file-read scope per agent identity). See [docs/design/agent-detection.md](../design/agent-detection.md). This is the first concrete capability in the "prevent" stage of the detect→prevent→reduce-blast-radius roadmap.
+
 ### v1.0 — Fleet Dashboard (Q4 2026)
 
 - Production control plane with multi-tenant data isolation.
@@ -179,9 +181,10 @@ The product explicitly does NOT do the following:
 ### v1.5 — Prevent (Q1 2027)
 
 - Block excessive OAuth scopes at the OS level.
-- AI tool allowlist enforcement.
 - Pre-install package blocking with override.
-- Credential boundary rules (which agents can access which credentials).
+- Credential boundary rules (which agents can access which credentials) — richer, multi-condition policies extending the basic agent allowlist semantics shipped in v0.3.
+
+(AI-agent allowlist enforcement — the foundation of the "prevent" stage — ships earlier, in v0.3. See [docs/design/agent-detection.md](../design/agent-detection.md).)
 
 ### v2.0 — Reduce Blast Radius (Q2–Q3 2027)
 
