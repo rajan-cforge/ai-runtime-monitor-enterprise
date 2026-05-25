@@ -523,3 +523,5 @@ def insert_api_call(db_path, record):
         return True
     except Exception:
         return False
+
+# Test enforcement: CREATE TABLE should trip the schema-changes rule
