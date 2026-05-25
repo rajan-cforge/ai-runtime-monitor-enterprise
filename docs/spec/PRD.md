@@ -250,7 +250,7 @@ Plus: **agent provenance and behavior classification** — detect AI agents on t
 - RBAC with five roles.
 - SSO (SAML, OIDC).
 - SIEM integration.
-- Prevention policies (when available; v1.5+).
+- Prevention policies — basic agent allowlist enforcement ships in v0.3 (all tiers); richer OAuth-scope and package-blocking policies in v1.5 (Enterprise).
 - SOC 2 reports.
 - Custom data retention.
 - Slack-based support channel; 4-hour response.
