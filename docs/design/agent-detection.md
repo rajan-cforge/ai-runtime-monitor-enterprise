@@ -373,7 +373,7 @@ For investor and design-partner conversations, this design doc is the artifact t
 
 This design lands as a v0.3 capability:
 
-- **Phase 0 (now, May 2026):** This design doc lands as `docs/design/agent-detection.md`. PRD updated with a single sentence in section 6 (v0.3 roadmap). Threat model updated to add B6 boundary placeholder noting v0.3 mitigation.
+- **Phase 0 (now, May 2026):** This change lands as three sequential docs-only PRs. PR 1: this design doc as `docs/design/agent-detection.md`. PR 2: `docs/spec/PRD.md` §6.3 gains a v0.3 commitment paragraph linking here, and §5 non-goals + §6 v1.5 are updated to advance AI-agent allowlist enforcement from v1.5 to v0.3 (OAuth-scope and pre-install package enforcement remain v1.5). PR 3: `docs/spec/THREAT-MODEL.md` adds Boundary B6 (Agent Identity) as a placeholder pointing here for the v0.3 mitigation plan.
 - **Phase 1 (v0.2 launch, May 2026):** No code work on this feature. Launch happens.
 - **Phase 2 (post-launch, June 2026):** Design doc reviewed with first design partners. Gather initial feedback. Refine the registry, the default policies, the UX direction.
 - **Phase 3 (v0.3 sprint, July-August 2026):** Implementation per Section 7.1 scope. Targeted v0.3 release: late Q3 2026.
@@ -394,7 +394,7 @@ Per the source-honesty contract: this is a "derived" design — emerged from a f
 ## 12. Action items
 
 - [ ] Land this design doc as `docs/design/agent-detection.md` (small PR; criticality C0)
-- [ ] Update PRD section 6 v0.3 roadmap with one-sentence entry (small PR; criticality C0)
+- [ ] Update PRD: §6.3 v0.3 commitment paragraph, plus §5 non-goal and §6 v1.5 entries advancing AI-agent allowlist enforcement to v0.3 (small PR; criticality C0)
 - [ ] Update THREAT-MODEL.md to add B6 boundary as v0.3 mitigation placeholder (small PR; criticality C0)
 - [ ] Share design doc with 3-5 prospective design partners post-launch
 - [ ] Schedule v0.3 sprint kickoff for early June 2026
