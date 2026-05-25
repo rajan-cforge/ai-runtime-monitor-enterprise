@@ -19,6 +19,13 @@ jobs:
       - run: pip install ruff
       - run: ruff check src/ tests/
       - run: ruff format --check src/ tests/
+      # Component 3 of the spec-driven-enforcement PR. AST-walker for
+      # patterns ruff can't express (bare except, mutable defaults,
+      # subprocess shell=True, missing docstrings, etc.). Existing
+      # violations are baselined in scripts/check_design_patterns_baseline.txt;
+      # the gate fails only on new violations not in the baseline.
+      - name: Design pattern checks
+        run: python scripts/check_design_patterns.py
 
   test:
     runs-on: ${{ matrix.os }}
@@ -100,3 +107,26 @@ jobs:
           cat changed.txt || true
       - name: Ratchet check
         run: python scripts/coverage_ratchet.py coverage-base.xml coverage.xml changed.txt
+
+  # Component 5 of the spec-driven-enforcement PR. Reads PR diff, walks
+  # the .github/spec-requirements.yaml rule table, fails on BLOCK
+  # violations. WARN violations emit messages but don't fail the job.
+  # Three-dot diff syntax intentional — gives the PR changes, not the
+  # merge-base diff (which would include upstream changes not in the PR).
+  spec-requirements:
+    name: spec-requirements
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pyyaml
+      - name: Generate PR diff
+        run: |
+          git diff "origin/${{ github.base_ref }}...HEAD" > /tmp/pr.patch
+      - name: Check spec requirements
+        run: python scripts/check_spec_requirements.py --diff /tmp/pr.patch

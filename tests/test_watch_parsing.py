@@ -543,7 +543,7 @@ class TestParseRequestBodyUserMessage:
         result = parse_request_body(body, record)
 
         assert "\n" not in result["last_user_msg_preview"]
-        assert "Line one Line two Line three" == result["last_user_msg_preview"]
+        assert result["last_user_msg_preview"] == "Line one Line two Line three"
 
     def test_last_user_msg_preview_commas_replaced(self):
         body = {
@@ -1457,7 +1457,7 @@ class TestParseSSEResponseEdgeCases:
 
         assert "\n" not in result["assistant_msg_preview"]
         assert "," not in result["assistant_msg_preview"]
-        assert "line1 line2;value" == result["assistant_msg_preview"]
+        assert result["assistant_msg_preview"] == "line1 line2;value"
 
     def test_stream_always_true(self):
         """parse_sse_response always sets stream to 'true'."""

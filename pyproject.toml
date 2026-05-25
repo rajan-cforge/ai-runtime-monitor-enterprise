@@ -72,14 +72,117 @@ git_describe_command = [
 [tool.ruff]
 target-version = "py39"
 line-length = 120
+
 [tool.ruff.lint]
-select = ["E", "F", "W", "I", "UP", "B"]
-# B008: FastAPI's idiomatic pattern is `x: T = Depends(fn)` in function
-# signatures. Ruff flags every call-in-default, but this is correct for
-# FastAPI dependency injection and has no runtime impact (Depends() is a
-# marker, not an evaluation). Ignore project-wide — applies to
-# control-plane/cp/* route handlers.
-ignore = ["E501", "B008"]
+# Aggressive rule set per CLAUDE.md mandatory/forbidden patterns. The
+# enumeration here is the authoritative list — adding a rule family means
+# the new rule is desired across the codebase, with any existing
+# violations either fixed immediately or tracked in docs/RUFF_WARMUP.md.
+select = [
+    "E",        # pycodestyle errors
+    "F",        # pyflakes
+    "W",        # pycodestyle warnings
+    "I",        # isort (import order)
+    "B",        # flake8-bugbear (common bug patterns)
+    "UP",       # pyupgrade (modernization)
+    "PTH",      # flake8-use-pathlib (prefer Path over os.path)
+    "BLE",      # flake8-blind-except (catch bare except)
+    "G",        # flake8-logging-format (proper logging)
+    "DTZ",      # flake8-datetimez (timezone-aware datetimes)
+    "TRY",      # tryceratops (try/except patterns)
+    "PERF",     # perflint (performance anti-patterns)
+    "PL",       # pylint (general)
+    "RUF",      # ruff-specific
+    "SIM",      # flake8-simplify
+    "S",        # flake8-bandit (security)
+    "TID",      # flake8-tidy-imports
+]
+ignore = [
+    "S101",     # assert statements (we use them in tests)
+    "PLR2004",  # magic values (too noisy; rely on code review)
+    "TRY003",   # long exception messages (sometimes useful)
+    "PERF203",  # try/except in loop (sometimes necessary)
+    "PLR0913",  # too many arguments (judgment call)
+
+    # ── Warmup ignores — see docs/RUFF_WARMUP.md ────────────────────
+    # These rule codes have existing violations on the day the
+    # aggressive ruleset landed. Each entry has a documented audit
+    # plan (Category A genuine cleanup or Category B likely
+    # false-positive). When a rule's count reaches zero, remove the
+    # entry from this list — CI then enforces the rule going forward.
+    # The list shrinks over time; it never grows.
+    #
+    # Category A — genuine technical debt (Phase 3F cleanup sprint):
+    "PLC0415",  # 552 — import-outside-top-level (lazy imports)
+    "BLE001",   # 191 — blind-except in scanner loops
+    "S110",     #  96 — try-except-pass (intentional in scanners)
+    "SIM105",   #  54 — suppressible-exception → contextlib.suppress
+    "E501",     #  45 — line-too-long (URLs, regex patterns)
+    "PLW1510",  #  39 — subprocess-run-without-check
+    "PTH123",   #  30 — builtin-open → Path.open
+    "PLR0912",  #  25 — too-many-branches (M6 monitor.py split)
+    "RUF059",   #  24 — unused-unpacked-variable
+    "TRY300",   #  23 — try-consider-else
+    "PLR0915",  #  19 — too-many-statements (M6 target)
+    "PTH101",   #  14 — os.chmod → Path.chmod
+    "PERF401",  #  13 — manual list-comprehension
+    "SIM117",   #  11 — multiple-with-statements (unsafe-fix)
+    "PLR0911",  #   7 — too-many-return-statements (M6 target)
+    "PLW0108",  #   7 — unnecessary-lambda
+    "PLW0603",  #   7 — global-statement (scanner state)
+    "PLW2901",  #   6 — redefined-loop-name
+    "RUF005",   #   5 — collection-literal-concatenation
+    "SIM102",   #   5 — collapsible-if
+    "PTH110",   #   3 — os.path.exists → Path.exists
+    "DTZ005",   #   2 — call-datetime-now-without-tzinfo (real bug)
+    "PLR1714",  #   2 — repeated-equality-comparison
+    "PLW0602",  #   2 — global-variable-not-assigned
+    "PTH202",   #   2 — os.path.getsize
+    "RUF003",   #   2 — ambiguous-unicode-character-comment
+    "RUF015",   #   2 — unnecessary-iterable-allocation-for-first-element
+    "SIM110",   #   2 — reimplemented-builtin
+    "SIM114",   #   2 — if-with-same-arms
+    "SIM118",   #   2 — in-dict-keys
+    "PERF102",  #   1 — incorrect-dict-iterator
+    "PTH108",   #   1 — os.unlink
+    "PTH109",   #   1 — os.getcwd
+    "PTH111",   #   1 — os.path.expanduser
+    "RUF002",   #   1 — ambiguous-unicode-character-docstring
+    "RUF010",   #   1 — explicit-f-string-type-conversion
+    "RUF012",   #   1 — mutable-class-default (real bug)
+    "RUF034",   #   1 — useless-if-else
+    "SIM103",   #   1 — needless-bool
+    "SIM108",   #   1 — if-else-block-instead-of-if-exp
+    "SIM115",   #   1 — open-file-with-context-handler (real bug)
+    #
+    # Category B — likely false-positives (Phase 3F audit; permanent
+    # ignore with rationale, or escalate to enforced):
+    "S607",     #  39 — start-process-with-partial-path (osascript,
+                #        networksetup from system PATH per macOS conv.)
+    "S608",     #  33 — hardcoded-sql-expression (we use ?
+                #        placeholders — likely FPs)
+    "S603",     #  31 — subprocess-without-shell-equals-true (we use
+                #        argv lists, the secure form — likely FPs)
+    "S311",     #  14 — non-cryptographic-random in tests (FP)
+    "S310",     #   5 — suspicious-url-open-usage (hardcoded trusted
+                #        URLs only)
+    "S105",     #   3 — hardcoded-password-string (test fixtures /
+                #        config key names)
+    "S112",     #   6 — try-except-continue (intentional in scanners)
+    "S314",     #   2 — xml.etree on trusted cobertura XML
+    "S606",     #   2 — start-process-with-no-shell (paradoxical FP
+                #        — same diagnosis as S603)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = [
+    "S",        # security rules don't apply to tests
+    "PLR2004",  # magic values are common in tests
+    "PT009",    # use of assertEqual is fine
+]
+"scripts/**/*.py" = [
+    "T201",     # print statements are fine in scripts
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
