@@ -88,6 +88,16 @@ body { background:var(--bg); color:var(--text); font-family:-apple-system,BlinkM
 .event-block.token_usage .event-header { background:var(--surface2); color:var(--text2); }
 .event-block.sensitive .event-header { background:#3d1a1a; color:var(--red); }
 .collapsed .event-body { display:none; }
+/* Scroll-to-alert flash: 1.5s subtle yellow border highlight when an alert
+   is opened from the Alerts tab via ?alert=<id>. Goal is eye-draw, not
+   jarring — fades through to transparent so the resting state matches
+   the .event-block.sensitive look. */
+.alert-flash { animation: alert-flash-kf 1.5s ease-out 1; }
+@keyframes alert-flash-kf {
+  0%   { box-shadow: 0 0 0 2px var(--orange); background: rgba(255,170,0,0.08); }
+  50%  { box-shadow: 0 0 0 2px var(--orange); background: rgba(255,170,0,0.05); }
+  100% { box-shadow: 0 0 0 0   transparent;   background: transparent; }
+}
 
 /* Live Feed */
 .feed { background:var(--surface); border:1px solid var(--border); border-radius:8px; height:calc(100vh - 260px); overflow-y:auto; font-family:'SF Mono',Monaco,monospace; font-size:12px; }
@@ -2349,7 +2359,7 @@ async function loadAlerts(customOffset) {
         + matchedHtml
         + '<div class="alert-snippet">' + esc(renderSnippet(a.snippet)) + '</div>'
         + repeatTag
-        + (a.session_id ? '<div class="alert-session" onclick="openDeepDive(\''+a.session_id+'\', '+(a.turn_number||1)+')">' + esc(a.session_title) + turnLabel + '</div>' : '')
+        + (a.session_id ? '<div class="alert-session" onclick="openDeepDive(\''+a.session_id+'\', '+(a.turn_number||1)+', '+a.id+')">' + esc(a.session_title) + turnLabel + '</div>' : '')
         + '<div style="margin-top:6px">' + dismissBtns + '</div>'
         + '</div>';
     }).join('');
@@ -2438,6 +2448,20 @@ loadStats(); loadSessions();
 statsInterval = setInterval(loadStats, 5000);
 sessionsInterval = setInterval(loadSessions, 5000);
 feedInterval = setInterval(pollFeed, 2000);
+
+// Deep-link handler: ?session=<id>&turn=<n>&alert=<alert_id> opens the
+// Deep Dive cockpit directly at the right turn and scrolls to the named
+// alert block. Used when someone shares a Vigil URL from an alert.
+(function openFromUrlParams() {
+  try {
+    var p = new URLSearchParams(window.location.search);
+    var session = p.get('session');
+    if (!session) return;
+    var turn = parseInt(p.get('turn') || '0', 10) || undefined;
+    var alertId = p.get('alert');
+    openDeepDive(session, turn, alertId);
+  } catch(_) { /* invalid URL params — ignore silently */ }
+})();
 
 // Load system tab data periodically
 setInterval(() => {
@@ -2650,7 +2674,7 @@ let ddTurns = [];
 let ddSession = null;
 let ddActiveTurn = 0;
 
-async function openDeepDive(sessionId, jumpToTurn) {
+async function openDeepDive(sessionId, jumpToTurn, jumpToAlertId) {
   // Bug 1 follow-up: desktop sessions are synthetic — no events/turns.
   // Render a dedicated panel showing recent API traffic for the service
   // instead of trying to load turns that don't exist.
@@ -2671,7 +2695,70 @@ async function openDeepDive(sessionId, jumpToTurn) {
     renderTurnRail();
     document.getElementById('deepdive-overlay').classList.add('open');
     selectTurn(jumpToTurn || ddTurns.length);
+
+    // Push a shareable URL so the user can copy the link from the address
+    // bar and the same alert pops on next load. Uses replaceState so we
+    // don't litter back-button history with intra-app navigation.
+    try {
+      const u = new URL(window.location.href);
+      u.searchParams.set('session', sessionId);
+      if (jumpToTurn) u.searchParams.set('turn', String(jumpToTurn));
+      if (jumpToAlertId !== undefined && jumpToAlertId !== null) {
+        u.searchParams.set('alert', String(jumpToAlertId));
+      }
+      history.replaceState(null, '', u.toString());
+    } catch(_) { /* URL not available in non-browser contexts */ }
+
+    if (jumpToAlertId !== undefined && jumpToAlertId !== null) {
+      scrollToAlert(String(jumpToAlertId));
+    }
   } catch(e) { console.error('Deep dive error:', e); }
+}
+
+// Scroll the deep-dive inspector to the alert with the given id and run a
+// brief border-flash animation. Called from openDeepDive when an alert id
+// is supplied via the URL or the alert-list onclick handler.
+//
+// Uses requestAnimationFrame to ensure the inspector has actually painted
+// the sensitive_data block before we try to find and scroll to it —
+// renderInspector sets innerHTML synchronously but layout happens on the
+// next frame.
+//
+// Self-recovery: if the alert isn't on the currently-rendered turn (the
+// caller passed a wrong/missing/garbage turn=, or the URL is stale and the
+// session has been re-grouped), search ddTurns for the right turn and
+// re-call selectTurn. _alertRetry guards against an infinite loop in the
+// pathological case where the alert id doesn't exist anywhere in the
+// session.
+function scrollToAlert(alertId, _alertRetry) {
+  requestAnimationFrame(function() {
+    var sel = '.event-block.sensitive[data-alert-id="' + alertId + '"]';
+    var el = document.querySelector(sel);
+    if (el) {
+      el.scrollIntoView({behavior:'smooth', block:'center'});
+      el.classList.add('alert-flash');
+      // Auto-remove the class so a second click on the same alert re-triggers
+      // the animation. 1600ms > the 1500ms animation duration.
+      setTimeout(function(){ el.classList.remove('alert-flash'); }, 1600);
+      return;
+    }
+    if (_alertRetry) {
+      console.warn('scrollToAlert: alert id', alertId, 'not found in this session');
+      return;
+    }
+    // Find the alert id in any turn's events and re-select that turn.
+    for (var i = 0; i < ddTurns.length; i++) {
+      var t = ddTurns[i];
+      for (var j = 0; j < t.events.length; j++) {
+        if (String(t.events[j].id) === String(alertId)
+            && t.events[j].event_type === 'sensitive_data') {
+          selectTurn(t.turn_number);
+          return scrollToAlert(alertId, true);
+        }
+      }
+    }
+    console.warn('scrollToAlert: alert id', alertId, 'not found in this session');
+  });
 }
 
 // Desktop session Deep Dive — renders the same activity summary as the
@@ -2814,7 +2901,11 @@ function renderInspector(turn) {
           + '\nOutput: ' + (data.output_tokens||0) + '\nStop: ' + esc(data.stop_reason||'') + '</pre></div></div>';
         break;
       case 'sensitive_data':
-        html += '<div class="event-block sensitive">'
+        // data-alert-id mirrors the alert's row id; alerts API returns
+        // `e.id` from the events table, which matches `ev.id` here. The
+        // scroll-to-alert handler (openDeepDive's jumpToAlertId path) uses
+        // this attribute to locate the block after the inspector renders.
+        html += '<div class="event-block sensitive" data-alert-id="' + escAttr(String(ev.id)) + '">'
           + '<div class="event-header" onclick="this.parentElement.classList.toggle(\'collapsed\')">'
           + '<span>&#x26a0;&#xfe0f; ALERT: ' + esc((data.patterns||[]).join(', ')) + '</span></div>'
           + '<div class="event-body"><pre>Context: ' + esc(data.context)
