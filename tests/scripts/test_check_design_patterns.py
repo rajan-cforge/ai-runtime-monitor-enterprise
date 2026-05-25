@@ -97,6 +97,75 @@ def test_private_function_without_docstring_not_flagged() -> None:
     assert not any("missing docstring" in m for m in msgs), msgs
 
 
+def test_dashboard_handler_handle_without_verify_token_flagged() -> None:
+    """The security-critical rule: every `_handle_*` method inside a
+    `DashboardHandler` class must call `verify_token` or carry an
+    `# auth-exempt` annotation. A handler missing both must be flagged.
+
+    Per the architect-reviewer grader's cycle-1 finding on PR #40: the
+    `_handle_*` auth check was the only detector without explicit test
+    coverage. The consequence of an undetected regression in this path
+    is real (route shipped without auth check), so it deserves
+    positive + negative cases.
+    """
+    src = (
+        "class DashboardHandler:\n"
+        "    def _handle_users(self, payload):\n"
+        "        return self._respond(payload)\n"
+    )
+    msgs = _collect_msgs(src)
+    assert any("verify_token" in m for m in msgs), (
+        f"DashboardHandler._handle_* without verify_token not detected: {msgs}"
+    )
+
+
+def test_dashboard_handler_handle_with_verify_token_passes() -> None:
+    """The positive case: `_handle_*` that calls `verify_token` must NOT
+    be flagged."""
+    src = (
+        "class DashboardHandler:\n"
+        "    def _handle_users(self, payload):\n"
+        "        if not self.verify_token(payload):\n"
+        "            return self._unauthorized()\n"
+        "        return self._respond(payload)\n"
+    )
+    msgs = _collect_msgs(src)
+    assert not any("verify_token" in m for m in msgs), (
+        f"DashboardHandler._handle_* with verify_token spuriously flagged: {msgs}"
+    )
+
+
+def test_dashboard_handler_handle_with_auth_exempt_annotation_passes() -> None:
+    """The escape hatch: a handler that explicitly declares itself
+    `auth-exempt` in a string literal in its body must not be flagged.
+    Used for the health-check endpoint, which is intentionally open."""
+    src = (
+        "class DashboardHandler:\n"
+        "    def _handle_healthz(self, payload):\n"
+        '        "auth-exempt — health check is intentionally open"\n'
+        "        return self._respond({'ok': True})\n"
+    )
+    msgs = _collect_msgs(src)
+    assert not any("verify_token" in m for m in msgs), (
+        f"auth-exempt handler spuriously flagged: {msgs}"
+    )
+
+
+def test_handle_outside_dashboard_handler_not_flagged() -> None:
+    """The class-context scoping: `_handle_*` methods on classes OTHER
+    than `DashboardHandler` should not trip the rule. The check is
+    specifically about the dashboard HTTP surface."""
+    src = (
+        "class JSONLSessionWatcher:\n"
+        "    def _handle_record(self, payload):\n"
+        "        return payload\n"
+    )
+    msgs = _collect_msgs(src)
+    assert not any("verify_token" in m for m in msgs), (
+        f"_handle_ method on non-DashboardHandler class spuriously flagged: {msgs}"
+    )
+
+
 def test_update_baseline_flag_writes_file(tmp_path: Path, monkeypatch) -> None:
     """`--update-baseline` rewrites the baseline file with current violations."""
     mod = _load_module()

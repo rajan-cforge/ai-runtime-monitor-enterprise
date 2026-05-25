@@ -76,7 +76,7 @@ Four companion files implement the rest of the layer:
 
 - **`CLAUDE.md`** (project constitution at the repo root) — defines the mandatory and forbidden patterns ruff and the AST checker enforce. The rationale lives here so future contributors see *why* each pattern matters rather than only seeing the gate fire.
 - **`.github/pull_request_template.md`** — every PR declares its C0–C4 criticality, checks off touched specs, and discloses known limitations or deferred work. C3 and C4 require human diff review regardless of agent verdicts (Layer 8).
-- **`scripts/check_design_patterns.py`** + `scripts/check_design_patterns_baseline.txt` — AST-walker for project-specific patterns ruff cannot express (DashboardHandler routes must call `verify_token`, no `subprocess(shell=True)`, no `requests(verify=False)`, etc.). New violations not in the baseline file fail the build.
+- **`scripts/check_design_patterns.py`** + `scripts/check_design_patterns_baseline.txt` — AST-walker for project-specific patterns. Some checks (DashboardHandler routes must call `verify_token`) are unique to this layer because ruff cannot express them; others (no `subprocess(shell=True)`, no `requests(verify=False)`) are intentional defense-in-depth against ruff's `S602`/`S501` — two independent enforcement paths on zero-tolerance forbiddens so a config drift in one doesn't disable both. New violations not in the baseline file fail the build.
 - **`pyproject.toml` `[tool.ruff]`** — language-level enforcement for everything ruff can express (17 rule families: bugbear, pyupgrade, pathlib, blind-except, datetimez, tryceratops, perflint, pylint, simplify, bandit-via-ruff, etc.).
 
 Two operational disciplines keep the layer maintainable:

@@ -1043,7 +1043,11 @@ class JSONLSessionWatcher:
                 input_preview = ""
                 if tool_name in ("Bash", "bash"):
                     input_preview = tool_input.get("command", "")[:200]
-                elif tool_name in ("Read", "read_file") or tool_name in ("Write", "write_file", "create_file") or tool_name in ("Edit", "str_replace_editor"):
+                elif tool_name in ("Read", "read_file"):
+                    input_preview = tool_input.get("file_path", tool_input.get("path", ""))
+                elif tool_name in ("Write", "write_file", "create_file"):
+                    input_preview = tool_input.get("file_path", tool_input.get("path", ""))
+                elif tool_name in ("Edit", "str_replace_editor"):
                     input_preview = tool_input.get("file_path", tool_input.get("path", ""))
                 elif tool_name in ("Glob", "Grep"):
                     input_preview = tool_input.get("pattern", "")
@@ -5093,7 +5097,7 @@ def install_launch_agent():
     <key>StandardErrorPath</key>
     <string>{log_path}</string>
     <key>WorkingDirectory</key>
-    <string>{Path.home()!s}</string>
+    <string>{str(Path.home())}</string>
 </dict>
 </plist>"""
 

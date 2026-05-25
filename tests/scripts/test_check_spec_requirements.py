@@ -247,6 +247,51 @@ def test_malformed_regex_in_rule_is_skipped_with_warning(tmp_path: Path) -> None
     assert rc == 0
 
 
+def test_pattern_match_scoped_to_files_satisfying_file_match(tmp_path: Path) -> None:
+    """When a rule has both ``when_file_matches`` and a pattern condition,
+    the pattern check must be scoped to the files satisfying file_match
+    — not the union of all added lines across all touched files.
+
+    Regression: an early version of the validator concatenated every
+    file's added lines into one blob and ran the pattern check globally.
+    A PR that touched ``src/x.py`` (file_match true) and ``CLAUDE.md``
+    (file_match false, but containing the identifier name as
+    documentation text) would trip rules intended for source-code
+    changes only. PR #40 hit this; the fix is per-file scoping.
+    """
+    mod = _load_module()
+    rules = {
+        "version": 1,
+        "rules": [
+            {
+                "id": "scoped-rule",
+                "description": "scope test",
+                "when_file_matches": ["src/x.py"],
+                "when_change_touches_pattern": ["MAGIC_TOKEN"],
+                "requires_doc_update": ["docs/required.md"],
+                "severity": "BLOCK",
+            }
+        ],
+    }
+    # src/x.py is in scope but doesn't contain the pattern; docs/y.md
+    # contains the pattern but is out of scope. Rule must NOT fire.
+    patch_text = (
+        "diff --git a/src/x.py b/src/x.py\n"
+        "--- a/src/x.py\n"
+        "+++ b/src/x.py\n"
+        "@@ -1 +1 @@\n"
+        "+something unrelated\n"
+        "diff --git a/docs/y.md b/docs/y.md\n"
+        "--- a/docs/y.md\n"
+        "+++ b/docs/y.md\n"
+        "@@ -1 +1 @@\n"
+        "+documentation mentions MAGIC_TOKEN here\n"
+    )
+    assert mod.run(rules, patch_text) == 0, (
+        "rule fired on a pattern that only appears in an out-of-scope file"
+    )
+
+
 def test_requires_doc_passes_when_doc_exists_on_disk(tmp_path: Path) -> None:
     """`requires_doc` checks disk OR diff — distinct from `requires_doc_update`."""
     mod = _load_module()

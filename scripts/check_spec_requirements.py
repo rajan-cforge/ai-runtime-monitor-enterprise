@@ -30,24 +30,59 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_RULES = PROJECT_ROOT / ".github" / "spec-requirements.yaml"
 
 
-def parse_diff(patch_text: str) -> tuple[set[str], list[str]]:
-    """Return ``(files_touched, all_added_lines)`` from a unified diff.
+def parse_diff(patch_text: str) -> tuple[set[str], dict[str, list[str]]]:
+    """Return ``(files_touched, added_lines_by_file)`` from a unified diff.
 
-    Added lines preserve their leading ``+`` so rules that anchor on that
-    column (e.g., ``^\\+\\s*"pkg>=..."`` for the new-dependency rule) can
-    fire correctly. The git diff header lines (`+++ b/file`) are excluded.
+    The added lines are returned per-file (not concatenated) so a rule
+    with both ``when_file_matches`` and ``when_change_touches_pattern``
+    can check the pattern only against the source files the rule scopes
+    to. Without this, an identifier mentioned in a docs file (e.g.,
+    ``verify_token`` in CLAUDE.md as part of the constitution text)
+    would trip rules intended for ``src/`` code changes.
+
+    Added lines preserve their leading ``+`` so rules that anchor on
+    that column (e.g., ``^\\+\\s*"pkg>=..."`` for the new-dependency
+    rule) fire correctly. The git diff header lines (``+++ b/file``)
+    are excluded.
     """
     files: set[str] = set()
-    added_lines: list[str] = []
+    added_by_file: dict[str, list[str]] = {}
+    current_file: str | None = None
     for line in patch_text.splitlines():
         if line.startswith("diff --git "):
             parts = line.split()
             if len(parts) >= 4:
                 # `diff --git a/x b/x` -> the `b/x` operand is the new path
-                files.add(parts[3][2:])
+                current_file = parts[3][2:]
+                files.add(current_file)
+                added_by_file.setdefault(current_file, [])
         elif line.startswith("+") and not line.startswith("+++"):
-            added_lines.append(line)
-    return files, added_lines
+            if current_file is not None:
+                added_by_file[current_file].append(line)
+    return files, added_by_file
+
+
+def _added_text_for_scope(
+    added_by_file: dict[str, list[str]],
+    files: set[str],
+    file_patterns: list[str] | None,
+) -> str:
+    """Return the concatenated added-line text for files matching ``file_patterns``.
+
+    If ``file_patterns`` is None (rule has no ``when_file_matches`` scope),
+    return the union of every file's added lines.
+    """
+    if file_patterns is None:
+        relevant = files
+    else:
+        relevant = {
+            f
+            for f in files
+            if any(
+                PurePath(f).match(pat.split(":", 1)[0]) for pat in file_patterns
+            )
+        }
+    return "\n".join(line for f in relevant for line in added_by_file.get(f, []))
 
 
 def _file_matches_any(files: set[str], patterns: list[str]) -> bool:
@@ -71,23 +106,44 @@ def _file_matches_any(files: set[str], patterns: list[str]) -> bool:
     return False
 
 
-def rule_applies(rule: dict, files: set[str], added_text: str) -> bool:
-    """Determine if the rule's `when_*` conditions match this PR."""
+def rule_applies(
+    rule: dict, files: set[str], added_by_file: dict[str, list[str]]
+) -> bool:
+    """Determine if the rule's `when_*` conditions match this PR.
+
+    Pattern matching is scoped to files satisfying ``when_file_matches``.
+    A rule with both file + pattern conditions intends "this identifier
+    appears in the file we scope to" — without per-file scoping, an
+    identifier in CLAUDE.md (which legitimately documents the patterns
+    we're enforcing) trips the rule even though no source file changed.
+    """
     has_file_cond = "when_file_matches" in rule
     has_pattern_cond = "when_diff_contains_pattern" in rule or "when_change_touches_pattern" in rule
 
     file_match = _file_matches_any(files, rule["when_file_matches"]) if has_file_cond else True
 
+    # Scope the pattern check to added text from in-scope files only.
+    # If the rule has no file scope, fall back to all added text.
+    scoped_text = _added_text_for_scope(
+        added_by_file,
+        files,
+        rule["when_file_matches"] if has_file_cond else None,
+    )
+
     pattern_match = True
     if "when_diff_contains_pattern" in rule:
         try:
-            pattern_match = any(re.search(pat, added_text) for pat in rule["when_diff_contains_pattern"])
+            pattern_match = any(
+                re.search(pat, scoped_text) for pat in rule["when_diff_contains_pattern"]
+            )
         except re.error:
             # Malformed pattern in the rule; treat as non-matching and log.
             print(f"warning: rule '{rule.get('id')}' has malformed regex; skipping", file=sys.stderr)
             return False
     if "when_change_touches_pattern" in rule:
-        pattern_match = pattern_match and any(pat in added_text for pat in rule["when_change_touches_pattern"])
+        pattern_match = pattern_match and any(
+            pat in scoped_text for pat in rule["when_change_touches_pattern"]
+        )
 
     if has_file_cond and has_pattern_cond:
         return file_match and pattern_match
@@ -137,8 +193,7 @@ def rule_satisfied(rule: dict, files: set[str]) -> tuple[bool, list[str]]:
 
 def run(rules_doc: dict, patch_text: str) -> int:
     """Evaluate every rule against the diff; return exit code."""
-    files, added_lines = parse_diff(patch_text)
-    added_text = "\n".join(added_lines)
+    files, added_by_file = parse_diff(patch_text)
 
     if not files:
         print("No file changes detected; spec-requirements check passes vacuously")
@@ -149,7 +204,7 @@ def run(rules_doc: dict, patch_text: str) -> int:
 
     for rule in rules_doc.get("rules", []) or []:
         try:
-            if not rule_applies(rule, files, added_text):
+            if not rule_applies(rule, files, added_by_file):
                 continue
             ok, missing = rule_satisfied(rule, files)
             if ok:
