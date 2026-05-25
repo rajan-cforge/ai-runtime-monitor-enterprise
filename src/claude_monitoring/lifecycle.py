@@ -592,7 +592,7 @@ class ProxyManager:
             env["PATH"] = venv_bin + ":" + env.get("PATH", "")
 
         try:
-            self._proc = subprocess.Popen(  # noqa: S603
+            self._proc = subprocess.Popen(
                 cmd,
                 stdout=stdout,
                 stderr=stderr,

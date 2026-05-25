@@ -1,0 +1,179 @@
+version: 1
+description: |
+  Maps code changes to required spec updates. When a PR's diff matches a rule's
+  conditions, the rule's requirements must be satisfied or CI fails (BLOCK
+  severity) or warns (WARN severity).
+
+  Enforced by scripts/check_spec_requirements.py via the spec-requirements CI
+  job. Layer 6.5 in docs/SSDLC_ENFORCEMENT.md.
+
+rules:
+  - id: api-endpoint-changes
+    description: Changes to dashboard API handlers must update API contracts
+    when_file_matches:
+      - "src/claude_monitoring/monitor.py"
+    when_diff_contains_pattern:
+      - "_handle_"
+      - "do_GET"
+      - "do_POST"
+    requires_doc_update:
+      - "docs/spec/openapi.yaml"
+    requires_doc_update_optional:
+      - "docs/spec/API-CONTRACTS.md"
+    severity: BLOCK
+
+  - id: auth-changes
+    description: Authentication and credential handling changes must update security spec
+    # Scoped to source files only — docs that discuss auth (e.g.,
+    # docs/spec/functional/security.md, THREAT-MODEL.md) legitimately mention
+    # these identifiers without being a code change that requires a spec update.
+    # Verified during the Component 4 sanity check against PR #38.
+    when_file_matches:
+      - "src/claude_monitoring/*.py"
+      - "src/claude_monitoring/**/*.py"
+    when_change_touches_pattern:
+      - "bcrypt"
+      - "hmac.compare_digest"
+      - "session_token"
+      - "auth_token"
+      - "dashboard_token"
+      - "verify_token"
+      - "ensure_dashboard_token"
+    requires_doc_update:
+      - "docs/spec/functional/security.md"
+    requires_doc_update_optional:
+      - "docs/spec/THREAT-MODEL.md"
+    severity: BLOCK
+
+  - id: ca-cert-changes
+    description: CA generation, trust, NameConstraints changes must update threat model
+    # See auth-changes rationale: scope to source files only.
+    when_file_matches:
+      - "src/claude_monitoring/*.py"
+      - "src/claude_monitoring/**/*.py"
+    when_change_touches_pattern:
+      - "generate_custom_ca"
+      - "NameConstraints"
+      - "trust_ca_cert"
+      - "untrust_ca_cert"
+    requires_doc_update:
+      - "docs/spec/THREAT-MODEL.md"
+    requires_doc_update_optional:
+      - "docs/spec/functional/security.md"
+    severity: BLOCK
+
+  - id: sync-sanitization-changes
+    description: Sync agent sanitization changes must update sync spec and threat model
+    # See auth-changes rationale: scope to source files only.
+    when_file_matches:
+      - "src/claude_monitoring/*.py"
+      - "src/claude_monitoring/**/*.py"
+    when_change_touches_pattern:
+      - "_sanitize_string"
+      - "_sanitize_payload"
+      - "_SANITIZE_TEXT_FIELDS"
+    requires_doc_update:
+      - "docs/spec/functional/sync.md"
+    requires_doc_update_optional:
+      - "docs/spec/THREAT-MODEL.md"
+    severity: BLOCK
+
+  - id: schema-changes
+    description: Database schema changes must update architecture and data classification
+    when_file_matches:
+      - "src/claude_monitoring/db.py"
+    when_diff_contains_pattern:
+      - "CREATE TABLE"
+      - "CREATE INDEX"
+      - "ALTER TABLE"
+    requires_doc_update:
+      - "docs/ARCHITECTURE.md"
+    requires_doc_update_optional:
+      - "docs/spec/DATA-CLASSIFICATION.md"
+      - "docs/spec/functional/db.md"
+    severity: BLOCK
+
+  - id: new-external-dependency
+    description: New runtime dependencies must be justified
+    # KNOWN LIMITATION (Phase 3F): rule fires on version bumps too.
+    # The validator currently checks "addition matching `pkg>=...`"
+    # without tracking the corresponding removal — a version-bump
+    # diff (`-foo==1.0` + `+foo==1.1`) trips the rule even though
+    # nothing new was added. Fix is adjacency-aware diff parsing
+    # in the validator; deferred to a follow-up tightening PR.
+    # Acceptable v0.2 friction: occasionally update
+    # dependency-rationale.md for a bump when not strictly needed.
+    when_file_matches:
+      - "pyproject.toml"
+    when_diff_contains_pattern:
+      - '^\+\s*"[\w-]+[><=~^]'
+    requires_doc:
+      - "docs/spec/dependency-rationale.md"
+    severity: BLOCK
+
+  - id: workflow-changes
+    description: CI workflow changes require manual human review
+    # General workflow changes are WARN — CI work is iterative
+    # during a sprint and blanket-BLOCKing would train reviewers
+    # to rubber-stamp the gate. The companion rule
+    # `workflow-safety-check-removal` below catches the actual
+    # security-critical case (removal of safety steps) at BLOCK
+    # severity. Per architect-reviewer cycle 1 on PR #40.
+    when_file_matches:
+      - ".github/workflows/*.yml"
+    requires_review: "manual_human_review"
+    severity: WARN
+
+  - id: workflow-safety-check-removal
+    description: |
+      Removing a safety check from a workflow (bandit, trufflehog,
+      pip-audit, spec-requirements, design-pattern check) or
+      switching to a self-hosted runner requires explicit defense.
+    # Defense-in-depth on the WARN-level workflow-changes rule. A
+    # malicious or accidental edit that removes bandit, removes the
+    # spec-requirements step, or switches `runs-on:` to a
+    # self-hosted runner is a real attack surface — those would
+    # silently weaken every other rule in this file. This rule
+    # fires on the REMOVAL pattern specifically: a line in the
+    # diff starting with `-` that mentions one of the safety
+    # keywords. Severity BLOCK so a removal cannot land without
+    # explicit override + documented rationale.
+    #
+    # Architect-reviewer cycle 1 on PR #40 (commit 5943a9b): keep
+    # workflow-changes WARN, add this targeted BLOCK for the
+    # actual security-critical case.
+    when_file_matches:
+      - ".github/workflows/*.yml"
+    when_diff_contains_pattern:
+      - '^-.*\b(bandit|trufflehog|pip-audit|spec-requirements|check_design_patterns|self-hosted)\b'
+    requires_review: "manual_human_review"
+    severity: BLOCK
+
+  - id: protocol-conformance
+    description: New scanner protocol implementations need conformance tests
+    when_file_matches:
+      - "src/claude_monitoring/scanners/*.py"
+    requires_files:
+      - "tests/architecture/test_scanner_conformance.py"
+    requires_doc_update_optional:
+      - "docs/spec/functional/scanners.md"
+    severity: WARN
+
+  - id: hot-path-changes
+    description: Changes to hot-path code should be performance-reviewed
+    # KNOWN LIMITATION: the validator cannot check PR labels from a
+    # diff alone — labels are GitHub metadata, not in the diff. The
+    # rule's `requires_pr_label` is currently documented for human
+    # reviewers but not mechanically enforced. v0.3 will add a
+    # `--pr-labels` argument to the validator, sourced from
+    # `${{ toJson(github.event.pull_request.labels) }}` in the
+    # workflow, to close the gap.
+    when_file_matches:
+      - "src/claude_monitoring/monitor.py"
+      - "src/claude_monitoring/utils.py"
+    when_change_touches_pattern:
+      - "scan_sensitive"
+      - "is_ai_process"
+      - "do_GET"
+    requires_pr_label: "performance-reviewed"
+    severity: WARN
