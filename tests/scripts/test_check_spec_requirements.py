@@ -287,9 +287,7 @@ def test_pattern_match_scoped_to_files_satisfying_file_match(tmp_path: Path) -> 
         "@@ -1 +1 @@\n"
         "+documentation mentions MAGIC_TOKEN here\n"
     )
-    assert mod.run(rules, patch_text) == 0, (
-        "rule fired on a pattern that only appears in an out-of-scope file"
-    )
+    assert mod.run(rules, patch_text) == 0, "rule fired on a pattern that only appears in an out-of-scope file"
 
 
 def test_requires_doc_passes_when_doc_exists_on_disk(tmp_path: Path) -> None:

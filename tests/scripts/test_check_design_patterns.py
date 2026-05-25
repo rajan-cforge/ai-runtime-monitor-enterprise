@@ -108,11 +108,7 @@ def test_dashboard_handler_handle_without_verify_token_flagged() -> None:
     is real (route shipped without auth check), so it deserves
     positive + negative cases.
     """
-    src = (
-        "class DashboardHandler:\n"
-        "    def _handle_users(self, payload):\n"
-        "        return self._respond(payload)\n"
-    )
+    src = "class DashboardHandler:\n    def _handle_users(self, payload):\n        return self._respond(payload)\n"
     msgs = _collect_msgs(src)
     assert any("verify_token" in m for m in msgs), (
         f"DashboardHandler._handle_* without verify_token not detected: {msgs}"
@@ -146,20 +142,14 @@ def test_dashboard_handler_handle_with_auth_exempt_annotation_passes() -> None:
         "        return self._respond({'ok': True})\n"
     )
     msgs = _collect_msgs(src)
-    assert not any("verify_token" in m for m in msgs), (
-        f"auth-exempt handler spuriously flagged: {msgs}"
-    )
+    assert not any("verify_token" in m for m in msgs), f"auth-exempt handler spuriously flagged: {msgs}"
 
 
 def test_handle_outside_dashboard_handler_not_flagged() -> None:
     """The class-context scoping: `_handle_*` methods on classes OTHER
     than `DashboardHandler` should not trip the rule. The check is
     specifically about the dashboard HTTP surface."""
-    src = (
-        "class JSONLSessionWatcher:\n"
-        "    def _handle_record(self, payload):\n"
-        "        return payload\n"
-    )
+    src = "class JSONLSessionWatcher:\n    def _handle_record(self, payload):\n        return payload\n"
     msgs = _collect_msgs(src)
     assert not any("verify_token" in m for m in msgs), (
         f"_handle_ method on non-DashboardHandler class spuriously flagged: {msgs}"
