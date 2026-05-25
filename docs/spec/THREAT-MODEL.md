@@ -39,7 +39,7 @@ This document analyzes threats to the AI Runtime Monitor across its trust bounda
 
 ## 2. Trust boundaries
 
-The system crosses five trust boundaries. Each is analyzed below.
+The system crosses five trust boundaries today, with a sixth (B6: Agent Identity) planned for v0.3. Each is analyzed below.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -65,13 +65,14 @@ The system crosses five trust boundaries. Each is analyzed below.
                     └───────────────────┘
 ```
 
-Five boundaries:
+Five boundaries today, with a sixth planned for v0.3:
 
 - **B1: User ↔ Dashboard** (browser to local HTTP server)
 - **B2: Daemon ↔ Database** (process to file system)
 - **B3: Daemon ↔ Control Plane** (local to remote, over HTTPS)
 - **B4: Proxy ↔ AI APIs** (intercept TLS termination)
 - **B5: Browser Extension ↔ Daemon** (extension to local HTTP)
+- **B6: Agent Identity** (claimed vs. verified agent provenance — planned v0.3; see §8)
 
 ## 3. Boundary B1: User ↔ Dashboard
 
@@ -265,7 +266,27 @@ Five boundaries:
 - *Mitigation:* The legitimate extension is published only via the Chrome Web Store with code review. Apache 2.0 licensed source on GitHub for verification.
 - *Residual risk:* Compromised CWS account or malicious update. Standard extension threat model.
 
-## 8. Summary risk table
+## 8. Boundary B6: Agent Identity (planned v0.3)
+
+The boundary between "an AI agent claims to be Claude Code" and "the system confirms this is the legitimate Claude Code binary, signed by Anthropic, in its expected location."
+
+v0.2 does not enforce this boundary. The existing process scanner detects AI agents by process name only, without verifying provenance. This is a known gap — addressed in v0.3.
+
+v0.3 introduces agent provenance verification via code signature, expected install location, binary hash registry, and behavior policy. See [docs/design/agent-detection.md](../design/agent-detection.md) for the full design including STRIDE analysis for B6 and the policy model.
+
+Threats deferred to v0.3:
+
+- **T6.1:** Adversarial binary renamed to match a known agent.
+- **T6.2:** Hidden agent installed in `/tmp`, `~/Library/Caches/`, or cron, calling AI APIs to exfiltrate data.
+- **T6.3:** Compromised legitimate agent reading files beyond expected scope.
+- **T6.4:** Compromised known-agent registry granting silent allowlist to malicious binaries.
+
+Until v0.3 mitigations exist, v0.2's existing protections are limited to:
+
+- Sensitive-data detection pipeline (catches credential exposure regardless of which agent caused it).
+- Process inventory in the System tab (visibility-only, no policy).
+
+## 9. Summary risk table
 
 | Boundary | Highest residual risk | Mitigation maturity | Action item |
 |----------|----------------------|---------------------|-------------|
@@ -274,15 +295,16 @@ Five boundaries:
 | B3 Daemon↔CP | Plaintext leak in sync | Strong (sync sanitizer + fail-closed) | New field type means update `_SANITIZE_TEXT_FIELDS` |
 | B4 Proxy↔AI | NameConstraints bug at OS | Strong (cryptographic enforcement) | Periodic verification on new macOS versions |
 | B5 Browser ext | Fabricated capture data | Moderate (visual distinction) | Heartbeat health enforcement |
+| B6 Agent Identity | Adversarial binary impersonation | None in v0.2; v0.3 addresses | See design doc |
 
-## 9. Open threat-model questions
+## 10. Open threat-model questions
 
 - Should the daemon refuse to run if the user is root? (Currently allowed; should perhaps warn.)
 - Should the dashboard be HTTPS-only on `localhost`? (Token over HTTP is acceptable on loopback, but some users will set `--bind 0.0.0.0` for remote access; that should force HTTPS.)
 - Should the auto-purge be configurable down to 7 days? (Currently fixed at 30; some enterprise customers may want shorter.)
 - Should the control plane sync default to OFF in OSS, requiring explicit opt-in? (Currently OFF by default; documented as opt-in only.)
 
-## 10. Review history
+## 11. Review history
 
 - 2026-05-24: Initial draft for v0.2 launch.
 - Future: Quarterly review or on any major architectural change.
