@@ -434,3 +434,66 @@ def test_dashboard_escUrl_blocks_or_passes(dashboard_text: str, payload: str) ->
     )
     assert "/^\\s*data:/i" in body, "escUrl must block data: scheme"
     assert "/^\\s*vbscript:/i" in body, "escUrl must block vbscript: scheme"
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Scroll-to-alert feature regression tests (feat/scroll-to-alert)
+# ──────────────────────────────────────────────────────────────────────────
+
+
+def test_dashboard_url_alert_param_is_parsed(dashboard_text: str) -> None:
+    """The init block must read `?alert=<id>` from the URL on page load and
+    pass it into openDeepDive. Without this, sharing a Vigil URL with an
+    alert id doesn't jump to the alert on the receiving end."""
+    assert "URLSearchParams" in dashboard_text, "init must read URL params"
+    # The handler reads `alert` from the query string and calls openDeepDive
+    # with it as the third arg. Look for both signals.
+    assert "p.get('alert')" in dashboard_text, "init must extract the `alert` query-string parameter"
+    # openDeepDive's signature must accept the third arg.
+    assert "openDeepDive(sessionId, jumpToTurn, jumpToAlertId)" in dashboard_text, (
+        "openDeepDive must accept jumpToAlertId as third positional argument"
+    )
+
+
+def test_dashboard_sensitive_event_block_has_alert_id(dashboard_text: str) -> None:
+    """renderInspector's sensitive_data case must emit a data-alert-id
+    attribute on the event-block so scrollToAlert can find it."""
+    # Match the actual emit in dashboard.html (escAttr-wrapped event id).
+    pattern = re.compile(
+        r'event-block sensitive"\s*data-alert-id="\'\s*\+\s*escAttr\(String\(ev\.id\)\)',
+    )
+    assert pattern.search(dashboard_text), (
+        "sensitive_data event-block must include data-alert-id derived from ev.id "
+        "via escAttr (preserves the XSS-helper discipline from the C2 audit fix)"
+    )
+
+
+def test_dashboard_alert_flash_animation_defined(dashboard_text: str) -> None:
+    """The .alert-flash class + @keyframes must exist in the stylesheet so
+    the scroll-target draws the eye when navigated to."""
+    assert ".alert-flash" in dashboard_text, ".alert-flash CSS class must be defined"
+    assert "@keyframes alert-flash-kf" in dashboard_text, "alert-flash-kf keyframe must be defined"
+
+
+def test_dashboard_scrollToAlert_uses_smooth_center(dashboard_text: str) -> None:
+    """scrollToAlert must use scrollIntoView with smooth behavior + center
+    block so the alert lands in the viewport's middle, not at the top edge."""
+    # Find the scrollToAlert function body and verify the scrollIntoView call.
+    assert "function scrollToAlert(alertId)" in dashboard_text, "scrollToAlert function must be defined"
+    # The actual scrollIntoView call inside scrollToAlert.
+    assert "scrollIntoView({behavior:'smooth', block:'center'})" in dashboard_text, (
+        "scrollToAlert must scroll smoothly to center"
+    )
+
+
+def test_dashboard_alert_list_passes_alert_id_to_deep_dive(dashboard_text: str) -> None:
+    """The alert-list onclick must pass `a.id` as the third arg to
+    openDeepDive so in-app clicks (not just URL deep-links) scroll to the
+    alert block."""
+    # The alert-session onclick handler builds an openDeepDive call with
+    # session_id, turn_number, AND alert id. Look for the literal
+    # substring that emits `, '+a.id+')` right after the turn_number arg.
+    expected = "(a.turn_number||1)+', '+a.id+')"
+    assert expected in dashboard_text, (
+        f"alert-list onclick must pass a.id as the third arg to openDeepDive (looking for substring: {expected!r})"
+    )
