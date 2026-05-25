@@ -22,7 +22,7 @@ This document analyzes threats to the AI Runtime Monitor across its trust bounda
 ### 1.2 Out of scope
 
 - Vulnerabilities in the underlying operating system, Python interpreter, or third-party libraries (tracked via pip-audit; not a threat model concern)
-- Threats to the AI agent processes themselves (Claude Code, Cursor, etc.) — Vigil observes them; it does not protect them from compromise
+- Threats to the AI agent processes themselves (Claude Code, Cursor, etc.) — Vigil observes them; it does not protect them from compromise. (Note: B6 (planned v0.3, §8) partially revisits this — v0.3 adds provenance verification and policy enforcement for agent identity, though Vigil still does not attempt to harden the agents' internals.)
 - Threats to the Anthropic, OpenAI, Google, etc. APIs that AI agents talk to
 - Physical security of the developer's machine
 - Network-level attacks on the developer's home or office network (mitigated by HTTPS endpoints upstream, not Vigil)

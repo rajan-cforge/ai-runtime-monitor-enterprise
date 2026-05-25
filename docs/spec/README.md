@@ -9,7 +9,7 @@ This directory holds the formal specifications for AI Runtime Monitor (Vigil). T
 | [PRD.md](./PRD.md) | Product requirements — what Vigil is, who it's for, what's in v0.2 | Investors, customers, internal team | Landed (PR 1) |
 | [openapi.yaml](./openapi.yaml) | Machine-readable API spec for all 22+ endpoints | API consumers, client generators, contract testers | Not yet authored — PR 3 of 5 |
 | [API-CONTRACTS.md](./API-CONTRACTS.md) | Human-readable narrative for openapi.yaml | Developers building integrations, customers | Not yet authored — PR 3 of 5 |
-| [THREAT-MODEL.md](./THREAT-MODEL.md) | STRIDE threat model across 5 trust boundaries | Security reviewers, enterprise procurement | Not yet authored — PR 4 of 5 |
+| [THREAT-MODEL.md](./THREAT-MODEL.md) | STRIDE threat model across 6 trust boundaries (B6 planned v0.3) | Security reviewers, enterprise procurement | Not yet authored — PR 4 of 5 |
 | [SECURITY-MANIFEST.md](./SECURITY-MANIFEST.md) | Controls mapped to OWASP ASVS, NIST SSDF, OWASP Top 10 | Security reviewers, compliance auditors | Not yet authored — PR 4 of 5 |
 | [DATA-CLASSIFICATION.md](./DATA-CLASSIFICATION.md) | Data sensitivity tiers, retention policies, third-party transmission | Enterprise procurement, compliance auditors | Not yet authored — PR 4 of 5 |
 | [functional/](./functional/) | Per-module functional specs (monitor, sync, security, watch, wizard, status, db, config, scanners) | Engineers maintaining the codebase | Not yet authored — PR 5 of 5 |

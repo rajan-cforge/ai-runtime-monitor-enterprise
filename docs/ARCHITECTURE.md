@@ -41,7 +41,7 @@ This document is the technical architecture reference for AI Runtime Monitor (Vi
 
 ## 2. Trust boundaries
 
-The system crosses five trust boundaries. The threat model document analyzes each in detail; this section is the diagram.
+The system crosses five trust boundaries today, with a sixth (B6: Agent Identity) planned for v0.3 — see `docs/spec/THREAT-MODEL.md` §8 and `docs/design/agent-detection.md`. The threat model document analyzes each in detail; this section is the diagram.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
