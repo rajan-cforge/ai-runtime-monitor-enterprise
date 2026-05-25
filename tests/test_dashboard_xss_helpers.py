@@ -479,7 +479,9 @@ def test_dashboard_scrollToAlert_uses_smooth_center(dashboard_text: str) -> None
     """scrollToAlert must use scrollIntoView with smooth behavior + center
     block so the alert lands in the viewport's middle, not at the top edge."""
     # Find the scrollToAlert function body and verify the scrollIntoView call.
-    assert "function scrollToAlert(alertId)" in dashboard_text, "scrollToAlert function must be defined"
+    # Use a prefix-only assert so the signature can evolve (cycle-2 added a
+    # `_alertRetry` guard arg without breaking external callers).
+    assert re.search(r"\bfunction scrollToAlert\s*\(", dashboard_text), "scrollToAlert function must be defined"
     # The actual scrollIntoView call inside scrollToAlert.
     assert "scrollIntoView({behavior:'smooth', block:'center'})" in dashboard_text, (
         "scrollToAlert must scroll smoothly to center"
