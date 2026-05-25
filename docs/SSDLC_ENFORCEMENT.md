@@ -40,6 +40,9 @@ multiple.
         │  Layer 7  Release gates                     │
         │           Notarization, SBOM, attestation   │
         ├─────────────────────────────────────────────┤
+        │  Layer 6.5  Spec-driven enforcement         │
+        │             YAML rules + criticality + AST  │
+        ├─────────────────────────────────────────────┤
         │  Layer 6  Branch protection                 │
         │           Required checks, signed commits   │
         ├─────────────────────────────────────────────┤
@@ -62,6 +65,28 @@ multiple.
 
 Lower layers fail faster and give faster feedback. Higher layers catch
 what lower layers miss. A failure at any layer blocks the work.
+
+### Layer 6.5: Spec-driven enforcement
+
+Mechanical rules that map code-change patterns to required spec updates. Sits between branch protection (Layer 6, which determines *who* can merge) and release gates (Layer 7, which determines *what* can ship). Layer 6.5 determines *under what conditions* a PR can merge — independent of who pushed it.
+
+The rules live in `.github/spec-requirements.yaml` as a versioned table. `scripts/check_spec_requirements.py` evaluates a PR's unified diff against every rule on each `pull_request` event (Layer 5 wires it as the `spec-requirements` job in `.github/workflows/ci.yml`). Rule severities are `BLOCK` (the gate fails) or `WARN` (the gate emits a message and merge proceeds). Pattern-matching uses `pathlib.PurePath.match` so `**` is the recursive-directory wildcard a shell user expects — `fnmatch` would silently underfire on nested module paths.
+
+Four companion files implement the rest of the layer:
+
+- **`CLAUDE.md`** (project constitution at the repo root) — defines the mandatory and forbidden patterns ruff and the AST checker enforce. The rationale lives here so future contributors see *why* each pattern matters rather than only seeing the gate fire.
+- **`.github/pull_request_template.md`** — every PR declares its C0–C4 criticality, checks off touched specs, and discloses known limitations or deferred work. C3 and C4 require human diff review regardless of agent verdicts (Layer 8).
+- **`scripts/check_design_patterns.py`** + `scripts/check_design_patterns_baseline.txt` — AST-walker for project-specific patterns ruff cannot express (DashboardHandler routes must call `verify_token`, no `subprocess(shell=True)`, no `requests(verify=False)`, etc.). New violations not in the baseline file fail the build.
+- **`pyproject.toml` `[tool.ruff]`** — language-level enforcement for everything ruff can express (17 rule families: bugbear, pyupgrade, pathlib, blind-except, datetimez, tryceratops, perflint, pylint, simplify, bandit-via-ruff, etc.).
+
+Two operational disciplines keep the layer maintainable:
+
+- **Baselines shrink, never grow.** `check_design_patterns_baseline.txt` records existing violations on the day a rule lands; new violations fail the gate, cleanup PRs remove rows. The same discipline applies to the per-file coverage ratchet (Layer 5).
+- **Warmup graduates to enforced.** New ruff rules that surface more than 20 violations land in `docs/RUFF_WARMUP.md` rather than blocking immediately. Each entry tracks current count, audit hypothesis, and a Phase 3F sprint target. Rules graduate to fully enforced when count reaches zero or the audit confirms a permanent ignore.
+
+Three known validator limitations are documented inline in the YAML (search the file for `KNOWN LIMITATION`): `new-external-dependency` fires on version bumps as well as new deps (fix: adjacency-aware diff parsing in Phase 3F); `workflow-changes` is WARN-severity for v0.2 ergonomic reasons but is a candidate for escalation to BLOCK after architect-reviewer feedback; `hot-path-changes` requires a PR label the validator can't read from the diff alone (Phase 3F: add a `--pr-labels` argument sourced from `${{ toJson(github.event.pull_request.labels) }}` in the workflow).
+
+Effect: from the day Layer 6.5 lands, a PR that touches authentication code without updating `docs/spec/functional/security.md` cannot merge. A PR that touches `_handle_*` routes without updating `openapi.yaml` cannot merge. A PR introducing `subprocess(shell=True)` or `requests(verify=False)` cannot merge — those are zero-tolerance forbiddens, baselined at zero, and the AST checker fails the build on any new occurrence.
 
 ### Layer 8: Review intelligence (multi-agent)
 
@@ -213,6 +238,39 @@ This layer is **procedural**, not mechanical — it relies on the orchestrator f
   - Node (future React migration): `npm audit --audit-level=moderate`
 - *Bypass path*: none. CI status check is required for merge.
 
+**Rule: new runtime dependencies require an entry in dependency-rationale.md.**
+
+- *Why*: forces the per-dep "why this one and not the alternatives"
+  conversation to happen at PR time, while it's still cheap. Records
+  the decision so future contributors don't re-litigate it. Records
+  the no-adopt list (Trivy, Codecov, GitPython, …) so the same dep
+  doesn't get proposed again in 3 months.
+- *Mechanism*: Layer 6.5 spec-requirements rule
+  `new-external-dependency` — a PR that adds a line matching
+  `"<pkg>[><=~^]…"` to `pyproject.toml` must also touch
+  `docs/spec/dependency-rationale.md`. Validator is
+  `scripts/check_spec_requirements.py`; CI job is `spec-requirements`.
+- *Bypass path*: none for mechanical fire. The rule currently fires
+  on version bumps too (KNOWN LIMITATION documented in the YAML);
+  acceptable v0.2 friction until Phase 3F adds adjacency-aware diff
+  parsing.
+
+**Rule: spec corpus changes track code changes.**
+
+- *Why*: when code that has a corresponding spec doc evolves, the
+  spec must evolve with it — otherwise the spec drifts into fiction
+  and stops being useful. Catches "I changed the auth flow but
+  forgot to update `security.md`" at PR time, not at audit time.
+- *Mechanism*: Layer 6.5 spec-requirements rules
+  (`api-endpoint-changes`, `auth-changes`, `ca-cert-changes`,
+  `sync-sanitization-changes`, `schema-changes`) map source-file +
+  pattern matches to required doc updates. See
+  `.github/spec-requirements.yaml` for the full table; each rule
+  is severity `BLOCK` so a violation fails the gate.
+- *Bypass path*: none for `BLOCK` rules. The validator skips
+  malformed rules with a stderr warning rather than crashing the
+  whole gate.
+
 **Rule: secrets cannot land in the codebase.**
 
 - *Why*: secrets in git history are forever, regardless of subsequent
@@ -245,10 +303,29 @@ This layer is **procedural**, not mechanical — it relies on the orchestrator f
 - *Mechanism*:
   - Pre-commit hook: `ruff format` + `ruff check --fix` runs on every
     staged Python file
-  - CI: `ruff check` runs on the full diff
+  - CI: `ruff check` runs on the full diff against the 17-family
+    aggressive ruleset (Layer 6.5)
   - Post-edit hook in `.claude/hooks/post-edit.sh` runs `ruff format`
     immediately after any Claude Code Edit tool call
 - *Bypass path*: `--no-verify` skips local. CI catches.
+- *Warmup*: rules with >20 existing violations land in
+  `docs/RUFF_WARMUP.md` rather than blocking immediately; the warmup
+  list shrinks over time as Phase 3F sprints clean up.
+
+**Rule: project-specific design patterns enforced by AST checker.**
+
+- *Why*: ruff covers what's expressible as static lint. Some
+  CLAUDE.md mandatory and forbidden patterns aren't — e.g.,
+  "DashboardHandler routes must call `verify_token`",
+  `subprocess(shell=True)`, `requests(verify=False)`. A custom AST
+  walker enforces these directly.
+- *Mechanism*: `scripts/check_design_patterns.py` runs in the CI
+  lint job (Layer 5) under the rules from Layer 6.5. Existing
+  violations are baselined in
+  `scripts/check_design_patterns_baseline.txt`; new violations not
+  in the baseline fail the build.
+- *Bypass path*: none. The baseline shrinks over time; cleanup PRs
+  remove rows but never add them.
 
 **Rule: dangerous bash commands are blocked at hook time.**
 
@@ -649,6 +726,9 @@ IS the code.
 Maintained as a living document. Updated whenever a new control is
 added or an existing control changes scope.
 
-Last reviewed: 2026-05-23
+Last reviewed: 2026-05-25 (Layer 6.5 added — spec-driven enforcement
+via .github/spec-requirements.yaml, CLAUDE.md as constitution,
+custom AST checker with baseline, aggressive ruff ruleset with
+RUFF_WARMUP.md graduation discipline).
 Next review trigger: at the close of Phase 3B (Quality Gates Q1)
 when new controls are added.
