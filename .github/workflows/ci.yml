@@ -19,6 +19,13 @@ jobs:
       - run: pip install ruff
       - run: ruff check src/ tests/
       - run: ruff format --check src/ tests/
+      # Component 3 of the spec-driven-enforcement PR. AST-walker for
+      # patterns ruff can't express (bare except, mutable defaults,
+      # subprocess shell=True, missing docstrings, etc.). Existing
+      # violations are baselined in scripts/check_design_patterns_baseline.txt;
+      # the gate fails only on new violations not in the baseline.
+      - name: Design pattern checks
+        run: python scripts/check_design_patterns.py
 
   test:
     runs-on: ${{ matrix.os }}
