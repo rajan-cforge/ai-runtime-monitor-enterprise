@@ -588,9 +588,8 @@ class TestMainArgumentParsing:
         monkeypatch.setattr("claude_monitoring.lifecycle.get_output_dir", lambda: tmp_path)
         from claude_monitoring.monitor import main
 
-        with patch("sys.argv", ["ai-monitor", "--logs"]):
-            with pytest.raises(SystemExit) as exc:
-                main()
+        with patch("sys.argv", ["ai-monitor", "--logs"]), pytest.raises(SystemExit) as exc:
+            main()
         assert exc.value.code == 0
         out = capsys.readouterr().out
         assert "No log file yet" in out
