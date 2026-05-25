@@ -95,6 +95,14 @@ rules:
 
   - id: new-external-dependency
     description: New runtime dependencies must be justified
+    # KNOWN LIMITATION (Phase 3F): rule fires on version bumps too.
+    # The validator currently checks "addition matching `pkg>=...`"
+    # without tracking the corresponding removal — a version-bump
+    # diff (`-foo==1.0` + `+foo==1.1`) trips the rule even though
+    # nothing new was added. Fix is adjacency-aware diff parsing
+    # in the validator; deferred to a follow-up tightening PR.
+    # Acceptable v0.2 friction: occasionally update
+    # dependency-rationale.md for a bump when not strictly needed.
     when_file_matches:
       - "pyproject.toml"
     when_diff_contains_pattern:
@@ -105,6 +113,16 @@ rules:
 
   - id: workflow-changes
     description: CI workflow changes require manual human review
+    # KNOWN LIMITATION: WARN-severity means the validator emits a
+    # message but merge proceeds. The human reviewer is expected
+    # to actually review workflow changes — `requires_review:
+    # manual_human_review` is documentation, not mechanical
+    # enforcement. The security argument for escalating to BLOCK
+    # is real (a workflow change could disable bandit, remove the
+    # spec-requirements step, or switch to a self-hosted runner);
+    # the ergonomic argument for WARN is that CI work is iterative
+    # during a sprint. Revisit in Phase 3F after architect-reviewer
+    # feedback on this PR.
     when_file_matches:
       - ".github/workflows/*.yml"
     requires_review: "manual_human_review"
@@ -122,6 +140,13 @@ rules:
 
   - id: hot-path-changes
     description: Changes to hot-path code should be performance-reviewed
+    # KNOWN LIMITATION: the validator cannot check PR labels from a
+    # diff alone — labels are GitHub metadata, not in the diff. The
+    # rule's `requires_pr_label` is currently documented for human
+    # reviewers but not mechanically enforced. v0.3 will add a
+    # `--pr-labels` argument to the validator, sourced from
+    # `${{ toJson(github.event.pull_request.labels) }}` in the
+    # workflow, to close the gap.
     when_file_matches:
       - "src/claude_monitoring/monitor.py"
       - "src/claude_monitoring/utils.py"
