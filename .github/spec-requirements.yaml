@@ -1,0 +1,133 @@
+version: 1
+description: |
+  Maps code changes to required spec updates. When a PR's diff matches a rule's
+  conditions, the rule's requirements must be satisfied or CI fails (BLOCK
+  severity) or warns (WARN severity).
+
+  Enforced by scripts/check_spec_requirements.py via the spec-requirements CI
+  job. Layer 6.5 in docs/SSDLC_ENFORCEMENT.md.
+
+rules:
+  - id: api-endpoint-changes
+    description: Changes to dashboard API handlers must update API contracts
+    when_file_matches:
+      - "src/claude_monitoring/monitor.py"
+    when_diff_contains_pattern:
+      - "_handle_"
+      - "do_GET"
+      - "do_POST"
+    requires_doc_update:
+      - "docs/spec/openapi.yaml"
+    requires_doc_update_optional:
+      - "docs/spec/API-CONTRACTS.md"
+    severity: BLOCK
+
+  - id: auth-changes
+    description: Authentication and credential handling changes must update security spec
+    # Scoped to source files only — docs that discuss auth (e.g.,
+    # docs/spec/functional/security.md, THREAT-MODEL.md) legitimately mention
+    # these identifiers without being a code change that requires a spec update.
+    # Verified during the Component 4 sanity check against PR #38.
+    when_file_matches:
+      - "src/claude_monitoring/*.py"
+      - "src/claude_monitoring/**/*.py"
+    when_change_touches_pattern:
+      - "bcrypt"
+      - "hmac.compare_digest"
+      - "session_token"
+      - "auth_token"
+      - "dashboard_token"
+      - "verify_token"
+      - "ensure_dashboard_token"
+    requires_doc_update:
+      - "docs/spec/functional/security.md"
+    requires_doc_update_optional:
+      - "docs/spec/THREAT-MODEL.md"
+    severity: BLOCK
+
+  - id: ca-cert-changes
+    description: CA generation, trust, NameConstraints changes must update threat model
+    # See auth-changes rationale: scope to source files only.
+    when_file_matches:
+      - "src/claude_monitoring/*.py"
+      - "src/claude_monitoring/**/*.py"
+    when_change_touches_pattern:
+      - "generate_custom_ca"
+      - "NameConstraints"
+      - "trust_ca_cert"
+      - "untrust_ca_cert"
+    requires_doc_update:
+      - "docs/spec/THREAT-MODEL.md"
+    requires_doc_update_optional:
+      - "docs/spec/functional/security.md"
+    severity: BLOCK
+
+  - id: sync-sanitization-changes
+    description: Sync agent sanitization changes must update sync spec and threat model
+    # See auth-changes rationale: scope to source files only.
+    when_file_matches:
+      - "src/claude_monitoring/*.py"
+      - "src/claude_monitoring/**/*.py"
+    when_change_touches_pattern:
+      - "_sanitize_string"
+      - "_sanitize_payload"
+      - "_SANITIZE_TEXT_FIELDS"
+    requires_doc_update:
+      - "docs/spec/functional/sync.md"
+    requires_doc_update_optional:
+      - "docs/spec/THREAT-MODEL.md"
+    severity: BLOCK
+
+  - id: schema-changes
+    description: Database schema changes must update architecture and data classification
+    when_file_matches:
+      - "src/claude_monitoring/db.py"
+    when_diff_contains_pattern:
+      - "CREATE TABLE"
+      - "CREATE INDEX"
+      - "ALTER TABLE"
+    requires_doc_update:
+      - "docs/ARCHITECTURE.md"
+    requires_doc_update_optional:
+      - "docs/spec/DATA-CLASSIFICATION.md"
+      - "docs/spec/functional/db.md"
+    severity: BLOCK
+
+  - id: new-external-dependency
+    description: New runtime dependencies must be justified
+    when_file_matches:
+      - "pyproject.toml"
+    when_diff_contains_pattern:
+      - '^\+\s*"[\w-]+[><=~^]'
+    requires_doc:
+      - "docs/spec/dependency-rationale.md"
+    severity: BLOCK
+
+  - id: workflow-changes
+    description: CI workflow changes require manual human review
+    when_file_matches:
+      - ".github/workflows/*.yml"
+    requires_review: "manual_human_review"
+    severity: WARN
+
+  - id: protocol-conformance
+    description: New scanner protocol implementations need conformance tests
+    when_file_matches:
+      - "src/claude_monitoring/scanners/*.py"
+    requires_files:
+      - "tests/architecture/test_scanner_conformance.py"
+    requires_doc_update_optional:
+      - "docs/spec/functional/scanners.md"
+    severity: WARN
+
+  - id: hot-path-changes
+    description: Changes to hot-path code should be performance-reviewed
+    when_file_matches:
+      - "src/claude_monitoring/monitor.py"
+      - "src/claude_monitoring/utils.py"
+    when_change_touches_pattern:
+      - "scan_sensitive"
+      - "is_ai_process"
+      - "do_GET"
+    requires_pr_label: "performance-reviewed"
+    severity: WARN
