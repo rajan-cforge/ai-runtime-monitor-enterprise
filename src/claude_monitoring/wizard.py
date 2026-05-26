@@ -225,11 +225,25 @@ def run_setup_wizard(force: bool = False) -> bool:
     # still opt to run JSONL-only + browser-extension capture, which
     # doesn't need the system proxy at all.
     trust_state = state["steps"].get("trust_ca")
-    trust_blocked = trust_state in ("manual_required", "error")
+    # Gate Step 3 on ANY non-trusted state — including the user's
+    # intentional 'skipped' decline. Enabling the system proxy without
+    # admin trust routes AI traffic through an untrusted CA, breaks
+    # browsers, and captures nothing useful regardless of whether the
+    # untrusted state came from a wizard failure or an explicit decline.
+    # The return value still differentiates these (decline → True;
+    # failure → False) so callers see the intent, but the runtime
+    # behavior is the same: no system proxy without trust.
+    trust_blocked = trust_state in ("manual_required", "error", "skipped")
+    skipped_by_choice = trust_state == "skipped"
     print()
     if trust_blocked:
-        print("[3/4] ⏭ System proxy skipped — CA trust verification failed (see step 2)")
-        print("       The system proxy would have no effect until trust is applied.")
+        if skipped_by_choice:
+            print("[3/4] ⏭ System proxy skipped — CA trust was declined (see step 2)")
+            print("       Without trust, the system proxy would produce cert errors")
+            print("       in browsers/apps with zero useful capture.")
+        else:
+            print("[3/4] ⏭ System proxy skipped — CA trust verification failed (see step 2)")
+            print("       The system proxy would have no effect until trust is applied.")
         state["steps"]["system_proxy"] = "skipped_trust_required"
     elif _is_system_proxy_configured():
         print("[3/4] ✅ System proxy already enabled")

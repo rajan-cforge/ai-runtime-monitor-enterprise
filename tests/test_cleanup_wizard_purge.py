@@ -357,6 +357,48 @@ class TestSetupWizard:
         # without trust settings.
         assert "no admin trust settings present" in out
 
+    def test_wizard_skips_system_proxy_when_user_declines_trust(self, tmp_path, monkeypatch):
+        """When the user answers 'no' to the trust prompt, Step 3 must
+        NOT offer the system proxy — enabling it without trust would
+        route AI traffic through an untrusted CA and break browsers
+        with zero useful capture. The wizard still returns True because
+        the decline was an intentional user choice (not a verification
+        failure), but the runtime behavior of Step 3 is the same."""
+        monkeypatch.setattr("claude_monitoring.security.get_output_dir", lambda: tmp_path)
+        monkeypatch.setattr("claude_monitoring.security.get_db_path", lambda: tmp_path / "monitor.db")
+        monkeypatch.setattr("claude_monitoring.config.get_output_dir", lambda: tmp_path)
+        monkeypatch.setattr("claude_monitoring.config.get_db_path", lambda: tmp_path / "monitor.db")
+        monkeypatch.setattr("claude_monitoring.db.get_output_dir", lambda: tmp_path)
+        monkeypatch.setattr("claude_monitoring.db.get_db_path", lambda: tmp_path / "monitor.db")
+
+        cert = tmp_path / "certs" / "ai-monitor-ca.pem"
+        cert.parent.mkdir(parents=True)
+        cert.write_bytes(b"-----BEGIN CERTIFICATE-----\nstub\n-----END CERTIFICATE-----\n")
+
+        # Cert not trusted, user declines the trust prompt.
+        monkeypatch.setattr(wizard_mod, "verify_ca_trusted", lambda *a, **kw: (False, None))
+        monkeypatch.setattr(wizard_mod, "get_ca_info", lambda: {"common_name": "Test CA"})
+        monkeypatch.setattr(wizard_mod, "_prompt", lambda *a, **kw: False)
+
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            result = wizard_mod.run_setup_wizard()
+
+        out = buf.getvalue()
+        # User's intentional decline → wizard exit code is success.
+        assert result is True
+        # But Step 3 must still be blocked from prompting for the system proxy.
+        assert "System proxy skipped" in out
+        assert "CA trust was declined" in out
+        # No interactive system-proxy prompt should appear; assert by
+        # absence of the prompt's distinctive opener phrasing.
+        assert "Enable AI traffic monitoring for desktop apps" not in out
+        # Marker reflects both intentional decline and blocked step.
+        marker = tmp_path / ".setup_complete"
+        state = json.loads(marker.read_text())
+        assert state["steps"]["trust_ca"] == "skipped"
+        assert state["steps"]["system_proxy"] == "skipped_trust_required"
+
     def test_wizard_skips_already_present_cert(self, tmp_path, monkeypatch):
         monkeypatch.setattr("claude_monitoring.security.get_output_dir", lambda: tmp_path)
         monkeypatch.setattr("claude_monitoring.security.get_db_path", lambda: tmp_path / "monitor.db")

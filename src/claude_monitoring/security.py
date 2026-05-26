@@ -20,6 +20,7 @@ import hashlib
 import hmac
 import os
 import secrets
+import shlex
 import socket
 import subprocess
 from datetime import datetime, timedelta, timezone
@@ -222,9 +223,15 @@ def trust_ca_cert(cert_path: Path | None = None) -> bool:
     cert_path = cert_path or get_ca_cert_path()
     if not cert_path.exists():
         return False
+    # The `do shell script` payload is a POSIX-shell-evaluated string;
+    # shlex.quote keeps paths with spaces / shell metacharacters from
+    # breaking the invocation. cert_path is config-derived (not user
+    # input) so injection isn't the threat — silent misparse of a home
+    # directory containing a space is.
+    quoted_cert = shlex.quote(str(cert_path))
     script = (
         f'do shell script "security add-trusted-cert -d -r trustRoot '
-        f'-k /Library/Keychains/System.keychain {cert_path}" '
+        f'-k /Library/Keychains/System.keychain {quoted_cert}" '
         f"with administrator privileges"
     )
     try:
@@ -247,16 +254,18 @@ def _ca_cert_sha1(cert_path: Path) -> str | None:
     fingerprint match is the most reliable way to identify the same cert
     across those two surfaces. SHA-1 is unsafe for forgery but fine as
     an identifier — we're not validating anything cryptographically here.
+
+    Uses ``hashlib.sha1(..., usedforsecurity=False)`` so bandit's B303
+    blacklist check recognises the non-security use and does not flag
+    it. cryptography's ``hashes.SHA1()`` has no equivalent flag.
     """
     try:
-        from cryptography.hazmat.primitives import hashes
+        from cryptography.hazmat.primitives import serialization
         from cryptography.x509 import load_pem_x509_certificate
 
         cert = load_pem_x509_certificate(cert_path.read_bytes())
-        # SHA-1 here is an identifier, not a security primitive — macOS
-        # uses it as the join key between find-certificate -Z and
-        # trust-settings-export, so we have to match its choice.
-        return cert.fingerprint(hashes.SHA1()).hex()  # noqa: S303
+        der = cert.public_bytes(serialization.Encoding.DER)
+        return hashlib.sha1(der, usedforsecurity=False).hexdigest()
     except Exception:
         return None
 
@@ -332,6 +341,17 @@ def verify_ca_trusted(cert_path: Path | None = None) -> tuple[bool, str | None]:
             # that as the more specific "not trusted" answer.
             stderr = (export_result.stderr or "").strip()
             return False, f"trust-settings-export failed: {stderr or 'no admin trust settings present'}"
+        # security trust-settings-export rewrites the file with its own
+        # umask (typically 0o644), so the mkstemp 0o600 doesn't survive.
+        # Tighten before reading — the plist lists every cert with
+        # admin trust + their SHA-1 fingerprints, which is local-only
+        # state that shouldn't be world-readable even briefly.
+        try:
+            os.chmod(str(plist_path), 0o600)
+        except Exception:
+            # Best-effort: chmod failure shouldn't block trust verification.
+            # The finally clause still deletes the file immediately.
+            pass
         plist_bytes = plist_path.read_bytes()
         if sha1_upper not in plist_bytes.decode("utf-8", errors="ignore").upper():
             return False, "CA is in System.keychain but admin trust settings are not applied"
@@ -347,7 +367,10 @@ def untrust_ca_cert(cert_path: Path | None = None) -> bool:
     cert_path = cert_path or get_ca_cert_path()
     if not cert_path.exists():
         return True
-    script = f'do shell script "security remove-trusted-cert -d {cert_path}" with administrator privileges'
+    # See trust_ca_cert: cert_path goes through shlex.quote so paths
+    # with spaces don't silently misparse the shell payload.
+    quoted_cert = shlex.quote(str(cert_path))
+    script = f'do shell script "security remove-trusted-cert -d {quoted_cert}" with administrator privileges'
     try:
         subprocess.run(["osascript", "-e", script], capture_output=True, text=True, timeout=60)
         return True
