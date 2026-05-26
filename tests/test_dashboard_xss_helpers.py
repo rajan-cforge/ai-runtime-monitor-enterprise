@@ -476,16 +476,50 @@ def test_dashboard_alert_flash_animation_defined(dashboard_text: str) -> None:
 
 
 def test_dashboard_scrollToAlert_uses_smooth_center(dashboard_text: str) -> None:
-    """scrollToAlert must use scrollIntoView with smooth behavior + center
-    block so the alert lands in the viewport's middle, not at the top edge."""
-    # Find the scrollToAlert function body and verify the scrollIntoView call.
-    # Use a prefix-only assert so the signature can evolve (cycle-2 added a
-    # `_alertRetry` guard arg without breaking external callers).
+    """scrollToAlert must scroll the .api-inspector smoothly and center the
+    alert in the inspector viewport.
+
+    v2 implementation (PR #49) replaced element.scrollIntoView({block:'center'})
+    with explicit scrollTop math on the .api-inspector container. The
+    motivation was that scrollIntoView snapshots the target position at
+    call time; if late-arriving sibling content shifts layout during the
+    smooth scroll, the landing position is off by the shift amount.
+
+    We assert the v2 contract:
+      1. The function is defined (signature can evolve — keep the prefix
+         match from cycle 1 so a future arg-list change doesn't fail).
+      2. It calls inspector.scrollTo with behavior:'smooth'.
+      3. It computes a centering offset using clientHeight and offsetHeight
+         (the math that lands the alert in the viewport middle).
+    """
     assert re.search(r"\bfunction scrollToAlert\s*\(", dashboard_text), "scrollToAlert function must be defined"
-    # The actual scrollIntoView call inside scrollToAlert.
-    assert "scrollIntoView({behavior:'smooth', block:'center'})" in dashboard_text, (
-        "scrollToAlert must scroll smoothly to center"
+    assert re.search(r"inspector\.scrollTo\(\{top:\s*target,\s*behavior:\s*'smooth'\}\)", dashboard_text), (
+        "scrollToAlert must scroll the inspector smoothly to the computed target offset"
     )
+    assert re.search(r"\(inspector\.clientHeight\s*-\s*el\.offsetHeight\)\s*/\s*2", dashboard_text), (
+        "scrollToAlert must center the alert using (clientHeight - offsetHeight) / 2"
+    )
+
+
+def test_dashboard_scrollToAlert_waits_for_alert_via_observer(dashboard_text: str) -> None:
+    """scrollToAlert v2 must use a MutationObserver to wait for the alert
+    element to appear in the inspector, not a single rAF.
+
+    Motivation: renderInspector writes innerHTML synchronously but rich
+    content (highlighted code blocks, tables, long pre-wrapped text)
+    settles over additional frames. A single rAF can fire before the
+    alert is in the DOM, leading to a no-op scroll. The observer
+    guarantees the element is present and laid out before measuring.
+    """
+    assert "new MutationObserver" in dashboard_text, (
+        "scrollToAlert must use a MutationObserver to wait for late-rendered alert content"
+    )
+    # The two-rAF guard is the second half of the layout-settlement contract.
+    # Match nested requestAnimationFrame calls inside scrollToAlert's doScroll.
+    assert re.search(
+        r"requestAnimationFrame\(function\(\)\s*\{\s*requestAnimationFrame",
+        dashboard_text,
+    ), "scrollToAlert must double-rAF before measuring positions for the scroll math"
 
 
 def test_dashboard_alert_list_passes_alert_id_to_deep_dive(dashboard_text: str) -> None:
