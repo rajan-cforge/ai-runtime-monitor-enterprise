@@ -40,6 +40,7 @@ from claude_monitoring.security import (
     get_setup_marker_path,
     trust_ca_cert,
     untrust_ca_cert,
+    verify_ca_trusted,
 )
 from claude_monitoring.status import _is_cert_trusted, _is_system_proxy_configured
 
@@ -147,9 +148,18 @@ def run_setup_wizard(force: bool = False) -> bool:
             state["steps"]["generate_ca"] = f"error: {exc}"
 
     # ── Step 2: Trust the CA ──────────────────────────────────────
+    #
+    # The CA trust step is the highest-failure-mode part of setup:
+    # osascript can return exit 0 even when the admin dialog was
+    # cancelled or Touch ID timed out, leaving the cert in the keychain
+    # but without admin trust settings applied. Proxy interception
+    # silently fails in that state. We always call verify_ca_trusted()
+    # after the trust attempt to confirm trust really applied — and
+    # block Step 3 (system proxy) if it didn't.
     print()
-    if _is_cert_trusted():
-        print("[2/4] ✅ Certificate already trusted")
+    already_trusted, _existing_reason = verify_ca_trusted(cert_path)
+    if already_trusted:
+        print("[2/4] ✅ Certificate already trusted (verified in admin settings)")
         state["steps"]["trust_ca"] = "already_trusted"
     else:
         print("[2/4] Trust the monitoring certificate")
@@ -167,23 +177,61 @@ def run_setup_wizard(force: bool = False) -> bool:
         print("  - You can purge everything anytime: ai-monitor --purge")
         print()
         if _prompt("Trust the certificate?", default_yes=True):
-            if trust_ca_cert():
-                print("  ✅ Certificate trusted")
+            osascript_ok = trust_ca_cert()
+            verified, reason = verify_ca_trusted(cert_path)
+            if osascript_ok and verified:
+                print("  ✅ Certificate trusted (verified in admin trust settings)")
                 state["steps"]["trust_ca"] = "ok"
             else:
-                print("  ⚠ Could not trust certificate via osascript.")
-                print("  You can do it manually:")
+                # Whether osascript said success or not, the post-check is
+                # what we actually trust. The user's password dialog may
+                # have been cancelled or Touch ID may have failed mid-way.
+                if osascript_ok and not verified:
+                    print("  ❌ Certificate trust step appeared to succeed, but verification failed.")
+                else:
+                    print("  ❌ Certificate trust step failed.")
+                if reason:
+                    print(f"     Reason: {reason}")
+                print()
+                print("  Vigil's proxy cannot inspect HTTPS traffic without the CA")
+                print("  being trusted in the System keychain. Step 3 (system proxy)")
+                print("  is being skipped because it would have no effect.")
+                print()
+                print("  To complete trust manually, run this command:")
                 print("    sudo security add-trusted-cert -d -r trustRoot \\")
                 print("      -k /Library/Keychains/System.keychain \\")
                 print(f"      {cert_path}")
+                print()
+                print("  Then re-run: ai-monitor --setup")
+                print()
+                print("  Without trust, Vigil will still work for:")
+                print("  - JSONL session capture (Claude Code)")
+                print("  - Browser AI capture (via Chrome extension)")
+                print("  - Process and filesystem monitoring")
+                print("  But NOT for HTTPS traffic from desktop AI apps or CLI tools.")
                 state["steps"]["trust_ca"] = "manual_required"
+                state["trust_ca_reason"] = reason or "trust_ca_cert returned False"
         else:
             print("  ⏭ Skipped — proxy capture limited to CLI tools")
             state["steps"]["trust_ca"] = "skipped"
 
     # ── Step 3: System proxy ──────────────────────────────────────
+    #
+    # Gate this step on Step 2 trust verification. If admin trust isn't
+    # applied, enabling the system proxy would route AI API traffic
+    # through mitmproxy → browser/app sees Vigil's untrusted cert →
+    # cert error UX hit + zero capture. Refuse to enable the system
+    # proxy in that state and print the recovery path. The user can
+    # still opt to run JSONL-only + browser-extension capture, which
+    # doesn't need the system proxy at all.
+    trust_state = state["steps"].get("trust_ca")
+    trust_blocked = trust_state in ("manual_required", "error")
     print()
-    if _is_system_proxy_configured():
+    if trust_blocked:
+        print("[3/4] ⏭ System proxy skipped — CA trust verification failed (see step 2)")
+        print("       The system proxy would have no effect until trust is applied.")
+        state["steps"]["system_proxy"] = "skipped_trust_required"
+    elif _is_system_proxy_configured():
         print("[3/4] ✅ System proxy already enabled")
         state["steps"]["system_proxy"] = "already_enabled"
     else:
@@ -256,9 +304,21 @@ def run_setup_wizard(force: bool = False) -> bool:
     # Final summary
     print()
     print(_SEPARATOR)
-    print("  ✅ Setup complete!")
-    print(_SEPARATOR)
-    print()
+    trust_step = state["steps"].get("trust_ca")
+    trust_failed_actionably = trust_step in ("manual_required", "error")
+    if trust_failed_actionably:
+        print("  ⚠ Setup completed with caveats")
+        print(_SEPARATOR)
+        print()
+        print("  CA trust step did NOT verify cleanly. Proxy interception")
+        print("  for desktop apps and CLI tools will not work until the")
+        print("  trust is applied manually (see Step 2 instructions above).")
+        print("  Re-run 'ai-monitor --setup' after applying trust to complete.")
+        print()
+    else:
+        print("  ✅ Setup complete!")
+        print(_SEPARATOR)
+        print()
     if token:
         print(f"  Dashboard:  http://localhost:9081?token={token}")
     print("  Status:     ai-monitor --status")
@@ -269,7 +329,12 @@ def run_setup_wizard(force: bool = False) -> bool:
     print("  All monitoring data stays on YOUR machine.")
     print("  Nothing is sent externally. You own your data.")
     print()
-    return True
+    # Return False (→ exit code 1 in monitor.py:5224) when trust step
+    # ended in an actionable failure state. Skipped-by-choice (user
+    # answered 'no' to the trust prompt) is still True — they made an
+    # intentional choice. manual_required/error means an attempt failed
+    # and the user needs to take action.
+    return not trust_failed_actionably
 
 
 # ─────────────────────────────────────────────────────────────

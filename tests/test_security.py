@@ -4,9 +4,12 @@ Covers:
   - SQL injection prevention via parameterized queries
   - Large input handling / text truncation
   - JSON escaping (no XSS in JSON output)
+  - CA trust verification (verify_ca_trusted)
 """
 
 import json
+import subprocess
+from unittest.mock import patch
 
 import pytest
 
@@ -20,6 +23,124 @@ def _reset_config():
     config.reset()
     yield
     config.reset()
+
+
+def _make_self_signed_ca(path):
+    """Write a real self-signed CA to ``path``. Lets verify_ca_trusted's
+    SHA-1 computation run end-to-end without hard-coding fingerprints."""
+    from datetime import datetime, timedelta, timezone
+
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from cryptography.x509.oid import NameOID
+
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    now = datetime.now(timezone.utc)
+    subject = issuer = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Test CA — Verify")])
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(subject)
+        .issuer_name(issuer)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - timedelta(days=1))
+        .not_valid_after(now + timedelta(days=30))
+        .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
+        .sign(key, hashes.SHA256())
+    )
+    path.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+    return cert.fingerprint(hashes.SHA1()).hex()
+
+
+class TestVerifyCaTrusted:
+    """verify_ca_trusted must distinguish three states:
+    1. cert file missing → False with a 'file not found' reason
+    2. cert in keychain but no admin trust settings → False (key bug)
+    3. cert in keychain AND admin trust settings → True
+    """
+
+    def test_returns_true_when_in_keychain_and_admin_trust_settings(self, tmp_path):
+        from claude_monitoring.security import verify_ca_trusted
+
+        cert_path = tmp_path / "ai-monitor-ca.pem"
+        sha1 = _make_self_signed_ca(cert_path)
+
+        def fake_run(cmd, **_):
+            if "find-certificate" in cmd:
+                return subprocess.CompletedProcess(
+                    args=cmd, returncode=0, stdout=f"SHA-1 hash: {sha1.upper()}\n", stderr=""
+                )
+            if "trust-settings-export" in cmd:
+                plist_path = cmd[cmd.index("-d") + 1]
+                from pathlib import Path as _P
+
+                _P(plist_path).write_text(
+                    f'<?xml version="1.0"?><plist><dict><key>{sha1.upper()}</key><dict/></dict></plist>'
+                )
+                return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+        with patch("claude_monitoring.security.subprocess.run", side_effect=fake_run):
+            ok, reason = verify_ca_trusted(cert_path)
+        assert ok is True, f"expected trusted, got reason={reason!r}"
+        assert reason is None
+
+    def test_returns_false_when_in_keychain_but_no_admin_trust(self, tmp_path):
+        """The exact failure mode from the new-laptop install: cert
+        added to System.keychain via add-trusted-cert, but the admin
+        trust settings weren't actually applied (e.g., osascript dialog
+        cancelled mid-way). Old _is_cert_trusted returned True; new
+        verify_ca_trusted returns False, matching what the proxy
+        interception layer actually needs."""
+        from claude_monitoring.security import verify_ca_trusted
+
+        cert_path = tmp_path / "ai-monitor-ca.pem"
+        sha1 = _make_self_signed_ca(cert_path)
+
+        def fake_run(cmd, **_):
+            if "find-certificate" in cmd:
+                return subprocess.CompletedProcess(
+                    args=cmd, returncode=0, stdout=f"SHA-1 hash: {sha1.upper()}\n", stderr=""
+                )
+            if "trust-settings-export" in cmd:
+                # macOS exits non-zero with "no trust settings were
+                # found" when the admin trust domain has zero entries.
+                return subprocess.CompletedProcess(
+                    args=cmd, returncode=1, stdout="", stderr="No trust settings were found.\n"
+                )
+            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+        with patch("claude_monitoring.security.subprocess.run", side_effect=fake_run):
+            ok, reason = verify_ca_trusted(cert_path)
+        assert ok is False
+        assert reason is not None
+        assert "trust-settings-export failed" in reason or "trust settings" in reason
+
+    def test_returns_false_when_not_in_keychain(self, tmp_path):
+        from claude_monitoring.security import verify_ca_trusted
+
+        cert_path = tmp_path / "ai-monitor-ca.pem"
+        _make_self_signed_ca(cert_path)
+
+        def fake_run(cmd, **_):
+            if "find-certificate" in cmd:
+                return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+        with patch("claude_monitoring.security.subprocess.run", side_effect=fake_run):
+            ok, reason = verify_ca_trusted(cert_path)
+        assert ok is False
+        assert reason == "CA certificate is not present in System.keychain"
+
+    def test_returns_false_when_cert_file_missing(self, tmp_path):
+        from claude_monitoring.security import verify_ca_trusted
+
+        cert_path = tmp_path / "does-not-exist.pem"
+        ok, reason = verify_ca_trusted(cert_path)
+        assert ok is False
+        assert reason is not None
+        assert "not found" in reason
 
 
 class TestSQLInjection:

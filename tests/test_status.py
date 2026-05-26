@@ -64,29 +64,57 @@ class TestSystemProxyConfigured:
 
 
 class TestCertTrusted:
-    def test_detects_custom_ca(self):
-        def fake_run(cmd, **_):
-            if "AI Runtime Monitor" in cmd:
-                return _mock_completed("AI Runtime Monitor - Mac-3155")
-            return _mock_completed("")
+    """_is_cert_trusted now reflects 'admin trust settings applied', not
+    just 'cert exists in keychain'. The two are distinct macOS keychain
+    states and only the second makes TLS chains validate. Tests mock at
+    the verify_ca_trusted boundary so we don't have to set up real
+    keychain state for each case."""
 
-        with patch("claude_monitoring.status.subprocess.run", side_effect=fake_run):
-            assert status_mod._is_cert_trusted() is True
+    def test_returns_true_when_cert_in_keychain_and_admin_trust_settings(self, monkeypatch, tmp_path):
+        cert = tmp_path / "ai-monitor-ca.pem"
+        cert.write_bytes(b"-----BEGIN CERTIFICATE-----\nstub\n-----END CERTIFICATE-----\n")
+        monkeypatch.setattr("claude_monitoring.security.get_ca_cert_path", lambda: cert)
+        monkeypatch.setattr("claude_monitoring.security.verify_ca_trusted", lambda *a, **kw: (True, None))
+        assert status_mod._is_cert_trusted() is True
 
-    def test_fallback_to_mitmproxy_cert(self):
+    def test_returns_false_when_in_keychain_but_no_admin_trust(self, monkeypatch, tmp_path):
+        """This is the critical state we missed pre-fix: cert was added to
+        the System keychain but admin trust settings were never applied
+        (e.g., osascript dialog cancelled). The old _is_cert_trusted
+        returned True (find-certificate found it). The new one returns
+        False — matching what the proxy interception layer actually needs."""
+        cert = tmp_path / "ai-monitor-ca.pem"
+        cert.write_bytes(b"-----BEGIN CERTIFICATE-----\nstub\n-----END CERTIFICATE-----\n")
+        monkeypatch.setattr("claude_monitoring.security.get_ca_cert_path", lambda: cert)
+        monkeypatch.setattr(
+            "claude_monitoring.security.verify_ca_trusted",
+            lambda *a, **kw: (False, "CA is in System.keychain but admin trust settings are not applied"),
+        )
+        assert status_mod._is_cert_trusted() is False
+
+    def test_returns_false_when_cert_file_missing(self, monkeypatch, tmp_path):
+        cert = tmp_path / "ai-monitor-ca.pem"  # does not exist
+        monkeypatch.setattr("claude_monitoring.security.get_ca_cert_path", lambda: cert)
+        # legacy mitmproxy CA also absent — _find_certificate path returns False
+        with patch("claude_monitoring.status.subprocess.run", return_value=_mock_completed("")):
+            assert status_mod._is_cert_trusted() is False
+
+    def test_falls_back_to_legacy_mitmproxy_ca_when_custom_cert_file_missing(self, monkeypatch, tmp_path):
+        """Pre-custom-CA installs only had the default mitmproxy CA. We
+        can't SHA-1-verify without the cert file, so we fall back to
+        name-based search and report keychain-only (trust state unknown).
+        Returns False because we can't confirm admin trust."""
+        cert = tmp_path / "ai-monitor-ca.pem"  # does not exist
+        monkeypatch.setattr("claude_monitoring.security.get_ca_cert_path", lambda: cert)
+
         def fake_run(cmd, **_):
             if "mitmproxy" in cmd:
                 return _mock_completed("mitmproxy")
             return _mock_completed("")
 
         with patch("claude_monitoring.status.subprocess.run", side_effect=fake_run):
-            assert status_mod._is_cert_trusted() is True
-
-    def test_neither_cert_present(self):
-        with patch(
-            "claude_monitoring.status.subprocess.run",
-            return_value=_mock_completed(""),
-        ):
+            # _is_cert_trusted is strict: only True when admin trust is verified.
+            # Legacy path can only confirm presence, so it returns False.
             assert status_mod._is_cert_trusted() is False
 
 

@@ -239,6 +239,110 @@ def trust_ca_cert(cert_path: Path | None = None) -> bool:
         return False
 
 
+def _ca_cert_sha1(cert_path: Path) -> str | None:
+    """Compute the SHA-1 fingerprint of a PEM-encoded CA cert.
+
+    SHA-1 is the join key macOS uses in both `security find-certificate`
+    output (when invoked with -Z) and in trust-settings plists, so a
+    fingerprint match is the most reliable way to identify the same cert
+    across those two surfaces. SHA-1 is unsafe for forgery but fine as
+    an identifier — we're not validating anything cryptographically here.
+    """
+    try:
+        from cryptography.hazmat.primitives import hashes
+        from cryptography.x509 import load_pem_x509_certificate
+
+        cert = load_pem_x509_certificate(cert_path.read_bytes())
+        # SHA-1 here is an identifier, not a security primitive — macOS
+        # uses it as the join key between find-certificate -Z and
+        # trust-settings-export, so we have to match its choice.
+        return cert.fingerprint(hashes.SHA1()).hex()  # noqa: S303
+    except Exception:
+        return None
+
+
+def verify_ca_trusted(cert_path: Path | None = None) -> tuple[bool, str | None]:
+    """Return (True, None) iff the CA cert is in System.keychain AND has
+    admin trust settings applied. (False, reason) otherwise.
+
+    A cert can be present in System.keychain without being trusted as a
+    root anchor. The two states must be distinguished — only the second
+    makes TLS chains validate, which is what proxy interception needs.
+
+    Implementation uses SHA-1 fingerprint as the join key:
+
+      1. ``security find-certificate -Z -a /Library/Keychains/System.keychain``
+         emits each cert's SHA-1 (with the -Z flag). If our fingerprint
+         appears, the cert is in the keychain.
+      2. ``security trust-settings-export -d <plist>`` exports the admin
+         trust domain. The plist contains the SHA-1 of every cert with
+         explicit trust settings applied. If our fingerprint appears
+         there, ``security add-trusted-cert -d`` has been run for it.
+
+    Caller passes ``cert_path`` to override the canonical CA path
+    (testing and the cleanup/purge path use this).
+    """
+    cert_path = cert_path or get_ca_cert_path()
+    if not cert_path.exists():
+        return False, f"CA certificate file not found at {cert_path}"
+
+    sha1 = _ca_cert_sha1(cert_path)
+    if sha1 is None:
+        return False, "could not compute CA certificate SHA-1 fingerprint"
+    sha1_upper = sha1.upper()
+
+    # Step 1: keychain presence by SHA-1.
+    try:
+        find_result = subprocess.run(
+            [
+                "security",
+                "find-certificate",
+                "-Z",
+                "-a",
+                "/Library/Keychains/System.keychain",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10,
+        )
+    except Exception as exc:
+        return False, f"security find-certificate failed: {exc}"
+    if sha1_upper not in find_result.stdout.upper():
+        return False, "CA certificate is not present in System.keychain"
+
+    # Step 2: admin trust settings export by SHA-1.
+    import tempfile
+
+    plist_path: Path | None = None
+    try:
+        fd, name = tempfile.mkstemp(suffix=".plist", prefix="ai-monitor-trust-")
+        os.close(fd)
+        plist_path = Path(name)
+        export_result = subprocess.run(
+            ["security", "trust-settings-export", "-d", str(plist_path)],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10,
+        )
+        if export_result.returncode != 0:
+            # When the admin trust domain has zero entries, this command
+            # exits non-zero with "no trust settings were found". Treat
+            # that as the more specific "not trusted" answer.
+            stderr = (export_result.stderr or "").strip()
+            return False, f"trust-settings-export failed: {stderr or 'no admin trust settings present'}"
+        plist_bytes = plist_path.read_bytes()
+        if sha1_upper not in plist_bytes.decode("utf-8", errors="ignore").upper():
+            return False, "CA is in System.keychain but admin trust settings are not applied"
+        return True, None
+    except Exception as exc:
+        return False, f"trust verification error: {exc}"
+    finally:
+        if plist_path is not None:
+            plist_path.unlink(missing_ok=True)
+
+
 def untrust_ca_cert(cert_path: Path | None = None) -> bool:
     cert_path = cert_path or get_ca_cert_path()
     if not cert_path.exists():

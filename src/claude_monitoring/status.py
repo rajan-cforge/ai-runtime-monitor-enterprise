@@ -63,14 +63,49 @@ def _find_certificate(common_name: str) -> bool:
         return False
 
 
-def _is_cert_trusted() -> bool:
-    """Check if a monitoring CA (custom or default mitmproxy) is trusted.
+def _get_ca_trust_state() -> tuple[bool, bool, str | None]:
+    """Return (in_keychain, trusted_in_admin_settings, reason_if_not_trusted).
 
-    Accepts either the future custom CA ("AI Runtime Monitor") or the
-    default "mitmproxy" CA so this check works before and after the
-    custom-CA migration in Section 2.
+    The two booleans distinguish 'cert exists in System.keychain' from
+    'cert has admin trust settings applied' — only the second makes
+    TLS chains validate, which is what proxy interception needs.
+
+    Custom CA (per-install) is the v0.2+ canonical layout. The fallback
+    to the legacy 'mitmproxy' common name keeps pre-custom-CA installs
+    reporting accurately as 'in keychain only' rather than as fully
+    untrusted.
     """
-    return _find_certificate("AI Runtime Monitor") or _find_certificate("mitmproxy")
+    from claude_monitoring.security import get_ca_cert_path, verify_ca_trusted
+
+    custom_path = get_ca_cert_path()
+    if custom_path.exists():
+        ok, reason = verify_ca_trusted(custom_path)
+        if ok:
+            return True, True, None
+        # When the cert file exists but the verify says it's not trusted,
+        # we still need to distinguish "in keychain, not trusted" from
+        # "not in keychain at all" so the status display can report
+        # accurately. The reason string is the discriminator.
+        in_keychain = reason is not None and "not present in System.keychain" not in reason
+        return in_keychain, False, reason
+
+    # Pre-custom-CA installs only had the default mitmproxy CA. We can't
+    # SHA-1-match without the cert file on disk, so fall back to name-based
+    # search and report keychain-only (trust state unknown via this path).
+    legacy_present = _find_certificate("mitmproxy")
+    return legacy_present, False, None if legacy_present else "no monitoring CA found"
+
+
+def _is_cert_trusted() -> bool:
+    """True only when a monitoring CA is present AND admin-trust-settings-applied.
+
+    Backed by ``_get_ca_trust_state`` so the answer matches what the
+    proxy interception layer actually needs. Existing callers using this
+    function get a stricter (more accurate) answer than before — a cert
+    present in the keychain without admin trust now reports False.
+    """
+    _, trusted, _ = _get_ca_trust_state()
+    return trusted
 
 
 def _has_custom_ca() -> bool:
@@ -208,7 +243,8 @@ def show_status() -> int:
     """Print a human-readable status report. Returns 0 for success."""
     proxy_running = _is_mitmproxy_running()
     sys_proxy = _is_system_proxy_configured()
-    cert_ok = _is_cert_trusted()
+    cert_in_keychain, cert_trusted, cert_reason = _get_ca_trust_state()
+    cert_ok = cert_trusted
     monitor_running = _is_monitor_running()
     db_encrypted = _is_db_encrypted()
     perms_ok = _check_permissions()
@@ -288,7 +324,25 @@ def show_status() -> int:
     print("  Proxy:")
     print(f"    mitmproxy:      {_fmt_check(proxy_running, f'Running :{get_proxy_port()}', 'Stopped')}")
     print(f"    System proxy:   {_fmt_check(sys_proxy, 'Enabled', 'Disabled')}")
-    print("    CA certificate: " + _fmt_check(cert_ok, "Trusted (AI domains only)", "Not trusted"))
+    # Two-line CA state: distinguish 'in keychain' from 'has admin trust
+    # settings'. Pre-fix the status only showed 'Trusted' if the cert was
+    # in the keychain, even when admin trust hadn't actually been applied,
+    # which masked the failure mode that bit the new-laptop install. Now:
+    #   - in-keychain only → "In keychain, NOT trusted as anchor"
+    #   - in-keychain + trusted → "Trusted (AI domains only)"
+    if cert_trusted:
+        print("    CA cert:        ✅ In keychain")
+        print("    CA trust:       ✅ Trusted in admin settings (AI domains only)")
+    elif cert_in_keychain:
+        print("    CA cert:        ✅ In keychain")
+        print("    CA trust:       ❌ Not in admin trust settings — proxy interception will fail")
+        if cert_reason:
+            print(f"                    Reason: {cert_reason}")
+    else:
+        print("    CA cert:        ❌ Not in keychain")
+        print("    CA trust:       ❌ Not trusted")
+        if cert_reason:
+            print(f"                    Reason: {cert_reason}")
     print(f"    SSL inspection: {'API + Browser metadata' if cert_ok else 'API only'}")
     print()
     print("  Capture matrix:")
