@@ -216,10 +216,75 @@ class TestShowStatus:
         assert "mitmproxy:" in output
         assert "Claude Code:" in output
 
+    def test_show_status_partial_trust_state_distinguishes_keychain_from_admin_trust(self, monkeypatch):
+        """The two-line CA cert + CA trust display must distinguish the
+        three states (trusted / in-keychain-but-not-trusted /
+        not-in-keychain). Pre-fix the status only showed Trusted/Not
+        Trusted, which masked the failure mode this PR catches."""
+        monkeypatch.setattr(status_mod, "_is_mitmproxy_running", lambda: False)
+        monkeypatch.setattr(status_mod, "_is_system_proxy_configured", lambda: False)
+        # The critical state: cert exists in keychain but admin trust
+        # settings are not applied. Old _is_cert_trusted returned True
+        # here; the new contract has trust=False with a specific reason.
+        monkeypatch.setattr(
+            status_mod,
+            "_get_ca_trust_state",
+            lambda: (True, False, "CA is in System.keychain but admin trust settings are not applied"),
+        )
+        monkeypatch.setattr(status_mod, "_is_monitor_running", lambda: False)
+        monkeypatch.setattr(status_mod, "_is_db_encrypted", lambda: False)
+        monkeypatch.setattr(status_mod, "_check_permissions", lambda: True)
+        monkeypatch.setattr(status_mod, "_has_dashboard_token", lambda: False)
+        monkeypatch.setattr(status_mod, "_has_custom_ca", lambda: True)
+        monkeypatch.setattr(status_mod, "_check_extension_heartbeat", lambda: None)
+
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            rc = status_mod.show_status()
+        output = buf.getvalue()
+
+        assert rc == 0
+        assert "CA cert:" in output
+        assert "✅ In keychain" in output
+        assert "CA trust:" in output
+        assert "Not in admin trust settings — proxy interception will fail" in output
+        # The reason from _get_ca_trust_state must be surfaced so the
+        # user understands what's broken.
+        assert "admin trust settings are not applied" in output
+
+    def test_show_status_no_keychain_state(self, monkeypatch):
+        """show_status with cert not in keychain at all (pre-setup,
+        or post-purge). Different from the partial-trust state."""
+        monkeypatch.setattr(status_mod, "_is_mitmproxy_running", lambda: False)
+        monkeypatch.setattr(status_mod, "_is_system_proxy_configured", lambda: False)
+        monkeypatch.setattr(
+            status_mod,
+            "_get_ca_trust_state",
+            lambda: (False, False, "no monitoring CA found"),
+        )
+        monkeypatch.setattr(status_mod, "_is_monitor_running", lambda: False)
+        monkeypatch.setattr(status_mod, "_is_db_encrypted", lambda: False)
+        monkeypatch.setattr(status_mod, "_check_permissions", lambda: True)
+        monkeypatch.setattr(status_mod, "_has_dashboard_token", lambda: False)
+        monkeypatch.setattr(status_mod, "_has_custom_ca", lambda: False)
+        monkeypatch.setattr(status_mod, "_check_extension_heartbeat", lambda: None)
+
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            rc = status_mod.show_status()
+        output = buf.getvalue()
+
+        assert rc == 0
+        assert "CA cert:" in output
+        assert "❌ Not in keychain" in output
+        assert "CA trust:" in output
+        assert "❌ Not trusted" in output
+
     def test_show_status_with_everything_ok(self, monkeypatch):
         monkeypatch.setattr(status_mod, "_is_mitmproxy_running", lambda: True)
         monkeypatch.setattr(status_mod, "_is_system_proxy_configured", lambda: True)
         monkeypatch.setattr(status_mod, "_is_cert_trusted", lambda: True)
+        monkeypatch.setattr(status_mod, "_get_ca_trust_state", lambda: (True, True, None))
         monkeypatch.setattr(status_mod, "_is_monitor_running", lambda: True)
         monkeypatch.setattr(status_mod, "_is_db_encrypted", lambda: True)
         monkeypatch.setattr(status_mod, "_check_permissions", lambda: True)

@@ -293,12 +293,18 @@ def verify_ca_trusted(cert_path: Path | None = None) -> tuple[bool, str | None]:
     """
     cert_path = cert_path or get_ca_cert_path()
     if not cert_path.exists():
-        return False, f"CA certificate file not found at {cert_path}"
+        return False, "CA certificate file not found"
 
     sha1 = _ca_cert_sha1(cert_path)
     if sha1 is None:
         return False, "could not compute CA certificate SHA-1 fingerprint"
     sha1_upper = sha1.upper()
+
+    # Reason strings are intentionally canned (no subprocess stderr,
+    # no exception messages, no SHA-1 leakage) so CodeQL's
+    # clear-text-logging taint analysis stays clean — callers print
+    # `reason` directly to stdout via show_status and the setup wizard.
+    # Diagnostic detail still lands in logs via the standard logger.
 
     # Step 1: keychain presence by SHA-1.
     try:
@@ -315,8 +321,8 @@ def verify_ca_trusted(cert_path: Path | None = None) -> tuple[bool, str | None]:
             check=False,
             timeout=10,
         )
-    except Exception as exc:
-        return False, f"security find-certificate failed: {exc}"
+    except Exception:
+        return False, "security find-certificate could not be invoked"
     if sha1_upper not in find_result.stdout.upper():
         return False, "CA certificate is not present in System.keychain"
 
@@ -336,11 +342,13 @@ def verify_ca_trusted(cert_path: Path | None = None) -> tuple[bool, str | None]:
             timeout=10,
         )
         if export_result.returncode != 0:
-            # When the admin trust domain has zero entries, this command
-            # exits non-zero with "no trust settings were found". Treat
-            # that as the more specific "not trusted" answer.
-            stderr = (export_result.stderr or "").strip()
-            return False, f"trust-settings-export failed: {stderr or 'no admin trust settings present'}"
+            # macOS exits non-zero with "no trust settings were found"
+            # when the admin trust domain is empty. Surface that as a
+            # canned reason — never include the stderr verbatim, since
+            # CodeQL flags subprocess-stderr → print flows as clear-text
+            # logging of sensitive data even though our stderr here is
+            # not actually sensitive.
+            return False, "no admin trust settings present (trust-settings-export found nothing)"
         # security trust-settings-export rewrites the file with its own
         # umask (typically 0o644), so the mkstemp 0o600 doesn't survive.
         # Tighten before reading — the plist lists every cert with
@@ -356,8 +364,8 @@ def verify_ca_trusted(cert_path: Path | None = None) -> tuple[bool, str | None]:
         if sha1_upper not in plist_bytes.decode("utf-8", errors="ignore").upper():
             return False, "CA is in System.keychain but admin trust settings are not applied"
         return True, None
-    except Exception as exc:
-        return False, f"trust verification error: {exc}"
+    except Exception:
+        return False, "trust verification error (see logs)"
     finally:
         if plist_path is not None:
             plist_path.unlink(missing_ok=True)

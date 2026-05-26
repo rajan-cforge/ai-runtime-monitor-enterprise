@@ -357,6 +357,55 @@ class TestSetupWizard:
         # without trust settings.
         assert "no admin trust settings present" in out
 
+    def test_wizard_enables_system_proxy_when_trust_verified_and_user_accepts(self, tmp_path, monkeypatch):
+        """Step 3 happy path: trust is verified, the system proxy isn't
+        already enabled, the user accepts the prompt, and
+        _enable_system_proxy returns True. Records 'ok' in the state
+        marker. Closes a coverage gap in the verification-passes +
+        proxy-enable-accepted branch."""
+        monkeypatch.setattr("claude_monitoring.security.get_output_dir", lambda: tmp_path)
+        monkeypatch.setattr("claude_monitoring.security.get_db_path", lambda: tmp_path / "monitor.db")
+        monkeypatch.setattr("claude_monitoring.config.get_output_dir", lambda: tmp_path)
+        monkeypatch.setattr("claude_monitoring.config.get_db_path", lambda: tmp_path / "monitor.db")
+        monkeypatch.setattr("claude_monitoring.db.get_output_dir", lambda: tmp_path)
+        monkeypatch.setattr("claude_monitoring.db.get_db_path", lambda: tmp_path / "monitor.db")
+
+        cert = tmp_path / "certs" / "ai-monitor-ca.pem"
+        cert.parent.mkdir(parents=True)
+        cert.write_bytes(b"-----BEGIN CERTIFICATE-----\nstub\n-----END CERTIFICATE-----\n")
+
+        # Trust prompt path: cert not yet trusted, user accepts, trust
+        # succeeds and verifies. Then system proxy isn't enabled yet;
+        # the user accepts the enable prompt; _enable_system_proxy
+        # returns True.
+        verify_calls = {"n": 0}
+
+        def verify_after_trust(*a, **kw):
+            verify_calls["n"] += 1
+            # First call: pre-trust check at top of Step 2 — not trusted.
+            # Second call: post-trust verification — trusted.
+            return (True, None) if verify_calls["n"] >= 2 else (False, None)
+
+        monkeypatch.setattr(wizard_mod, "verify_ca_trusted", verify_after_trust)
+        monkeypatch.setattr(wizard_mod, "trust_ca_cert", lambda *a, **kw: True)
+        monkeypatch.setattr(wizard_mod, "_is_system_proxy_configured", lambda: False)
+        monkeypatch.setattr(wizard_mod, "_enable_system_proxy", lambda: True)
+        monkeypatch.setattr(wizard_mod, "get_ca_info", lambda: {"common_name": "Test CA"})
+        monkeypatch.setattr(wizard_mod, "_prompt", lambda *a, **kw: True)
+
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            result = wizard_mod.run_setup_wizard()
+
+        out = buf.getvalue()
+        assert result is True
+        assert "Certificate trusted (verified in admin trust settings)" in out
+        assert "System proxy enabled" in out
+        marker = tmp_path / ".setup_complete"
+        state = json.loads(marker.read_text())
+        assert state["steps"]["trust_ca"] == "ok"
+        assert state["steps"]["system_proxy"] == "ok"
+
     def test_wizard_skips_system_proxy_when_user_declines_trust(self, tmp_path, monkeypatch):
         """When the user answers 'no' to the trust prompt, Step 3 must
         NOT offer the system proxy — enabling it without trust would
