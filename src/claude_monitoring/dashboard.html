@@ -2721,10 +2721,20 @@ async function openDeepDive(sessionId, jumpToTurn, jumpToAlertId) {
 // brief border-flash animation. Called from openDeepDive when an alert id
 // is supplied via the URL or the alert-list onclick handler.
 //
-// Uses requestAnimationFrame to ensure the inspector has actually painted
-// the sensitive_data block before we try to find and scroll to it —
-// renderInspector sets innerHTML synchronously but layout happens on the
-// next frame.
+// v2 implementation (PR #49):
+//   - MutationObserver instead of single rAF, so we wait for the alert
+//     element to actually appear in the inspector rather than guessing
+//     that one frame is enough. renderInspector writes innerHTML
+//     synchronously but rich content (highlighted code blocks, tables,
+//     long pre-wrapped text) settles over additional frames.
+//   - Double rAF before measuring positions, so getBoundingClientRect()
+//     returns final layout rather than the first-paint estimate.
+//   - Explicit scrollTop math on the .api-inspector container instead of
+//     element.scrollIntoView({block:'center'}). scrollIntoView snapshots
+//     the target position at call time; if late-arriving sibling content
+//     shifts layout during the smooth scroll, the landing position is off
+//     by the shift amount. Computing the target ourselves immediately
+//     before the scroll removes that ambiguity.
 //
 // Self-recovery: if the alert isn't on the currently-rendered turn (the
 // caller passed a wrong/missing/garbage turn=, or the URL is stale and the
@@ -2733,34 +2743,71 @@ async function openDeepDive(sessionId, jumpToTurn, jumpToAlertId) {
 // pathological case where the alert id doesn't exist anywhere in the
 // session.
 function scrollToAlert(alertId, _alertRetry) {
-  requestAnimationFrame(function() {
-    var sel = '.event-block.sensitive[data-alert-id="' + alertId + '"]';
-    var el = document.querySelector(sel);
+  var sel = '.event-block.sensitive[data-alert-id="' + alertId + '"]';
+  var inspector = document.querySelector('.api-inspector');
+  if (!inspector) return;
+
+  function doScroll(el) {
+    // Two rAFs: the first lets renderInspector finish any pending DOM
+    // writes triggered by the same task; the second lets the browser
+    // perform layout so the rect math reflects the final position.
+    requestAnimationFrame(function() {
+      requestAnimationFrame(function() {
+        var elRect = el.getBoundingClientRect();
+        var insRect = inspector.getBoundingClientRect();
+        var elTopInInspector = elRect.top - insRect.top + inspector.scrollTop;
+        var target = elTopInInspector - (inspector.clientHeight - el.offsetHeight) / 2;
+        if (target < 0) target = 0;
+        inspector.scrollTo({top: target, behavior: 'smooth'});
+        el.classList.add('alert-flash');
+        // Auto-remove the class so a second click on the same alert
+        // re-triggers the animation. 1600ms > the 1500ms animation duration.
+        setTimeout(function() { el.classList.remove('alert-flash'); }, 1600);
+      });
+    });
+  }
+
+  // Fast path: element is already present.
+  var existing = inspector.querySelector(sel);
+  if (existing) {
+    doScroll(existing);
+    return;
+  }
+
+  // Slow path: wait for the element to appear via MutationObserver.
+  // 2-second cap so we never hang on a stale alert id.
+  var done = false;
+  var obs = new MutationObserver(function() {
+    if (done) return;
+    var el = inspector.querySelector(sel);
     if (el) {
-      el.scrollIntoView({behavior:'smooth', block:'center'});
-      el.classList.add('alert-flash');
-      // Auto-remove the class so a second click on the same alert re-triggers
-      // the animation. 1600ms > the 1500ms animation duration.
-      setTimeout(function(){ el.classList.remove('alert-flash'); }, 1600);
-      return;
+      done = true;
+      obs.disconnect();
+      doScroll(el);
     }
+  });
+  obs.observe(inspector, {childList: true, subtree: true});
+  setTimeout(function() {
+    if (done) return;
+    obs.disconnect();
     if (_alertRetry) {
-      console.warn('scrollToAlert: alert id', alertId, 'not found in this session');
+      console.warn('scrollToAlert: alert id', alertId, 'not found in inspector after 2s');
       return;
     }
-    // Find the alert id in any turn's events and re-select that turn.
+    // Self-recovery: search ddTurns for the right turn and re-render.
     for (var i = 0; i < ddTurns.length; i++) {
       var t = ddTurns[i];
       for (var j = 0; j < t.events.length; j++) {
         if (String(t.events[j].id) === String(alertId)
             && t.events[j].event_type === 'sensitive_data') {
           selectTurn(t.turn_number);
-          return scrollToAlert(alertId, true);
+          scrollToAlert(alertId, true);
+          return;
         }
       }
     }
     console.warn('scrollToAlert: alert id', alertId, 'not found in this session');
-  });
+  }, 2000);
 }
 
 // Desktop session Deep Dive — renders the same activity summary as the
