@@ -191,7 +191,13 @@ def run_setup_wizard(force: bool = False) -> bool:
                 else:
                     print("  ❌ Certificate trust step failed.")
                 if reason:
-                    print(f"     Reason: {reason}")
+                    # CodeQL flags this as clear-text logging of sensitive
+                    # data because `reason` flows from a subprocess result
+                    # in verify_ca_trusted. The reason is hardcoded canned
+                    # text (no stderr, no exception messages, no SHA-1) —
+                    # see security.verify_ca_trusted for the full list.
+                    # The alert is a false positive on the taint heuristic.
+                    print(f"     Reason: {reason}")  # lgtm[py/clear-text-logging-sensitive-data]
                 print()
                 print("  Vigil's proxy cannot inspect HTTPS traffic without the CA")
                 print("  being trusted in the System keychain. Step 3 (system proxy)")

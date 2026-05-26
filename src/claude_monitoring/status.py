@@ -337,12 +337,17 @@ def show_status() -> int:
         print("    CA cert:        ✅ In keychain")
         print("    CA trust:       ❌ Not in admin trust settings — proxy interception will fail")
         if cert_reason:
-            print(f"                    Reason: {cert_reason}")
+            # See security.verify_ca_trusted: cert_reason is a fixed
+            # canned string (no stderr, no exception, no SHA-1). CodeQL's
+            # taint heuristic flags any subprocess-derived string as
+            # sensitive; this is a false positive — the string content
+            # is bounded.
+            print(f"                    Reason: {cert_reason}")  # lgtm[py/clear-text-logging-sensitive-data]
     else:
         print("    CA cert:        ❌ Not in keychain")
         print("    CA trust:       ❌ Not trusted")
         if cert_reason:
-            print(f"                    Reason: {cert_reason}")
+            print(f"                    Reason: {cert_reason}")  # lgtm[py/clear-text-logging-sensitive-data]
     print(f"    SSL inspection: {'API + Browser metadata' if cert_ok else 'API only'}")
     print()
     print("  Capture matrix:")
@@ -444,5 +449,11 @@ def show_status_json() -> int:
         "proxy_port": get_proxy_port(),
         "extension": _check_extension_heartbeat(),
     }
-    print(_json.dumps(payload, indent=2, default=str))
+    # show_status_json's whole purpose is to print this payload to stdout
+    # so callers (CI scripts, the dashboard, ai-monitor --status --json) can
+    # parse it. Payload contains only public service state (port numbers,
+    # boolean flags, extension hostname). CodeQL flags this because the
+    # 'extension' field flows from a DB read; the read content is itself
+    # public dashboard data (host names, status strings).
+    print(_json.dumps(payload, indent=2, default=str))  # lgtm[py/clear-text-logging-sensitive-data]
     return 0
