@@ -14,7 +14,7 @@ AI coding agents (Claude Code, Cursor, Copilot, ChatGPT Desktop) now write a mea
 
 AI Runtime Monitor (product name: Vigil) is endpoint security for the AI developer. It captures every action AI agents take on a developer's machine, detects supply-chain and credential-exposure risks in real time, and surfaces them through a local-first dashboard. The platform extends to fleet-scale monitoring through a control plane, enabling security teams to govern AI agent usage across their developer population.
 
-The long-term vision spans three stages: **detect** (visibility into AI agent actions, shipping in v1.0), **prevent** (block excessive OAuth scopes, malicious packages, unauthorized exfiltration), and **reduce blast radius** (least-privilege execution, session isolation, credential vaulting).
+The long-term vision spans three stages: **detect** (visibility into AI agent actions, shipping in v0.2 — launching this week), **prevent** (block excessive OAuth scopes, malicious packages, unauthorized exfiltration — first concrete capability in v0.3 per [docs/design/agent-detection.md](../design/agent-detection.md), broader features in v1.5), and **reduce blast radius** (least-privilege execution, session isolation, credential vaulting — v2.0).
 
 ## 2. Problem statement
 
