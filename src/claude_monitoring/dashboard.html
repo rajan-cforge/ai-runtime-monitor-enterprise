@@ -13,9 +13,11 @@
   --border: #30363d; --text: #e6edf3; --text2: #8b949e;
   --blue: #58a6ff; --green: #3fb950; --orange: #d29922;
   --red: #f85149; --purple: #bc8cff; --cyan: #39d2c0;
+  --font-sans: -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+  --font-mono: 'SF Mono',Monaco,Consolas,monospace;
 }
 * { margin:0; padding:0; box-sizing:border-box; }
-body { background:var(--bg); color:var(--text); font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; font-size:14px; }
+body { background:var(--bg); color:var(--text); font-family:var(--font-sans); font-size:14px; }
 .header { background:var(--surface); border-bottom:1px solid var(--border); padding:12px 24px; display:flex; align-items:center; justify-content:space-between; }
 .header h1 { font-size:18px; font-weight:600; }
 .header h1 span { color:var(--green); }
@@ -79,7 +81,7 @@ body { background:var(--bg); color:var(--text); font-family:-apple-system,BlinkM
 .event-block { margin-bottom:12px; border-radius:6px; overflow:hidden; border:1px solid var(--border); }
 .event-block .event-header { padding:8px 12px; font-size:12px; font-weight:600; display:flex; justify-content:space-between; align-items:center; cursor:pointer; }
 .event-block .event-body { padding:12px; font-size:13px; line-height:1.5; max-height:400px; overflow-y:auto; }
-.event-block .event-body pre { white-space:pre-wrap; word-break:break-word; font-family:'SF Mono',Monaco,monospace; font-size:12px; }
+.event-block .event-body pre { white-space:pre-wrap; word-break:break-word; font-family:var(--font-mono); font-size:12px; }
 .event-block.user .event-header { background:#1a2332; color:var(--blue); }
 .event-block.assistant .event-header { background:#1a2e1a; color:var(--green); }
 .event-block.thinking .event-header { background:#2d1f3d; color:var(--purple); }
@@ -100,7 +102,7 @@ body { background:var(--bg); color:var(--text); font-family:-apple-system,BlinkM
 }
 
 /* Live Feed */
-.feed { background:var(--surface); border:1px solid var(--border); border-radius:8px; height:calc(100vh - 260px); overflow-y:auto; font-family:'SF Mono',Monaco,monospace; font-size:12px; }
+.feed { background:var(--surface); border:1px solid var(--border); border-radius:8px; height:calc(100vh - 260px); overflow-y:auto; font-family:var(--font-mono); font-size:12px; }
 .feed-controls { display:flex; gap:12px; margin-bottom:8px; align-items:center; }
 .feed-controls label { font-size:12px; color:var(--text2); display:flex; align-items:center; gap:4px; }
 .feed-item { padding:6px 12px; border-bottom:1px solid var(--border); display:flex; gap:12px; align-items:flex-start; }
@@ -156,7 +158,7 @@ body { background:var(--bg); color:var(--text); font-family:-apple-system,BlinkM
 .alert-item .alert-patterns { font-weight:600; color:var(--red); font-size:13px; }
 .alert-item .alert-meta { font-size:11px; color:var(--text2); }
 .alert-item .alert-context { font-size:12px; color:var(--text2); margin-bottom:4px; }
-.alert-item .alert-snippet { font-size:12px; font-family:'SF Mono',Monaco,monospace; color:var(--text); background:var(--surface2); padding:8px; border-radius:4px; max-height:80px; overflow-y:auto; white-space:pre-wrap; word-break:break-word; }
+.alert-item .alert-snippet { font-size:12px; font-family:var(--font-mono); color:var(--text); background:var(--surface2); padding:8px; border-radius:4px; max-height:80px; overflow-y:auto; white-space:pre-wrap; word-break:break-word; }
 .alert-item .alert-session { font-size:11px; color:var(--cyan); cursor:pointer; }
 .alert-item .alert-session:hover { text-decoration:underline; }
 .alert-item.dismissed { opacity:0.45; }
@@ -599,7 +601,7 @@ const API = '';
     return _origFetch(resource, init).then(function(resp) {
       if (resp.status === 401) {
         localStorage.removeItem('ai_monitor_token');
-        document.body.innerHTML = '<div style="padding:60px;text-align:center;color:#c9d1d9;font-family:sans-serif">'
+        document.body.innerHTML = '<div style="padding:60px;text-align:center;color:#c9d1d9;font-family:var(--font-sans)">'
           + '<h1>Authentication required</h1>'
           + '<p>Your dashboard token is missing or invalid.</p>'
           + '<p>Restart the monitor and open the URL it prints — it contains a fresh token.</p>'
@@ -1012,7 +1014,7 @@ function renderDesktopActivitySummary(d) {
         + '<div style="color:var(--text2)">Cursor is running, but we have not intercepted any of its API calls. Modern Cursor bypasses the macOS system proxy for its AI traffic. To capture Cursor:</div>'
         + '<ol style="color:var(--text2);margin:8px 0 4px 18px;padding:0">'
         + '<li>Open Cursor &rarr; Settings &rarr; Network</li>'
-        + '<li>Set <strong>HTTP Proxy</strong>: <code style="background:var(--surface);padding:1px 5px;border-radius:3px;font-family:monospace">http://127.0.0.1:9080</code></li>'
+        + '<li>Set <strong>HTTP Proxy</strong>: <code style="background:var(--surface);padding:1px 5px;border-radius:3px;font-family:var(--font-mono)">http://127.0.0.1:9080</code></li>'
         + '<li>Trust the AI Runtime Monitor CA certificate in Keychain</li>'
         + '<li>Restart Cursor</li>'
         + '</ol>'
@@ -1053,7 +1055,7 @@ function renderDesktopActivitySummary(d) {
       if (summary.daily[i].calls > maxCalls) maxCalls = summary.daily[i].calls;
     }
     out += '<div style="margin-top:10px;color:var(--text2);font-size:11px;margin-bottom:4px">Daily activity (last ' + summary.daily.length + ' days):</div>';
-    out += '<div style="font-family:monospace;font-size:11px">';
+    out += '<div style="font-family:var(--font-mono);font-size:11px">';
     for (var j = 0; j < summary.daily.length; j++) {
       var day = summary.daily[j];
       var barWidth = maxCalls > 0 ? Math.round((day.calls / maxCalls) * 100) : 0;
@@ -1070,7 +1072,7 @@ function renderDesktopActivitySummary(d) {
   // Top hosts
   if (summary.top_hosts && summary.top_hosts.length) {
     out += '<div style="margin-top:10px;color:var(--text2);font-size:11px;margin-bottom:4px">Top destinations:</div>';
-    out += '<div style="font-family:monospace;font-size:11px">';
+    out += '<div style="font-family:var(--font-mono);font-size:11px">';
     for (var k = 0; k < summary.top_hosts.length; k++) {
       var h = summary.top_hosts[k];
       out += '<div style="display:flex;gap:8px;padding:2px 0"><span style="flex:1">' + esc(h.host) + '</span><span style="color:var(--text2)">' + h.calls + ' calls</span><span style="color:var(--text2);min-width:70px;text-align:right">' + fmtBytes(h.bytes) + '</span></div>';
@@ -1725,7 +1727,7 @@ function renderCVEPanel(vulns, pkgName, installedVer) {
     else { unknown++; statusHtml = '<span style="color:var(--text2);font-size:11px">?</span>'; }
     var color = sevColors[v.severity] || 'var(--text2)';
     return '<tr>'
-      + '<td><a href="' + escUrl('https://osv.dev/vulnerability/' + encodeURIComponent(v.vuln_id||'')) + '" target="_blank" style="color:var(--cyan);font-family:monospace;font-size:11px">' + esc(v.vuln_id) + '</a></td>'
+      + '<td><a href="' + escUrl('https://osv.dev/vulnerability/' + encodeURIComponent(v.vuln_id||'')) + '" target="_blank" style="color:var(--cyan);font-family:var(--font-mono);font-size:11px">' + esc(v.vuln_id) + '</a></td>'
       + '<td><span style="color:' + color + ';font-weight:600;text-transform:uppercase">' + esc(v.severity||'unknown') + '</span></td>'
       + '<td>' + (v.cvss_score ? v.cvss_score.toFixed(1) : '-') + '</td>'
       + '<td>' + (v.fix_version ? '<span style="color:var(--green)">' + esc(v.fix_version) + '</span>' : '-') + '</td>'
@@ -1900,7 +1902,7 @@ async function renderVersionAwareCVEs(pkgName, installedVersion) {
       else if (cmp === false) { notAffected++; statusHtml = '<span style="color:var(--green)">Not affected (fixed in ' + esc(v.fix_version) + ')</span>'; }
       else { unknown++; statusHtml = '<span style="color:var(--text2)">Cannot determine</span>'; }
       return '<tr>'
-        + '<td><a href="' + escUrl('https://osv.dev/vulnerability/' + encodeURIComponent(v.vuln_id||'')) + '" target="_blank" style="color:var(--cyan);font-family:monospace;font-size:11px">' + esc(v.vuln_id) + '</a></td>'
+        + '<td><a href="' + escUrl('https://osv.dev/vulnerability/' + encodeURIComponent(v.vuln_id||'')) + '" target="_blank" style="color:var(--cyan);font-family:var(--font-mono);font-size:11px">' + esc(v.vuln_id) + '</a></td>'
         + '<td><span style="color:' + ({critical:'var(--red)',high:'var(--orange)',medium:'var(--blue)',malicious:'var(--red)'}[v.severity]||'var(--text2)') + ';font-weight:600">' + esc((v.severity||'?').toUpperCase()) + '</span></td>'
         + '<td>' + (v.cvss_score ? v.cvss_score.toFixed(1) : '-') + '</td>'
         + '<td>' + statusHtml + '</td>'
@@ -3081,8 +3083,8 @@ function renderTrafficTable() {
 
     const detailRow = '<tr class="traffic-row-detail" id="traffic-detail-' + idx + '">'
       + '<td colspan="8"><div class="traffic-detail-grid">'
-      + '<div><div class="td-label">Last User Message</div><div class="td-value" style="max-height:80px;overflow-y:auto;white-space:pre-wrap;word-break:break-word;font-size:12px;font-family:monospace">' + (c.last_user_msg_preview ? esc(c.last_user_msg_preview) : '<span style="color:var(--text2)">' + (isProxy ? '-' : 'View session for full transcript') + '</span>') + '</div></div>'
-      + '<div><div class="td-label">Assistant Response</div><div class="td-value" style="max-height:80px;overflow-y:auto;white-space:pre-wrap;word-break:break-word;font-size:12px;font-family:monospace">' + esc(c.assistant_msg_preview || '-') + '</div></div>'
+      + '<div><div class="td-label">Last User Message</div><div class="td-value" style="max-height:80px;overflow-y:auto;white-space:pre-wrap;word-break:break-word;font-size:12px;font-family:var(--font-mono)">' + (c.last_user_msg_preview ? esc(c.last_user_msg_preview) : '<span style="color:var(--text2)">' + (isProxy ? '-' : 'View session for full transcript') + '</span>') + '</div></div>'
+      + '<div><div class="td-label">Assistant Response</div><div class="td-value" style="max-height:80px;overflow-y:auto;white-space:pre-wrap;word-break:break-word;font-size:12px;font-family:var(--font-mono)">' + esc(c.assistant_msg_preview || '-') + '</div></div>'
       + '<div><div class="td-label">Tool Calls</div><div class="td-value">' + toolsList + '</div></div>'
       + '<div><div class="td-label">Sensitive Patterns</div><div class="td-value">' + sensitiveHtml + '</div></div>'
       + '<div><div class="td-label">Cache Tokens</div><div class="td-value">' + fmtNum(c.cache_read_tokens||0) + ' read / ' + fmtNum(c.cache_write_tokens||0) + ' write</div></div>'
