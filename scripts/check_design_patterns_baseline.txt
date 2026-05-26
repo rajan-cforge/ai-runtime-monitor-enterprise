@@ -104,15 +104,15 @@ src/claude_monitoring/monitor.py:674: empty 'except Exception: pass' (silently s
 src/claude_monitoring/monitor.py:747: empty 'except Exception: pass' (silently swallowing errors)
 src/claude_monitoring/monitor.py:939: empty 'except Exception: pass' (silently swallowing errors)
 src/claude_monitoring/security.py:103: empty 'except Exception: pass' (silently swallowing errors)
-src/claude_monitoring/security.py:351: empty 'except Exception: pass' (silently swallowing errors)
-src/claude_monitoring/security.py:366: public function 'untrust_ca_cert' missing docstring
+src/claude_monitoring/security.py:359: empty 'except Exception: pass' (silently swallowing errors)
 src/claude_monitoring/security.py:36: public function 'get_cert_dir' missing docstring
+src/claude_monitoring/security.py:374: public function 'untrust_ca_cert' missing docstring
 src/claude_monitoring/security.py:40: public function 'get_ca_cert_path' missing docstring
-src/claude_monitoring/security.py:418: empty 'except Exception: pass' (silently swallowing errors)
-src/claude_monitoring/security.py:433: empty 'except Exception: pass' (silently swallowing errors)
+src/claude_monitoring/security.py:426: empty 'except Exception: pass' (silently swallowing errors)
+src/claude_monitoring/security.py:441: empty 'except Exception: pass' (silently swallowing errors)
 src/claude_monitoring/security.py:44: public function 'get_ca_key_path' missing docstring
-src/claude_monitoring/security.py:456: empty 'except Exception: pass' (silently swallowing errors)
-src/claude_monitoring/security.py:463: empty 'except Exception: pass' (silently swallowing errors)
+src/claude_monitoring/security.py:464: empty 'except Exception: pass' (silently swallowing errors)
+src/claude_monitoring/security.py:471: empty 'except Exception: pass' (silently swallowing errors)
 src/claude_monitoring/security.py:53: public function 'get_token_path' missing docstring
 src/claude_monitoring/security.py:57: public function 'get_setup_marker_path' missing docstring
 src/claude_monitoring/status.py:392: empty 'except Exception: pass' (silently swallowing errors)
