@@ -6,15 +6,16 @@ This directory holds the formal specifications for AI Runtime Monitor (Vigil). T
 
 | Document | Purpose | Audience | Status |
 |----------|---------|----------|--------|
-| [PRD.md](./PRD.md) | Product requirements — what Vigil is, who it's for, what's in v0.2 | Investors, customers, internal team | Landed (PR 1) |
-| [openapi.yaml](./openapi.yaml) | Machine-readable API spec for all 22+ endpoints | API consumers, client generators, contract testers | Not yet authored — PR 3 of 5 |
-| [API-CONTRACTS.md](./API-CONTRACTS.md) | Human-readable narrative for openapi.yaml | Developers building integrations, customers | Not yet authored — PR 3 of 5 |
-| [THREAT-MODEL.md](./THREAT-MODEL.md) | STRIDE threat model across 6 trust boundaries (B6 planned v0.3) | Security reviewers, enterprise procurement | Not yet authored — PR 4 of 5 |
-| [SECURITY-MANIFEST.md](./SECURITY-MANIFEST.md) | Controls mapped to OWASP ASVS, NIST SSDF, OWASP Top 10 | Security reviewers, compliance auditors | Not yet authored — PR 4 of 5 |
-| [DATA-CLASSIFICATION.md](./DATA-CLASSIFICATION.md) | Data sensitivity tiers, retention policies, third-party transmission | Enterprise procurement, compliance auditors | Not yet authored — PR 4 of 5 |
-| [functional/](./functional/) | Per-module functional specs (monitor, sync, security, watch, wizard, status, db, config, scanners) | Engineers maintaining the codebase | Not yet authored — PR 5 of 5 |
+| [PRD.md](./PRD.md) | Product requirements — what Vigil is, who it's for, what's in v0.2 | Investors, customers, internal team | Landed (PR #34) |
+| [openapi.yaml](./openapi.yaml) | Machine-readable API spec for all 22+ endpoints | API consumers, client generators, contract testers | Landed (PR #36) |
+| [API-CONTRACTS.md](./API-CONTRACTS.md) | Human-readable narrative for openapi.yaml | Developers building integrations, customers | Landed (PR #36) |
+| [THREAT-MODEL.md](./THREAT-MODEL.md) | STRIDE threat model across 6 trust boundaries (B6 planned v0.3) | Security reviewers, enterprise procurement | Landed (PR #37); B6 added PR #44 |
+| [SECURITY-MANIFEST.md](./SECURITY-MANIFEST.md) | Controls mapped to OWASP ASVS, NIST SSDF, OWASP Top 10 | Security reviewers, compliance auditors | Landed (PR #37) |
+| [DATA-CLASSIFICATION.md](./DATA-CLASSIFICATION.md) | Data sensitivity tiers, retention policies, third-party transmission | Enterprise procurement, compliance auditors | Landed (PR #37) |
+| [functional/](./functional/) | Per-module functional specs (monitor, sync, security, watch, wizard, status, db, config, scanners) | Engineers maintaining the codebase | Landed (PR #38) |
+| [dependency-rationale.md](./dependency-rationale.md) | Justification for each runtime dependency; required by spec-requirements CI rule on `pyproject.toml` changes | Engineers proposing new dependencies, reviewers | Landed (PR #40) |
 
-Plus the technical architecture reference (lives at `docs/ARCHITECTURE.md`, revised in PR 2 of 5):
+Plus the technical architecture reference (lives at `docs/ARCHITECTURE.md`, consolidated in PR #35):
 
 | Document | Purpose |
 |----------|---------|
@@ -41,7 +42,7 @@ These specs must be reviewed and possibly updated when any of the following occu
 | Major version bump (v0.2 → v0.3, v1.0, etc.) | All docs (full review) |
 | Customer or auditor question reveals a gap | Whichever doc the question hit |
 
-The maintenance trigger list is the input to the CI enforcement rules in `.github/spec-requirements.yaml` (planned — arrives in the spec-driven-enforcement dispatch after this corpus lands).
+The maintenance trigger list is the input to the CI enforcement rules in `.github/spec-requirements.yaml` (active in CI as of PR #40 — the spec-requirements job in `.github/workflows/ci.yml` is a required status check on `main`).
 
 ## Document lifecycle
 
@@ -72,13 +73,18 @@ docs/
 │   ├── API-CONTRACTS.md
 │   ├── THREAT-MODEL.md
 │   ├── SECURITY-MANIFEST.md
+│   ├── DATA-CLASSIFICATION.md
+│   ├── dependency-rationale.md
 │   ├── functional/
 │   └── README.md (this file)
+├── design/                        # Design candidates awaiting ratification
+│   └── agent-detection.md         # v0.3 capability design
 ├── SSDLC_ENFORCEMENT.md           # Engineering process and controls catalog
 ├── BRANCHING.md                   # Git workflow and merge strategy
 ├── RUNBOOK.md                     # Operational procedures
 ├── PROBE_DESIGN.md                # Lessons from the C1-FOLLOWUP probe
 ├── TOOLING.md                     # Dev environment setup
+├── RUFF_WARMUP.md                 # Aggressive ruff ruleset warmup plan
 ├── architecture-baseline-suggestions.md   # Architect agent output (one-shot)
 └── ARCHITECTURE.md               # Technical architecture (separate from spec/)
 ```
@@ -113,7 +119,7 @@ Use [openapi.yaml](./openapi.yaml) directly with your client generator of choice
 Read the relevant [functional/](./functional/) spec before modifying a module. Read [PRD.md](./PRD.md) Section 5 (non-goals) before proposing new features. Read [SSDLC_ENFORCEMENT.md](../SSDLC_ENFORCEMENT.md) for the engineering process.
 
 ### For Claude Code (AI-assisted development)
-The architect-reviewer agent applies the rubrics from `.claude/rubrics/` against every PR. Those rubrics reference these spec docs. The spec-requirements.yaml CI gate (planned) enforces that changes touching specific code paths come with corresponding spec updates.
+The architect-reviewer agent applies the rubrics from `.claude/rubrics/` against every PR. Those rubrics reference these spec docs. The spec-requirements.yaml CI gate (live as of PR #40) enforces that changes touching specific code paths come with corresponding spec updates.
 
 ## Contact
 
