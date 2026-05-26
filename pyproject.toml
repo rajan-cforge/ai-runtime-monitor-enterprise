@@ -9,7 +9,11 @@ description = "CrowdStrike-style runtime monitor for AI coding agents"
 readme = "README.md"
 license = { text = "Apache-2.0" }
 requires-python = ">=3.9"
-authors = [{ name = "GoCloudForge, Inc." }]
+authors = [
+    { name = "Rajan Yadav", email = "rajan.conch@gmail.com" },
+    { name = "GoCloudForge, Inc." },
+]
+maintainers = [{ name = "Rajan Yadav", email = "rajan.conch@gmail.com" }]
 keywords = ["ai", "monitoring", "security", "observability", "supply-chain"]
 classifiers = [
     "Development Status :: 4 - Beta",
