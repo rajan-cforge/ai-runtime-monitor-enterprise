@@ -22,13 +22,30 @@ classifiers = [
     "Topic :: System :: Monitoring",
     "License :: OSI Approved :: Apache Software License",
 ]
-dependencies = ["psutil>=5.9.0", "watchdog>=3.0", "cryptography>=42.0"]
+dependencies = [
+    "psutil>=5.9.0",
+    "watchdog>=3.0",
+    "cryptography>=42.0",
+    # mitmproxy is the HTTPS proxy implementation that gives Vigil its
+    # primary value: selective SSL inspection of AI API traffic. It is
+    # a base dependency (PR #52) — not an opt-in extra — because every
+    # documented use of Vigil (PRD §4, brand site, agent-detection
+    # design doc) treats interception as the central capability.
+    # Pre-PR-52 it was the [watch] extra; that produced a silent-
+    # failure footgun where `pip install ai-runtime-monitor` shipped a
+    # half-working product, observed during the new-laptop install
+    # verification on 2026-05-25.
+    "mitmproxy>=10.0",
+]
 
 [project.optional-dependencies]
-watch = ["mitmproxy>=10.0"]
+# The [watch] extra is retained as a no-op alias so any existing
+# install command `pip install "ai-runtime-monitor[watch]"` keeps
+# working without producing a "no such extra" error. Remove in v0.3.
+watch = []
 plot = ["matplotlib>=3.5"]
 security = ["sqlcipher3-binary>=0.5"]  # Optional: DB encryption at rest
-all = ["mitmproxy>=10.0", "matplotlib>=3.5", "sqlcipher3-binary>=0.5"]
+all = ["matplotlib>=3.5", "sqlcipher3-binary>=0.5"]
 dev = [
     "pytest>=7.0",
     "pytest-cov>=4.0",
@@ -39,6 +56,7 @@ dev = [
     "python-Levenshtein>=0.25",
     "pre-commit>=3.0",
     "detect-secrets>=1.5",
+    "tomli>=2.0; python_version < '3.11'",
 ]
 
 [project.urls]

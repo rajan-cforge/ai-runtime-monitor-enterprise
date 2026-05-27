@@ -5179,7 +5179,21 @@ def main():
     parser.add_argument("--uninstall-agent", action="store_true", help="Remove macOS LaunchAgent")
     parser.add_argument("--port", type=int, default=DASHBOARD_PORT, help=f"Dashboard port (default: {DASHBOARD_PORT})")
     parser.add_argument("--init-config", action="store_true", help="Generate default config.toml")
-    parser.add_argument("--with-proxy", action="store_true", help="Also start HTTPS proxy for deep API capture")
+    # As of PR #52, --start activates the HTTPS proxy by default. The
+    # legacy --with-proxy flag is kept as a no-op for backwards-compat
+    # with scripts, LaunchAgent plists, and docs that pass it
+    # explicitly. New users get full proxy capture without any flag.
+    # Pass --no-proxy to opt out (JSONL + extension capture only).
+    parser.add_argument(
+        "--with-proxy",
+        action="store_true",
+        help="(default; flag retained for backwards-compat) Start HTTPS proxy for deep API capture",
+    )
+    parser.add_argument(
+        "--no-proxy",
+        action="store_true",
+        help="Start the daemon without the HTTPS proxy (JSONL + extension capture only)",
+    )
     parser.add_argument(
         "--enable-system-proxy", action="store_true", help="Enable macOS system proxy (AI domains only)"
     )
@@ -5361,7 +5375,7 @@ def main():
         log_path = get_log_path()
         if not log_path.exists():
             print(f"No log file yet at {log_path}")
-            print("Start the monitor with: ai-monitor --start --with-proxy")
+            print("Start the monitor with: ai-monitor --start")
             sys.exit(0)
         print(f"Tailing {log_path} (Ctrl+C to exit)\n")
         try:
@@ -5428,7 +5442,13 @@ def main():
         except Exception as exc:
             print(f"  WARNING: setup wizard failed: {exc}")
 
-        if args.with_proxy:
+        # PR #52: HTTPS proxy is on by default. --no-proxy is the opt-
+        # out; --with-proxy is preserved as a no-op so existing scripts,
+        # LaunchAgent plists, and docs keep working without a flag-not-
+        # found error. The condition reads as 'start the proxy unless
+        # the user explicitly disabled it'.
+        proxy_enabled = not args.no_proxy
+        if proxy_enabled:
             from claude_monitoring.config import get_proxy_port
             from claude_monitoring.lifecycle import ProxyManager
 
