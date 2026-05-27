@@ -530,9 +530,11 @@ class TestMainArgumentParsing:
         monkeypatch.setattr(wizard_mod, "is_first_run", lambda: False)
 
     def test_start_calls_start_monitoring(self):
-        """--start should call start_monitoring()."""
+        """--start should call start_monitoring(). Pass --no-proxy so the
+        PR #54 preflight (which exits 3 if the CA isn't trusted) doesn't
+        run — this test covers argument dispatch, not the proxy preflight."""
         with patch("claude_monitoring.monitor.start_monitoring") as mock_start:
-            with patch("sys.argv", ["ai-monitor", "--start"]):
+            with patch("sys.argv", ["ai-monitor", "--start", "--no-proxy"]):
                 from claude_monitoring.monitor import main
 
                 main()
@@ -575,10 +577,11 @@ class TestMainArgumentParsing:
         assert "AI Runtime Monitor" in captured.out
 
     def test_port_override(self):
-        """--port should update DASHBOARD_PORT via _update_port."""
+        """--port should update DASHBOARD_PORT via _update_port. --no-proxy
+        keeps the preflight from running (see test_start_calls_start_monitoring)."""
         with patch("claude_monitoring.monitor.start_monitoring") as mock_start:
             with patch("claude_monitoring.monitor._update_port") as mock_port:
-                with patch("sys.argv", ["ai-monitor", "--start", "--port", "5555"]):
+                with patch("sys.argv", ["ai-monitor", "--start", "--no-proxy", "--port", "5555"]):
                     from claude_monitoring.monitor import main
 
                     main()
@@ -670,12 +673,100 @@ class TestMainArgumentParsing:
     def test_start_argparse_accepts_legacy_with_proxy_flag(self):
         """PR #52: --with-proxy is preserved as a no-op for backwards-
         compat (LaunchAgent plists, docs, user scripts may still pass
-        it). argparse must accept it without erroring."""
+        it). argparse must accept it without erroring. Mock preflight
+        so we don't trip the PR #54 CA-not-trusted exit-3 branch in CI."""
         with patch("claude_monitoring.monitor.start_monitoring"):
-            with patch("sys.argv", ["ai-monitor", "--start", "--with-proxy"]):
+            with patch("claude_monitoring.monitor._preflight_proxy_start", return_value=(0, None)):
+                with patch("sys.argv", ["ai-monitor", "--start", "--with-proxy"]):
+                    from claude_monitoring.monitor import main
+
+                    main()
+
+    def test_preflight_exits_2_when_mitmproxy_missing(self, monkeypatch):
+        """PR #54: --start --with-proxy must refuse to start when
+        mitmproxy is not importable. Exit 2 + actionable message."""
+        from claude_monitoring import monitor as mon
+
+        monkeypatch.setattr("importlib.util.find_spec", lambda name: None if name == "mitmproxy" else MagicMock())
+        code, msg = mon._preflight_proxy_start()
+        assert code == 2
+        assert msg is not None
+        assert "mitmproxy" in msg
+        assert "pip install" in msg
+
+    def test_preflight_exits_3_when_ca_not_trusted(self, monkeypatch):
+        """PR #54: refuse proxy start when verify_ca_trusted reports a
+        non-trusted state. Exit 3 + reason from trust_reason_message."""
+        from claude_monitoring import monitor as mon
+
+        monkeypatch.setattr("importlib.util.find_spec", lambda name: MagicMock())
+        monkeypatch.setattr(
+            "claude_monitoring.security.verify_ca_trusted",
+            lambda *_a, **_kw: (False, "in_keychain_but_not_trusted"),
+        )
+        code, msg = mon._preflight_proxy_start()
+        assert code == 3
+        assert msg is not None
+        assert "CA to be trusted" in msg
+        # The trust_reason_message mapping for in_keychain_but_not_trusted
+        # contains the actionable recovery command — verify it surfaces.
+        assert "security add-trusted-cert" in msg
+
+    def test_preflight_returns_zero_on_happy_path(self, monkeypatch):
+        from claude_monitoring import monitor as mon
+
+        monkeypatch.setattr("importlib.util.find_spec", lambda name: MagicMock())
+        monkeypatch.setattr("claude_monitoring.security.verify_ca_trusted", lambda *_a, **_kw: (True, "trusted"))
+        code, msg = mon._preflight_proxy_start()
+        assert code == 0
+        assert msg is None
+
+    def test_preflight_warns_but_does_not_block_on_allow_hosts_regression(self, monkeypatch):
+        """If AI_PROXY_DOMAINS gains a browser UI host (regression of
+        PR #51's invariant), the preflight should emit a stderr warning
+        but still return exit_code=0 so the proxy starts. The intent is
+        visibility, not blocking — the regression should ship with the
+        offending change rather than mask the broken state."""
+        from claude_monitoring import monitor as mon
+
+        monkeypatch.setattr("importlib.util.find_spec", lambda name: MagicMock())
+        monkeypatch.setattr("claude_monitoring.security.verify_ca_trusted", lambda *_a, **_kw: (True, "trusted"))
+        # Force a regression: stuff a browser UI host into AI_PROXY_DOMAINS.
+        monkeypatch.setattr(
+            "claude_monitoring.constants.AI_PROXY_DOMAINS",
+            ["api.anthropic.com", "claude.ai"],
+        )
+        code, msg = mon._preflight_proxy_start()
+        assert code == 0  # Warning, not block
+        assert msg is not None
+        assert "claude.ai" in msg
+        assert "regression" in msg.lower()
+
+    def test_start_propagates_preflight_exit_code(self, capsys):
+        """The --start call site must propagate _preflight_proxy_start's
+        non-zero exit code via SystemExit and print the message to stderr.
+        Covers the call-site branch added by PR #54 (otherwise only the
+        helper is covered, not the wiring into main())."""
+        with patch("claude_monitoring.monitor._preflight_proxy_start", return_value=(3, "CA not trusted msg")):
+            with patch("sys.argv", ["ai-monitor", "--start"]):
                 from claude_monitoring.monitor import main
 
-                main()
+                with pytest.raises(SystemExit) as exc:
+                    main()
+                assert exc.value.code == 3
+        assert "CA not trusted msg" in capsys.readouterr().err
+
+    def test_start_prints_warning_but_continues_on_preflight_warning(self):
+        """When preflight returns (0, warning_msg) the daemon should still
+        boot. Covers the warning-not-block branch at the call site."""
+        with patch("claude_monitoring.monitor._preflight_proxy_start", return_value=(0, "regression warning")):
+            with patch("claude_monitoring.monitor.start_monitoring") as mock_start:
+                with patch("claude_monitoring.lifecycle.ProxyManager"):
+                    with patch("sys.argv", ["ai-monitor", "--start"]):
+                        from claude_monitoring.monitor import main
+
+                        main()
+                    mock_start.assert_called_once()
 
     def test_install_has_priority_over_start(self):
         """When both --install-agent and --start are given, install wins (elif chain)."""
