@@ -161,6 +161,37 @@ class TestGetService:
         assert addon._get_service("") == "unknown"
 
 
+class TestClassifyBrowserService:
+    """PR A: _classify_browser_service uses _matches(host, domain) for exact-
+    or-subdomain matching, replacing prior bare `in host` substring checks.
+    Guards against attacker-controlled hosts like evil-claude.ai.bad.com."""
+
+    def test_exact_match_claude_ai(self, addon):
+        assert addon._classify_browser_service("claude.ai") == "claude_web"
+
+    def test_subdomain_match_claude_ai(self, addon):
+        assert addon._classify_browser_service("app.claude.ai") == "claude_web"
+
+    def test_attacker_lookalike_rejected_claude_ai(self, addon):
+        """Pre-PR-A substring check would have mis-classified this."""
+        assert addon._classify_browser_service("evil-claude.ai.attacker.com") == "browser_ai"
+
+    def test_exact_match_chatgpt_com(self, addon):
+        assert addon._classify_browser_service("chatgpt.com") == "chatgpt_web"
+
+    def test_subdomain_match_chat_openai(self, addon):
+        assert addon._classify_browser_service("api.chat.openai.com") == "chatgpt_web"
+
+    def test_exact_match_gemini(self, addon):
+        assert addon._classify_browser_service("gemini.google.com") == "gemini_web"
+
+    def test_exact_match_perplexity(self, addon):
+        assert addon._classify_browser_service("perplexity.ai") == "perplexity_web"
+
+    def test_unknown_host_falls_through(self, addon):
+        assert addon._classify_browser_service("example.com") == "browser_ai"
+
+
 # ===================================================================
 # 2. Record initialization (inline _new_record equivalent)
 # ===================================================================
