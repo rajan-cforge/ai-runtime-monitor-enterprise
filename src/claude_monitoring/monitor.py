@@ -5136,8 +5136,41 @@ def _update_port(port):
     DASHBOARD_PORT = port
 
 
+def _resolve_version() -> str:
+    """Return the installed package version, with sensible fallbacks.
+
+    Order: importlib.metadata (installed wheel/sdist), then
+    setuptools_scm dev tag (editable install during development),
+    then a static fallback. We never raise — `--version` must always
+    print something rather than crashing.
+    """
+    try:
+        from importlib.metadata import PackageNotFoundError, version
+
+        return version("ai-runtime-monitor")
+    except PackageNotFoundError:
+        pass
+    except Exception:
+        pass
+    try:
+        from setuptools_scm import get_version
+
+        return get_version(root="../..", relative_to=__file__)
+    except Exception:
+        pass
+    return "0.0.0+unknown"
+
+
 def main():
     parser = argparse.ArgumentParser(description="AI Runtime Monitor — Full visibility into AI agent activity")
+    # --version is the standard CLI affordance; expected by any tool
+    # that invokes ai-monitor in a discovery flow (Homebrew formula
+    # tests, package-manager wrappers, automated audits).
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"ai-monitor {_resolve_version()}",
+    )
     parser.add_argument("--start", action="store_true", help="Start monitoring and dashboard")
     parser.add_argument("--scan", action="store_true", help="One-shot process scan")
     parser.add_argument(

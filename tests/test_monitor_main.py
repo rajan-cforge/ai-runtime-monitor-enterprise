@@ -585,6 +585,22 @@ class TestMainArgumentParsing:
                 mock_port.assert_called_once_with(5555)
             mock_start.assert_called_once()
 
+    def test_version_flag_prints_and_exits_zero(self, capsys):
+        """PR #54: --version is the standard CLI affordance. argparse's
+        action='version' prints the resolved version to stdout and
+        raises SystemExit(0). Verify both the exit code and the prefix
+        of the printed string (the suffix is a version number that
+        changes per release / dev build, so we match by prefix)."""
+        with patch("sys.argv", ["ai-monitor", "--version"]):
+            from claude_monitoring.monitor import main
+
+            with pytest.raises(SystemExit) as exc:
+                main()
+            assert exc.value.code == 0
+        captured = capsys.readouterr()
+        # action='version' writes to stdout in Python 3.4+.
+        assert captured.out.startswith("ai-monitor "), f"unexpected --version output: {captured.out!r}"
+
     def test_install_has_priority_over_start(self):
         """When both --install-agent and --start are given, install wins (elif chain)."""
         with patch("claude_monitoring.monitor.install_launch_agent") as mock_install:
