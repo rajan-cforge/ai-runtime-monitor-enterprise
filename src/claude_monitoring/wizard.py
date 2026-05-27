@@ -34,6 +34,7 @@ from pathlib import Path
 from claude_monitoring.config import get_db_path, get_output_dir, get_proxy_port
 from claude_monitoring.security import (
     enforce_permissions,
+    ensure_ca_cert,
     ensure_dashboard_token,
     generate_custom_ca,
     get_ca_cert_path,
@@ -129,25 +130,33 @@ def run_setup_wizard(force: bool = False) -> bool:
     }
 
     # ── Step 1: Generate the CA ───────────────────────────────────
+    # Bug 8 fix: idempotent. Reuses an existing valid cert (not
+    # expired, NameConstraints match AI_PROXY_DOMAINS) so re-running
+    # --setup after a manual trust step does NOT rotate the cert out
+    # from under the trust the user just applied. `force=True` is the
+    # explicit "I want a fresh CA" path used by --regenerate-ca.
     cert_path = get_ca_cert_path()
-    print("[1/5] Generating unique monitoring certificate...")
-    if cert_path.exists() and not force:
-        info = get_ca_info()
-        cn = info["common_name"] if info else "unknown"
-        print(f"  ✅ Certificate already exists: {cn}")
-        state["steps"]["generate_ca"] = "skipped"
-    else:
-        try:
+    print("[1/5] Ensuring unique monitoring certificate...")
+    try:
+        if force:
             generate_custom_ca()
-            info = get_ca_info()
-            cn = info["common_name"] if info else "AI Runtime Monitor"
+            regenerated = True
+        else:
+            _, _, regenerated = ensure_ca_cert()
+        info = get_ca_info()
+        cn = info["common_name"] if info else "AI Runtime Monitor"
+        if regenerated:
             print(f"  ✅ Certificate: {cn}")
             print("  ✅ Valid for: 1 year")
             print("  ✅ Restricted to: AI domains only (Name Constraints)")
             state["steps"]["generate_ca"] = "ok"
-        except Exception as exc:
-            print(f"  ⚠ Could not generate certificate: {exc}")
-            state["steps"]["generate_ca"] = f"error: {exc}"
+        else:
+            print(f"  ✅ Reusing existing certificate: {cn}")
+            print("  ✅ Skipping regeneration (cert is valid and matches AI domains)")
+            state["steps"]["generate_ca"] = "reused"
+    except Exception as exc:
+        print(f"  ⚠ Could not ensure certificate: {exc}")
+        state["steps"]["generate_ca"] = f"error: {exc}"
 
     # ── Step 2: Trust the CA ──────────────────────────────────────
     #

@@ -5217,13 +5217,12 @@ def main():
         action="store_true",
         help="Start the daemon without the HTTPS proxy (JSONL + extension capture only)",
     )
-    parser.add_argument(
-        "--enable-system-proxy", action="store_true", help="Enable macOS system proxy (AI domains only)"
-    )
+    parser.add_argument("--enable-system-proxy", action="store_true", help="Enable macOS system proxy (AI domains only)")
     parser.add_argument("--disable-system-proxy", action="store_true", help="Disable macOS system proxy")
     parser.add_argument("--status", action="store_true", help="Show runtime status (monitor, proxy, cert, security)")
     parser.add_argument("--status-json", action="store_true", help="Show runtime status as JSON (for scripts)")
-    parser.add_argument("--setup", action="store_true", help="Run the first-time setup wizard (force re-run)")
+    parser.add_argument("--setup", action="store_true", help="Run the setup wizard. Idempotent (reuses valid CA).")
+    parser.add_argument("--regenerate-ca", action="store_true", help="Modifier for --setup: force CA regeneration.")
     parser.add_argument("--cleanup", action="store_true", help="Remove duplicate captures, empty sessions, etc.")
     parser.add_argument("--dry-run", action="store_true", help="Modifier for --cleanup: preview without changes")
     parser.add_argument("--purge", action="store_true", help="Permanently uninstall and delete all monitoring data")
@@ -5292,7 +5291,7 @@ def main():
     elif args.setup:
         from claude_monitoring.wizard import run_setup_wizard
 
-        sys.exit(0 if run_setup_wizard(force=True) else 1)
+        sys.exit(0 if run_setup_wizard(force=args.regenerate_ca) else 1)
     elif args.cleanup:
         from claude_monitoring.cleanup import print_cleanup_summary, run_cleanup
 

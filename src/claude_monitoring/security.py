@@ -187,6 +187,83 @@ def generate_custom_ca(
     return cert_path, key_path
 
 
+def ensure_ca_cert(
+    cert_path: Path | None = None,
+    key_path: Path | None = None,
+    domains: list[str] | None = None,
+    min_remaining_days: int = 30,
+) -> tuple[Path, Path, bool]:
+    """Generate a CA only if a valid one isn't already on disk.
+
+    A cert is "valid" when:
+      * the file parses as a PEM x509 certificate
+      * ``not_valid_after`` is at least ``min_remaining_days`` in the future
+      * the NameConstraints permitted_subtrees match ``domains`` (or
+        ``AI_PROXY_DOMAINS`` when ``domains`` is None) — drift means
+        AI_PROXY_DOMAINS was updated and the cert needs a refresh
+
+    Returns ``(cert_path, key_path, regenerated)`` where ``regenerated``
+    is True if a new cert was written. Idempotent: calling repeatedly
+    with the same args returns the same path and ``regenerated=False``.
+
+    Why: Bug 8 — the wizard's prior behavior was unconditional
+    regeneration on every ``--setup`` invocation. That created a
+    re-run loop: user trusts cert SHA A → ``--setup`` writes cert SHA
+    B → verifier correctly reports B is untrusted → user trusts B →
+    next ``--setup`` writes C → loop never converges. Idempotent
+    generation breaks the loop.
+    """
+    from cryptography import x509
+
+    from claude_monitoring.constants import AI_PROXY_DOMAINS
+
+    cert_path = cert_path or get_ca_cert_path()
+    key_path = key_path or get_ca_key_path()
+    expected_domains = list(domains) if domains is not None else list(AI_PROXY_DOMAINS)
+
+    if cert_path.exists() and key_path.exists() and _existing_cert_is_reusable(
+        cert_path, expected_domains, min_remaining_days
+    ):
+        return cert_path, key_path, False
+    generate_custom_ca(cert_path=cert_path, key_path=key_path, domains=expected_domains)
+    return cert_path, key_path, True
+
+
+def _existing_cert_is_reusable(cert_path: Path, expected_domains: list[str], min_remaining_days: int) -> bool:
+    """Return True iff the cert on disk is parseable, not expiring soon, and has
+    NameConstraints whose ``DNSName`` subtrees match ``expected_domains``. Any
+    parse failure → False (caller regenerates rather than crashing)."""
+    from cryptography import x509
+    from cryptography.x509 import DNSName, ExtensionNotFound
+
+    try:
+        cert = x509.load_pem_x509_certificate(cert_path.read_bytes())
+    except (ValueError, OSError):
+        return False
+    try:
+        # not_valid_after_utc can call into key/algorithm accessors that
+        # raise cryptography.exceptions.UnsupportedAlgorithm — treat any
+        # such failure as a drift signal and regenerate (fail-closed).
+        buffer = datetime.now(timezone.utc) + timedelta(days=min_remaining_days)
+        if cert.not_valid_after_utc <= buffer:
+            return False
+    except Exception:
+        return False
+    try:
+        nc_ext = cert.extensions.get_extension_for_class(x509.NameConstraints)
+        subtrees = nc_ext.value.permitted_subtrees or []
+    except ExtensionNotFound:
+        subtrees = []
+    # Filter to DNSName-only — any IPAddress / DirectoryName / URI entry
+    # is treated as drift so the cert is regenerated. Without this guard,
+    # mixed-type subtrees compare IPv4Network() to str and silently
+    # mismatch every time → Bug 8 loop under a different root cause.
+    dns_entries = [d.value for d in subtrees if isinstance(d, DNSName)]
+    if len(dns_entries) != len(subtrees):
+        return False
+    return set(dns_entries) == set(expected_domains)
+
+
 def get_ca_info(cert_path: Path | None = None) -> dict | None:
     """Return a summary of the installed CA or None if not present."""
     cert_path = cert_path or get_ca_cert_path()
