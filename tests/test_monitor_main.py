@@ -585,6 +585,62 @@ class TestMainArgumentParsing:
                 mock_port.assert_called_once_with(5555)
             mock_start.assert_called_once()
 
+    def test_resolve_version_uses_importlib_metadata(self, monkeypatch):
+        """Happy path: importlib.metadata.version() returns the
+        installed package version when the package is on the
+        installed-distributions list."""
+        from claude_monitoring import monitor as mon
+
+        monkeypatch.setattr("importlib.metadata.version", lambda name: "9.9.9-test")
+        assert mon._resolve_version() == "9.9.9-test"
+
+    def test_resolve_version_falls_back_to_setuptools_scm(self, monkeypatch):
+        """When importlib.metadata raises PackageNotFoundError
+        (editable install before the package is registered),
+        _resolve_version falls through to setuptools_scm.get_version."""
+        import sys
+        import types
+        from importlib.metadata import PackageNotFoundError
+
+        from claude_monitoring import monitor as mon
+
+        def _raise_not_found(name):
+            raise PackageNotFoundError(name)
+
+        monkeypatch.setattr("importlib.metadata.version", _raise_not_found)
+
+        # setuptools_scm is imported lazily inside _resolve_version;
+        # patch via sys.modules so the lazy import picks up the stub.
+        fake_scm = types.ModuleType("setuptools_scm")
+        fake_scm.get_version = lambda **kw: "1.2.3.dev42+gabc123"
+        monkeypatch.setitem(sys.modules, "setuptools_scm", fake_scm)
+
+        assert mon._resolve_version() == "1.2.3.dev42+gabc123"
+
+    def test_resolve_version_static_fallback_when_all_paths_fail(self, monkeypatch):
+        """Worst case: importlib raises a generic Exception AND
+        setuptools_scm also fails. _resolve_version returns the
+        static '0.0.0+unknown' so --version never crashes."""
+        import sys
+        import types
+
+        from claude_monitoring import monitor as mon
+
+        def _raise_runtime(name):
+            raise RuntimeError("simulated metadata failure")
+
+        monkeypatch.setattr("importlib.metadata.version", _raise_runtime)
+
+        fake_scm = types.ModuleType("setuptools_scm")
+
+        def _get_version(**kw):
+            raise RuntimeError("simulated scm failure")
+
+        fake_scm.get_version = _get_version
+        monkeypatch.setitem(sys.modules, "setuptools_scm", fake_scm)
+
+        assert mon._resolve_version() == "0.0.0+unknown"
+
     def test_version_flag_prints_and_exits_zero(self, capsys):
         """PR #54: --version is the standard CLI affordance. argparse's
         action='version' prints the resolved version to stdout and
