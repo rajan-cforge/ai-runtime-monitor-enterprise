@@ -8,7 +8,7 @@ dynamic = ["version"]
 description = "CrowdStrike-style runtime monitor for AI coding agents"
 readme = "README.md"
 license = { text = "Apache-2.0" }
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 authors = [
     { name = "Rajan Yadav", email = "rajan.conch@gmail.com" },
     { name = "GoCloudForge, Inc." },
@@ -92,7 +92,7 @@ git_describe_command = [
 ]
 
 [tool.ruff]
-target-version = "py39"
+target-version = "py310"
 line-length = 120
 
 [tool.ruff.lint]
