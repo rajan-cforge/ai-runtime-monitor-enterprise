@@ -194,10 +194,33 @@ def _has_dashboard_token() -> bool:
         return False
 
 
+# Extension heartbeat freshness window. The extension sends a
+# heartbeat every 60s (browser-extension/content_scripts/shared.js
+# line 178: setInterval(sendHeartbeat, 60000)). A 5-minute window is
+# the same threshold the extension's own selector_failure comment
+# uses (shared.js line 96) and is roughly 5× the interval — wide
+# enough to tolerate jitter and a few missed sends, narrow enough to
+# catch "extension uninstalled / disabled days ago" cases where a
+# stale row would otherwise misreport coverage.
+_EXTENSION_HEARTBEAT_STALENESS_SECONDS = 300
+
+
 def _check_extension_heartbeat() -> dict | None:
-    """Return heartbeat info from the DB, or None if unavailable."""
+    """Return heartbeat info from the DB only when the last heartbeat
+    is fresh (within ``_EXTENSION_HEARTBEAT_STALENESS_SECONDS``).
+    Returns ``None`` when no rows, no table, or the most recent row is
+    older than the window.
+
+    Pre-fix this function returned a row regardless of age, which
+    produced a false positive in the status display: a user who
+    uninstalled the extension days ago still saw '✅ Extension content'
+    because the DB row persisted. The freshness gate distinguishes
+    'extension is actually running and emitting heartbeats' from
+    'extension was installed at some point in history'.
+    """
     try:
         import sqlite3
+        from datetime import datetime, timedelta, timezone
 
         db_path = get_db_path()
         if not db_path.exists():
@@ -215,6 +238,18 @@ def _check_extension_heartbeat() -> dict | None:
         ).fetchone()
         conn.close()
         if not row:
+            return None
+        # Freshness gate. last_seen is an ISO-8601 string; older rows
+        # are silently treated as 'no extension running'.
+        try:
+            last_seen_dt = datetime.fromisoformat(str(row["last_seen"]).replace("Z", "+00:00"))
+            if last_seen_dt.tzinfo is None:
+                last_seen_dt = last_seen_dt.replace(tzinfo=timezone.utc)
+            age = datetime.now(timezone.utc) - last_seen_dt
+            if age > timedelta(seconds=_EXTENSION_HEARTBEAT_STALENESS_SECONDS):
+                return None
+        except Exception:
+            # Malformed timestamp → treat as stale rather than fresh.
             return None
         user_m = row["user_matches"] or 0
         asst_m = row["assistant_matches"] or 0
@@ -270,7 +305,10 @@ def show_status() -> int:
 
     p_mark = "✅" if proxy_running else "❌"
     sp_mark = "✅" if sys_proxy else "❌"
-    ct_mark = "✅" if cert_ok else "❌"
+    # Note: ct_mark used to gate the Chrome rows; those now gate on the
+    # extension heartbeat instead (PR #51 — proxy no longer touches
+    # browser UI sites). cert_ok is still used for the SSL inspection
+    # summary line below.
 
     dashboard_url = f"http://localhost:{get_dashboard_port()}"
 
@@ -367,10 +405,16 @@ def show_status() -> int:
     print(f"    Claude Desktop:   {sp_mark} " + ("Proxy (full capture)" if sys_proxy else "Process only"))
     print(f"    ChatGPT Desktop:  {sp_mark} " + ("Proxy (full capture)" if sys_proxy else "Process only"))
     print(f"    Cursor:           {sp_mark} " + ("Proxy (full capture)" if sys_proxy else "Process only"))
-    browser_mode = "Proxy metadata + Extension content" if cert_ok else "Extension only"
-    print(f"    Chrome claude.ai: {ct_mark} {browser_mode}")
-    print(f"    Chrome chatgpt:   {ct_mark} {browser_mode}")
-    print(f"    Chrome gemini:    {ct_mark} {browser_mode}")
+    # Browser AI sites are captured by the Chrome extension only. The
+    # proxy's allow_hosts intentionally excludes them as of PR #51 — see
+    # claude_monitoring.constants and docs/spec/THREAT-MODEL.md §6.1.
+    # cert_ok no longer gates this row; the extension is the capture
+    # surface regardless of CA trust state.
+    ext_mark = "✅" if ext else "⚠"
+    browser_mode = "Extension content" if ext else "Extension not loaded — install via ai-monitor --setup"
+    print(f"    Chrome claude.ai: {ext_mark} {browser_mode}")
+    print(f"    Chrome chatgpt:   {ext_mark} {browser_mode}")
+    print(f"    Chrome gemini:    {ext_mark} {browser_mode}")
     print("    Ollama:           ✅ Process + Network")
     print()
     print("  Security:")

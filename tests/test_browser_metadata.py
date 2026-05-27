@@ -1,12 +1,16 @@
 # Copyright 2026 GoCloudForge, Inc. All rights reserved.
-"""Tests for Section 5 (browser AI metadata via proxy) and Section 6
+"""Tests for Section 5 (browser AI metadata via extension) and Section 6
 (extension heartbeat).
 
 Section 5 verifies that:
-  - AI_PROXY_DOMAINS = AI_API_DOMAINS + AI_BROWSER_DOMAINS
+  - AI_PROXY_DOMAINS == AI_API_DOMAINS (browser UI sites are NOT proxied
+    as of PR #51 — they're handled by the Chrome extension via DOM
+    capture; see claude_monitoring.constants for rationale)
+  - AI_API_DOMAINS and AI_BROWSER_DOMAINS remain disjoint (the
+    architectural split is preserved even though the proxy no longer
+    inspects the browser list)
   - The watch addon classifies hosts correctly
   - Static assets are filtered out of metadata capture
-  - The launcher only includes browser domains when the cert is trusted
 
 Section 6 covers the heartbeat upsert + the /api/browser/extension-health
 endpoint that powers the dashboard warning banner.
@@ -47,8 +51,82 @@ class TestProxyDomainSplit:
     def test_browser_and_api_disjoint(self):
         assert set(AI_API_DOMAINS).isdisjoint(set(AI_BROWSER_DOMAINS))
 
-    def test_proxy_domains_is_union(self):
-        assert set(AI_PROXY_DOMAINS) == set(AI_API_DOMAINS) | set(AI_BROWSER_DOMAINS)
+    def test_proxy_domains_excludes_browser_ui_sites(self):
+        """Regression for PR #51: browser-facing UI sites must NOT appear
+        in AI_PROXY_DOMAINS. The proxy targets API endpoints only;
+        browser AI sites are captured by the Chrome extension via DOM
+        observation. See claude_monitoring.constants comment for the
+        full rationale (cert-error UX + duplicate-capture avoidance)."""
+        assert set(AI_PROXY_DOMAINS).isdisjoint(set(AI_BROWSER_DOMAINS)), (
+            "AI_PROXY_DOMAINS leaked browser UI sites — these must be extension-captured, not proxied"
+        )
+        # Spot-check the specific sites that have been problematic
+        # (claude.ai, chatgpt.com, gemini.google.com on the new-laptop
+        # install verification on 2026-05-26).
+        for d in ("claude.ai", "chatgpt.com", "gemini.google.com"):
+            assert d not in AI_PROXY_DOMAINS, f"{d} must not be in AI_PROXY_DOMAINS"
+
+    def test_proxy_domains_equals_api_domains(self):
+        """As of PR #51, AI_PROXY_DOMAINS is exactly AI_API_DOMAINS.
+        The two names are kept distinct so future callers that need
+        'what does the proxy inspect' get a stable answer even if the
+        API list reorganizes."""
+        assert list(AI_PROXY_DOMAINS) == list(AI_API_DOMAINS)
+
+
+class TestAllowHostsPattern:
+    """The regex passed to mitmdump --allow-hosts is built by
+    _build_allow_hosts_pattern. It must:
+      - match each AI_PROXY_DOMAINS host with a `:port` suffix
+      - escape dots so 'anthropic.com' doesn't match
+        'anthropic-com-attacker.io'
+      - reject hosts not in the list
+      - reject browser UI sites (PR #51 invariant)
+    """
+
+    def _pattern(self, domains):
+        import re as _re
+
+        from claude_monitoring.watch import _build_allow_hosts_pattern
+
+        return _re.compile(_build_allow_hosts_pattern(list(domains)))
+
+    def test_matches_api_endpoint_with_port(self):
+        p = self._pattern(AI_API_DOMAINS)
+        for h in ("api.anthropic.com", "api.openai.com", "api.cursor.sh"):
+            assert p.match(f"{h}:443"), f"{h}:443 should match the allow-hosts regex"
+
+    def test_rejects_browser_ui_sites(self):
+        """Regression: the regex must NOT match the browser UI sites.
+        Captured here as a defense-in-depth check on top of the
+        AI_PROXY_DOMAINS list invariant."""
+        p = self._pattern(AI_API_DOMAINS)
+        for h in ("claude.ai", "chatgpt.com", "gemini.google.com", "perplexity.ai"):
+            assert not p.match(f"{h}:443"), f"{h}:443 must NOT match the allow-hosts regex"
+
+    def test_rejects_substring_collision_attacks(self):
+        """`api.anthropic.com` in the allowlist must not match
+        `fake.api.anthropic.com.attacker.io:443`. The trailing `:`
+        anchor and the host-port match boundary make this safe."""
+        p = self._pattern(AI_API_DOMAINS)
+        assert not p.match("fake.api.anthropic.com.attacker.io:443")
+        assert not p.match("api.anthropic.com.attacker.io:443")
+
+    def test_rejects_dot_as_regex_wildcard(self):
+        """`.` in the domain list must be escaped — otherwise
+        'api.openai.com' would match 'apiXopenaiXcom' where X is any
+        character. _build_allow_hosts_pattern uses re.escape per
+        element."""
+        p = self._pattern(["api.openai.com"])
+        assert not p.match("apiXopenaiXcom:443")
+        assert p.match("api.openai.com:443")
+
+    def test_empty_domain_list_matches_nothing(self):
+        """Defensive: if AI_PROXY_DOMAINS is somehow empty, the regex
+        rejects everything rather than matching everything."""
+        p = self._pattern([])
+        assert not p.match("api.anthropic.com:443")
+        assert not p.match("anything:443")
 
 
 class TestStaticAssetFilter:

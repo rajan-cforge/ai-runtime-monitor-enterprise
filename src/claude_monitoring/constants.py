@@ -65,12 +65,27 @@ BROWSER_AI_PATTERNS = {
 # Domains for selective SSL inspection (mitmproxy allow_hosts).
 # Only these domains are decrypted — everything else passes through untouched.
 #
-# Section 5: split into API endpoints (always inspected, full request/response
-# parsing) and browser AI sites (only inspected when the user has trusted the
-# CA cert, METADATA only — we never parse SSE/WebSocket/protobuf content).
+# Browser-facing UI sites (claude.ai, chatgpt.com, gemini.google.com,
+# perplexity.ai) are intentionally EXCLUDED from the proxy's allow_hosts.
+# They are handled by the Chrome extension, which captures content from
+# the rendered DOM. The proxy targets API endpoints only. This avoids
+# two failure modes that the new-laptop install verification surfaced:
 #
-# AI_PROXY_DOMAINS is the union, kept for backwards-compat with existing
-# callers. New code should prefer AI_API_DOMAINS or AI_BROWSER_DOMAINS.
+#   1. The cert-error UX hit. Browsers maintain stricter intermediate
+#      validation for popular AI properties (HSTS pre-loaded). When the
+#      proxy intercepts these sites and the CA is even momentarily not
+#      fully trusted, the browser shows a scary "connection not private"
+#      error that can't be clicked through. Excluding browser UIs from
+#      proxy scope removes the failure mode entirely.
+#   2. Duplicate capture work. The Chrome extension already captures
+#      browser AI usage from the DOM (richer, includes formatted output).
+#      Having the proxy also intercept these hosts means two systems
+#      processing the same flow with different fidelity.
+#
+# AI_API_DOMAINS — proxied (selective SSL inspection, full body parse)
+# AI_BROWSER_DOMAINS — handled by Chrome extension, NOT by the proxy.
+#                      Kept here for use by BROWSER_AI_PATTERNS and Chrome
+#                      history matching, but no longer in AI_PROXY_DOMAINS.
 
 AI_API_DOMAINS = [
     "api.anthropic.com",
@@ -89,10 +104,8 @@ AI_API_DOMAINS = [
     "api.perplexity.ai",
 ]
 
-# Browser-facing AI web UIs. We only inspect TLS for these when the custom CA
-# is trusted (otherwise the browser shows scary warnings). And we only capture
-# metadata: host, path, method, status, sizes, latency. NEVER content — those
-# endpoints stream SSE / WebSockets / protobuf which we cannot reliably parse.
+# Browser-facing AI web UIs. NOT proxied — see the long comment above.
+# The Chrome extension handles capture for these via DOM observation.
 AI_BROWSER_DOMAINS = [
     "claude.ai",
     "chatgpt.com",
@@ -101,7 +114,10 @@ AI_BROWSER_DOMAINS = [
     "perplexity.ai",
 ]
 
-AI_PROXY_DOMAINS = AI_API_DOMAINS + AI_BROWSER_DOMAINS
+# AI_PROXY_DOMAINS is exactly AI_API_DOMAINS today. Kept as a separate
+# name so callers that need "what does the proxy inspect" don't have to
+# care about the API/browser split — they just import this list.
+AI_PROXY_DOMAINS = AI_API_DOMAINS
 
 AI_HOSTS = {
     # Anthropic
