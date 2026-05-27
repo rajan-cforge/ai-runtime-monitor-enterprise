@@ -105,7 +105,12 @@ The proxy is the most sensitive component of the product because it can technica
 1. **NameConstraints in the CA** (see `security.py` spec) — cryptographically prevents the CA from signing leaf certs for non-AI domains
 2. **Selective MITM in the addon** — `ClaudeWatchAddon` explicitly filters which hosts it intercepts. Even if NameConstraints were bypassed, the addon code chooses to ignore non-AI hosts
 
-The addon's host-filter list comes from `constants.AI_HOSTS`. Adding a new AI service requires adding the hostname to that list. There is no wildcard or pattern-match that could accidentally include non-AI hosts.
+Host filtering happens at **two** layers:
+
+1. **Transport layer (mitmdump `--allow-hosts`)**: a regex built from `constants.AI_PROXY_DOMAINS` (which equals `AI_API_DOMAINS` as of PR #51 — browser UI sites are intentionally excluded; see `constants.py` for rationale). Flows for hosts outside this regex are never intercepted; the addon never sees them.
+2. **Addon layer (inside `ClaudeWatchAddon.request`)**: a secondary filter against `constants.AI_HOSTS` (API → service-name map) and `constants.AI_BROWSER_DOMAINS`. In the normal run path the browser branch is dead code because the transport-layer regex already rejects those hosts; the branch is retained for testability and for the rare manual-invocation case where the proxy is launched with a custom allow_hosts.
+
+Adding a new AI service requires adding the hostname to `constants.AI_HOSTS` AND to `constants.AI_API_DOMAINS` (browser-facing UIs go in `constants.AI_BROWSER_DOMAINS` and are captured by the Chrome extension, not the proxy). There is no wildcard or pattern-match that could accidentally include non-AI hosts.
 
 ## 8. Hot-path notes
 

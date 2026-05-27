@@ -70,6 +70,27 @@ All columns are **Internal** tier. They describe process and network activity wi
 
 Exception: `browser_sessions.url` and `title` may include conversation IDs and topic hints. Classified as **Sensitive** for retention purposes.
 
+### 2.4a `extension_heartbeats`, `extension_captures` (Chrome extension surface)
+
+`extension_heartbeats` row schema:
+
+| Column | Tier | Notes |
+|--------|------|-------|
+| `hostname` | Internal | One of the AI browser hosts (claude.ai, chatgpt.com, gemini.google.com). Set membership; not sensitive. |
+| `last_seen` | Internal | UTC timestamp of the last heartbeat from the extension. |
+| `user_matches` / `assistant_matches` | Internal | Per-heartbeat counts of DOM-matched elements. Aggregate counts, no content. |
+| `captures_sent` | Internal | Number of capture events submitted in the heartbeat window. |
+| `selector_failure` | Internal | Boolean — true when the extension is alive but the page DOM stopped yielding the expected selectors. |
+
+`extension_captures` (browser AI content emitted by the extension):
+
+| Column | Tier | Notes |
+|--------|------|-------|
+| `text` (and any DOM-derived content fields) | **Sensitive** | Mirrors `events.data_json.text` classification — user prompts, assistant responses, code blocks. Same masking and retention as Layer 1 JSONL captures. |
+| `service`, `event_type`, `url`, `timestamp` | Internal | Routing metadata. |
+
+The extension is the **sole** capture surface for browser AI usage as of PR #51 (proxy `allow_hosts` no longer includes browser UI sites). The Sensitive classification on `extension_captures.text` follows from that — it is the same data class that the JSONL/proxy paths carry for Claude Code and desktop apps.
+
 ### 2.5 `package_vulnerabilities`, `agent_dependencies`, `intel_source_status`
 
 All **Internal** tier. Package names, version numbers, CVE IDs, and threat intel records.

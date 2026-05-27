@@ -588,6 +588,21 @@ try:
             return any(base.endswith(ext) for ext in self._STATIC_EXTS)
 
         def request(self, flow: mhttp.HTTPFlow):
+            # NOTE: As of PR #51, browser-facing AI UI sites
+            # (AI_BROWSER_DOMAINS) are NOT in the mitmdump --allow-hosts
+            # regex (see the launch path that constructs allow_pattern
+            # from AI_PROXY_DOMAINS == AI_API_DOMAINS). That means
+            # mitmproxy never delivers their flows to this hook in the
+            # normal run path — the is_browser branch below is dead code
+            # on every standard start. It's kept (a) for the rare case
+            # someone manually invokes ClaudeWatchAddon with a custom
+            # allow_hosts that re-includes browser UIs, and (b) so the
+            # browser-classification helper test
+            # (test_browser_metadata.py::TestBrowserServiceClassification)
+            # can still exercise the path without a live mitmdump. If
+            # browser UIs ever come back into the proxy's allow_hosts,
+            # also revisit ClaudeWatchAddon._classify_browser_service
+            # and the AI_BROWSER_DOMAINS-keyed branch in `response`.
             from claude_monitoring.constants import AI_BROWSER_DOMAINS
 
             host = flow.request.host
@@ -859,6 +874,26 @@ def run_setup():
     print("   claude-watch --generate-test   # create test data\n")
 
 
+def _build_allow_hosts_pattern(domains: list[str]) -> str:
+    """Build the mitmdump --allow-hosts regex from a domain list.
+
+    mitmproxy matches `--allow-hosts` against "host:port"; we anchor on
+    ``:`` at the end so a substring like "anthropic.com" doesn't also
+    intercept "fake.anthropic.com.attacker.io:443". Each domain is
+    `re.escape`'d so '.' in the source list is matched literally.
+
+    Pulled out as a pure helper so the regex shape can be unit-tested
+    without spawning mitmdump or invoking the full run_start path.
+    """
+    import re as _re
+
+    if not domains:
+        # Empty domain list → reject everything. Defensive: shouldn't
+        # happen in production but pinned so tests can assert it.
+        return "^$"
+    return "^(" + "|".join(_re.escape(d) for d in domains) + "):"
+
+
 def run_start():
     """Launch mitmproxy with the claude_watch addon."""
     script_path = Path(__file__).resolve()
@@ -924,12 +959,10 @@ echo "   Run: claude"
     # Net: AI_PROXY_DOMAINS == AI_API_DOMAINS. The cert-trust state is
     # surfaced by _is_cert_trusted() / show_status, but no longer used
     # to gate which domains the proxy intercepts.
-    import re as _re
-
     from claude_monitoring.constants import AI_PROXY_DOMAINS
 
     domains = list(AI_PROXY_DOMAINS)
-    allow_pattern = "^(" + "|".join(_re.escape(d) for d in domains) + "):"
+    allow_pattern = _build_allow_hosts_pattern(domains)
 
     cmd = [
         "mitmdump",

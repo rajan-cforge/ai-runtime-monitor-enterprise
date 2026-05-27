@@ -74,6 +74,61 @@ class TestProxyDomainSplit:
         assert list(AI_PROXY_DOMAINS) == list(AI_API_DOMAINS)
 
 
+class TestAllowHostsPattern:
+    """The regex passed to mitmdump --allow-hosts is built by
+    _build_allow_hosts_pattern. It must:
+      - match each AI_PROXY_DOMAINS host with a `:port` suffix
+      - escape dots so 'anthropic.com' doesn't match
+        'anthropic-com-attacker.io'
+      - reject hosts not in the list
+      - reject browser UI sites (PR #51 invariant)
+    """
+
+    def _pattern(self, domains):
+        import re as _re
+
+        from claude_monitoring.watch import _build_allow_hosts_pattern
+
+        return _re.compile(_build_allow_hosts_pattern(list(domains)))
+
+    def test_matches_api_endpoint_with_port(self):
+        p = self._pattern(AI_API_DOMAINS)
+        for h in ("api.anthropic.com", "api.openai.com", "api.cursor.sh"):
+            assert p.match(f"{h}:443"), f"{h}:443 should match the allow-hosts regex"
+
+    def test_rejects_browser_ui_sites(self):
+        """Regression: the regex must NOT match the browser UI sites.
+        Captured here as a defense-in-depth check on top of the
+        AI_PROXY_DOMAINS list invariant."""
+        p = self._pattern(AI_API_DOMAINS)
+        for h in ("claude.ai", "chatgpt.com", "gemini.google.com", "perplexity.ai"):
+            assert not p.match(f"{h}:443"), f"{h}:443 must NOT match the allow-hosts regex"
+
+    def test_rejects_substring_collision_attacks(self):
+        """`api.anthropic.com` in the allowlist must not match
+        `fake.api.anthropic.com.attacker.io:443`. The trailing `:`
+        anchor and the host-port match boundary make this safe."""
+        p = self._pattern(AI_API_DOMAINS)
+        assert not p.match("fake.api.anthropic.com.attacker.io:443")
+        assert not p.match("api.anthropic.com.attacker.io:443")
+
+    def test_rejects_dot_as_regex_wildcard(self):
+        """`.` in the domain list must be escaped — otherwise
+        'api.openai.com' would match 'apiXopenaiXcom' where X is any
+        character. _build_allow_hosts_pattern uses re.escape per
+        element."""
+        p = self._pattern(["api.openai.com"])
+        assert not p.match("apiXopenaiXcom:443")
+        assert p.match("api.openai.com:443")
+
+    def test_empty_domain_list_matches_nothing(self):
+        """Defensive: if AI_PROXY_DOMAINS is somehow empty, the regex
+        rejects everything rather than matching everything."""
+        p = self._pattern([])
+        assert not p.match("api.anthropic.com:443")
+        assert not p.match("anything:443")
+
+
 class TestStaticAssetFilter:
     """The static-asset filter lives inline in watch.py; we re-implement it
     here to verify the rule by example. (Pulling it from watch.py imports the

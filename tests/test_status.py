@@ -191,6 +191,77 @@ class TestExtensionHeartbeat:
         monkeypatch.setattr(status_mod, "get_db_path", lambda: tmp_path / "nonexistent.db")
         assert status_mod._check_extension_heartbeat() is None
 
+    def _setup_db_with_heartbeat(self, tmp_path, monkeypatch, last_seen_iso: str):
+        """Helper: build a temp DB with one extension_heartbeats row at
+        the given last_seen timestamp."""
+        import sqlite3
+
+        db_path = tmp_path / "monitor.db"
+        conn = sqlite3.connect(str(db_path))
+        conn.executescript(
+            """
+            CREATE TABLE extension_heartbeats (
+                hostname TEXT, last_seen TEXT, user_matches INTEGER,
+                assistant_matches INTEGER, captures_sent INTEGER,
+                selector_failure INTEGER
+            );
+            """
+        )
+        conn.execute(
+            "INSERT INTO extension_heartbeats (hostname, last_seen, user_matches, "
+            "assistant_matches, captures_sent, selector_failure) VALUES (?, ?, ?, ?, ?, ?)",
+            ("claude.ai", last_seen_iso, 3, 3, 5, 0),
+        )
+        conn.commit()
+        conn.close()
+        monkeypatch.setattr(status_mod, "get_db_path", lambda: db_path)
+        return db_path
+
+    def test_fresh_heartbeat_returns_dict(self, tmp_path, monkeypatch):
+        """Heartbeat from 30s ago is fresh — function returns row dict."""
+        from datetime import datetime, timedelta, timezone
+
+        fresh = (datetime.now(timezone.utc) - timedelta(seconds=30)).isoformat()
+        self._setup_db_with_heartbeat(tmp_path, monkeypatch, fresh)
+        result = status_mod._check_extension_heartbeat()
+        assert result is not None
+        assert result["hostname"] == "claude.ai"
+        assert "3 user" in result["status"]
+
+    def test_stale_heartbeat_returns_none(self, tmp_path, monkeypatch):
+        """Heartbeat from days ago is stale — function returns None so
+        the status display correctly shows 'Extension not loaded' rather
+        than the false-positive 'Extension content' it produced pre-fix.
+        This is the regression test for the architect cycle-1 finding
+        on PR #51."""
+        from datetime import datetime, timedelta, timezone
+
+        stale = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
+        self._setup_db_with_heartbeat(tmp_path, monkeypatch, stale)
+        result = status_mod._check_extension_heartbeat()
+        assert result is None
+
+    def test_boundary_heartbeat_just_inside_window_returns_dict(self, tmp_path, monkeypatch):
+        """Just inside the 5-minute window (4m30s ago) — still fresh."""
+        from datetime import datetime, timedelta, timezone
+
+        boundary_fresh = (datetime.now(timezone.utc) - timedelta(seconds=270)).isoformat()
+        self._setup_db_with_heartbeat(tmp_path, monkeypatch, boundary_fresh)
+        assert status_mod._check_extension_heartbeat() is not None
+
+    def test_boundary_heartbeat_just_outside_window_returns_none(self, tmp_path, monkeypatch):
+        """Just outside the 5-minute window (5m30s ago) — stale."""
+        from datetime import datetime, timedelta, timezone
+
+        boundary_stale = (datetime.now(timezone.utc) - timedelta(seconds=330)).isoformat()
+        self._setup_db_with_heartbeat(tmp_path, monkeypatch, boundary_stale)
+        assert status_mod._check_extension_heartbeat() is None
+
+    def test_malformed_timestamp_returns_none(self, tmp_path, monkeypatch):
+        """Defensive: bad timestamp data → treat as stale, not fresh."""
+        self._setup_db_with_heartbeat(tmp_path, monkeypatch, "not-an-iso-timestamp")
+        assert status_mod._check_extension_heartbeat() is None
+
 
 class TestShowStatus:
     def test_show_status_returns_zero_and_prints(self, monkeypatch):
