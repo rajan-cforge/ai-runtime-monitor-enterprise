@@ -208,6 +208,8 @@ Five boundaries today, with a sixth planned for v0.3:
 
 ## 6. Boundary B4: Proxy ↔ AI APIs
 
+The proxy's `allow_hosts` is restricted to **API endpoints only** (`constants.AI_API_DOMAINS`). Browser-facing AI UI sites (`claude.ai`, `chatgpt.com`, `gemini.google.com`, `perplexity.ai` — listed in `constants.AI_BROWSER_DOMAINS`) are explicitly NOT proxied. Those surfaces are captured by the Chrome extension via DOM observation. Rationale and history are in `constants.py`; the architectural decision was ratified in PR #51 (2026-05-26) after the new-laptop install verification surfaced cert-error UX hits on the browser path.
+
 ### 6.1 Spoofing
 
 **T4.1: Proxy presents a malicious CA cert to the user.**

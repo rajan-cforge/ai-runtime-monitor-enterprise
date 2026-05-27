@@ -120,7 +120,7 @@ If the proxy is heavily loaded (developer running many AI agents simultaneously)
 
 ## 9. Extension points
 
-- **Support a new AI service:** add to `constants.AI_HOSTS` and `constants.AI_PROXY_DOMAINS`
+- **Support a new AI service:** add to `constants.AI_HOSTS` and `constants.AI_API_DOMAINS` (which is what `constants.AI_PROXY_DOMAINS` resolves to as of PR #51; browser-facing UI hosts go in `constants.AI_BROWSER_DOMAINS` and are captured by the Chrome extension, not the proxy)
 - **Support a new AI agent for configuration:** add an entry to the per-agent config table in `cli_configure`
 - **Add a new captured field:** extend the addon's `response` method and the database schema
 - **Custom analysis:** the `cli_analyze` subcommand can dispatch to plugins (planned v0.3)

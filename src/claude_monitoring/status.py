@@ -270,7 +270,10 @@ def show_status() -> int:
 
     p_mark = "✅" if proxy_running else "❌"
     sp_mark = "✅" if sys_proxy else "❌"
-    ct_mark = "✅" if cert_ok else "❌"
+    # Note: ct_mark used to gate the Chrome rows; those now gate on the
+    # extension heartbeat instead (PR #51 — proxy no longer touches
+    # browser UI sites). cert_ok is still used for the SSL inspection
+    # summary line below.
 
     dashboard_url = f"http://localhost:{get_dashboard_port()}"
 
@@ -367,10 +370,16 @@ def show_status() -> int:
     print(f"    Claude Desktop:   {sp_mark} " + ("Proxy (full capture)" if sys_proxy else "Process only"))
     print(f"    ChatGPT Desktop:  {sp_mark} " + ("Proxy (full capture)" if sys_proxy else "Process only"))
     print(f"    Cursor:           {sp_mark} " + ("Proxy (full capture)" if sys_proxy else "Process only"))
-    browser_mode = "Proxy metadata + Extension content" if cert_ok else "Extension only"
-    print(f"    Chrome claude.ai: {ct_mark} {browser_mode}")
-    print(f"    Chrome chatgpt:   {ct_mark} {browser_mode}")
-    print(f"    Chrome gemini:    {ct_mark} {browser_mode}")
+    # Browser AI sites are captured by the Chrome extension only. The
+    # proxy's allow_hosts intentionally excludes them as of PR #51 — see
+    # claude_monitoring.constants and docs/spec/THREAT-MODEL.md §6.1.
+    # cert_ok no longer gates this row; the extension is the capture
+    # surface regardless of CA trust state.
+    ext_mark = "✅" if ext else "⚠"
+    browser_mode = "Extension content" if ext else "Extension not loaded — install via ai-monitor --setup"
+    print(f"    Chrome claude.ai: {ext_mark} {browser_mode}")
+    print(f"    Chrome chatgpt:   {ext_mark} {browser_mode}")
+    print(f"    Chrome gemini:    {ext_mark} {browser_mode}")
     print("    Ollama:           ✅ Process + Network")
     print()
     print("  Security:")

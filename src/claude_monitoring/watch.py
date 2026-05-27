@@ -910,32 +910,25 @@ echo "   Run: claude"
     # NOTE: --set allow_hosts=<json> does NOT work for sequence options — must use the
     # --allow-hosts flag with a single regex.
     #
-    # Section 5: browser AI domains (claude.ai, chatgpt.com, gemini.google.com)
-    # are added to the allowlist ONLY when the user has trusted the custom CA.
-    # Chrome exempts locally-installed root CAs from HSTS pin enforcement
-    # (documented at chromium.googlesource.com transport_security_state.h) —
-    # this is the same model used by Zscaler, Netskope, and every enterprise
-    # proxy. When the CA is NOT trusted, these domains are excluded so the
-    # browser doesn't show cert warnings.
+    # PR #51 / 2026-05-26: browser-facing AI UI sites (claude.ai,
+    # chatgpt.com, gemini.google.com, perplexity.ai) are intentionally
+    # NOT in the proxy's allow_hosts. They are captured by the Chrome
+    # extension via the DOM. Rationale (see
+    # claude_monitoring.constants and docs/spec/THREAT-MODEL.md §6.1):
+    #   1. Avoid the cert-error UX hit. Even with admin trust applied,
+    #      browsers' HSTS pre-load + intermediate validation on popular
+    #      AI properties produces a fragile experience.
+    #   2. Avoid duplicate capture work. The Chrome extension already
+    #      observes the rendered DOM; having the proxy also intercept
+    #      means two systems processing the same flow.
+    # Net: AI_PROXY_DOMAINS == AI_API_DOMAINS. The cert-trust state is
+    # surfaced by _is_cert_trusted() / show_status, but no longer used
+    # to gate which domains the proxy intercepts.
     import re as _re
 
-    from claude_monitoring.constants import AI_API_DOMAINS, AI_BROWSER_DOMAINS
+    from claude_monitoring.constants import AI_PROXY_DOMAINS
 
-    domains = list(AI_API_DOMAINS)
-    cert_trusted = False
-    try:
-        from claude_monitoring.status import _is_cert_trusted
-
-        cert_trusted = _is_cert_trusted()
-    except Exception:
-        pass
-    if cert_trusted:
-        domains.extend(AI_BROWSER_DOMAINS)
-        print("  ✅ CA trusted — browser AI sites will be inspected (metadata only)")
-    else:
-        print("  ⚠ CA not trusted — browser AI sites excluded from proxy")
-        print("    Run 'ai-monitor --setup' to trust the CA and enable browser metadata capture")
-
+    domains = list(AI_PROXY_DOMAINS)
     allow_pattern = "^(" + "|".join(_re.escape(d) for d in domains) + "):"
 
     cmd = [

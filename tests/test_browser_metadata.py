@@ -1,12 +1,16 @@
 # Copyright 2026 GoCloudForge, Inc. All rights reserved.
-"""Tests for Section 5 (browser AI metadata via proxy) and Section 6
+"""Tests for Section 5 (browser AI metadata via extension) and Section 6
 (extension heartbeat).
 
 Section 5 verifies that:
-  - AI_PROXY_DOMAINS = AI_API_DOMAINS + AI_BROWSER_DOMAINS
+  - AI_PROXY_DOMAINS == AI_API_DOMAINS (browser UI sites are NOT proxied
+    as of PR #51 — they're handled by the Chrome extension via DOM
+    capture; see claude_monitoring.constants for rationale)
+  - AI_API_DOMAINS and AI_BROWSER_DOMAINS remain disjoint (the
+    architectural split is preserved even though the proxy no longer
+    inspects the browser list)
   - The watch addon classifies hosts correctly
   - Static assets are filtered out of metadata capture
-  - The launcher only includes browser domains when the cert is trusted
 
 Section 6 covers the heartbeat upsert + the /api/browser/extension-health
 endpoint that powers the dashboard warning banner.
@@ -47,8 +51,27 @@ class TestProxyDomainSplit:
     def test_browser_and_api_disjoint(self):
         assert set(AI_API_DOMAINS).isdisjoint(set(AI_BROWSER_DOMAINS))
 
-    def test_proxy_domains_is_union(self):
-        assert set(AI_PROXY_DOMAINS) == set(AI_API_DOMAINS) | set(AI_BROWSER_DOMAINS)
+    def test_proxy_domains_excludes_browser_ui_sites(self):
+        """Regression for PR #51: browser-facing UI sites must NOT appear
+        in AI_PROXY_DOMAINS. The proxy targets API endpoints only;
+        browser AI sites are captured by the Chrome extension via DOM
+        observation. See claude_monitoring.constants comment for the
+        full rationale (cert-error UX + duplicate-capture avoidance)."""
+        assert set(AI_PROXY_DOMAINS).isdisjoint(set(AI_BROWSER_DOMAINS)), (
+            "AI_PROXY_DOMAINS leaked browser UI sites — these must be extension-captured, not proxied"
+        )
+        # Spot-check the specific sites that have been problematic
+        # (claude.ai, chatgpt.com, gemini.google.com on the new-laptop
+        # install verification on 2026-05-26).
+        for d in ("claude.ai", "chatgpt.com", "gemini.google.com"):
+            assert d not in AI_PROXY_DOMAINS, f"{d} must not be in AI_PROXY_DOMAINS"
+
+    def test_proxy_domains_equals_api_domains(self):
+        """As of PR #51, AI_PROXY_DOMAINS is exactly AI_API_DOMAINS.
+        The two names are kept distinct so future callers that need
+        'what does the proxy inspect' get a stable answer even if the
+        API list reorganizes."""
+        assert list(AI_PROXY_DOMAINS) == list(AI_API_DOMAINS)
 
 
 class TestStaticAssetFilter:
