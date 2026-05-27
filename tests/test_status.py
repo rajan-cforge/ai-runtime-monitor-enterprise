@@ -88,7 +88,7 @@ class TestCertTrusted:
         monkeypatch.setattr("claude_monitoring.security.get_ca_cert_path", lambda: cert)
         monkeypatch.setattr(
             "claude_monitoring.security.verify_ca_trusted",
-            lambda *a, **kw: (False, "CA is in System.keychain but admin trust settings are not applied"),
+            lambda *a, **kw: (False, "in_keychain_but_not_trusted"),
         )
         assert status_mod._is_cert_trusted() is False
 
@@ -229,7 +229,7 @@ class TestShowStatus:
         monkeypatch.setattr(
             status_mod,
             "_get_ca_trust_state",
-            lambda: (True, False, "CA is in System.keychain but admin trust settings are not applied"),
+            lambda: (True, False, "in_keychain_but_not_trusted"),
         )
         monkeypatch.setattr(status_mod, "_is_monitor_running", lambda: False)
         monkeypatch.setattr(status_mod, "_is_db_encrypted", lambda: False)
@@ -248,19 +248,24 @@ class TestShowStatus:
         assert "✅ In keychain" in output
         assert "CA trust:" in output
         assert "Not in admin trust settings — proxy interception will fail" in output
-        # The reason from _get_ca_trust_state must be surfaced so the
-        # user understands what's broken.
+        # The reason from _get_ca_trust_state is passed through
+        # trust_reason_message, which maps "in_keychain_but_not_trusted"
+        # to a string that includes the actionable recovery command.
         assert "admin trust settings are not applied" in output
+        assert "security add-trusted-cert" in output
 
     def test_show_status_no_keychain_state(self, monkeypatch):
         """show_status with cert not in keychain at all (pre-setup,
         or post-purge). Different from the partial-trust state."""
         monkeypatch.setattr(status_mod, "_is_mitmproxy_running", lambda: False)
         monkeypatch.setattr(status_mod, "_is_system_proxy_configured", lambda: False)
+        # cert_code=None signals legacy fallback path (no SHA-1 verification
+        # available); _get_ca_trust_state returns None when the custom CA
+        # cert file is absent.
         monkeypatch.setattr(
             status_mod,
             "_get_ca_trust_state",
-            lambda: (False, False, "no monitoring CA found"),
+            lambda: (False, False, None),
         )
         monkeypatch.setattr(status_mod, "_is_monitor_running", lambda: False)
         monkeypatch.setattr(status_mod, "_is_db_encrypted", lambda: False)

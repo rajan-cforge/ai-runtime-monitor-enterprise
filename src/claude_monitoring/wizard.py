@@ -39,6 +39,7 @@ from claude_monitoring.security import (
     get_ca_info,
     get_setup_marker_path,
     trust_ca_cert,
+    trust_reason_message,
     untrust_ca_cert,
     verify_ca_trusted,
 )
@@ -178,7 +179,7 @@ def run_setup_wizard(force: bool = False) -> bool:
         print()
         if _prompt("Trust the certificate?", default_yes=True):
             osascript_ok = trust_ca_cert()
-            verified, reason = verify_ca_trusted(cert_path)
+            verified, code = verify_ca_trusted(cert_path)
             if osascript_ok and verified:
                 print("  ✅ Certificate trusted (verified in admin trust settings)")
                 state["steps"]["trust_ca"] = "ok"
@@ -190,14 +191,11 @@ def run_setup_wizard(force: bool = False) -> bool:
                     print("  ❌ Certificate trust step appeared to succeed, but verification failed.")
                 else:
                     print("  ❌ Certificate trust step failed.")
-                if reason:
-                    # CodeQL flags this as clear-text logging of sensitive
-                    # data because `reason` flows from a subprocess result
-                    # in verify_ca_trusted. The reason is hardcoded canned
-                    # text (no stderr, no exception messages, no SHA-1) —
-                    # see security.verify_ca_trusted for the full list.
-                    # The alert is a false positive on the taint heuristic.
-                    print(f"     Reason: {reason}")  # lgtm[py/clear-text-logging-sensitive-data]
+                # Map the literal code to a human message via the
+                # discriminated-set mapping; the result is provably from
+                # a literal dict (no subprocess taint flowing through).
+                reason = trust_reason_message(code)
+                print(f"     Reason: {reason}")
                 print()
                 print("  Vigil's proxy cannot inspect HTTPS traffic without the CA")
                 print("  being trusted in the System keychain. Step 3 (system proxy)")
@@ -216,7 +214,11 @@ def run_setup_wizard(force: bool = False) -> bool:
                 print("  - Process and filesystem monitoring")
                 print("  But NOT for HTTPS traffic from desktop AI apps or CLI tools.")
                 state["steps"]["trust_ca"] = "manual_required"
-                state["trust_ca_reason"] = reason or "trust_ca_cert returned False"
+                # Record the literal code in the marker — it's a stable
+                # identifier (drawn from the TrustVerificationCode set)
+                # that downstream tooling can dispatch on without parsing
+                # human prose.
+                state["trust_ca_reason"] = code if not osascript_ok else (code or "verification_error")
         else:
             print("  ⏭ Skipped — proxy capture limited to CLI tools")
             state["steps"]["trust_ca"] = "skipped"

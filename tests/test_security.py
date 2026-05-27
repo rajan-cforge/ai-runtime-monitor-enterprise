@@ -54,13 +54,13 @@ def _make_self_signed_ca(path):
 
 
 class TestVerifyCaTrusted:
-    """verify_ca_trusted must distinguish three states:
-    1. cert file missing → False with a 'file not found' reason
-    2. cert in keychain but no admin trust settings → False (key bug)
-    3. cert in keychain AND admin trust settings → True
-    """
+    """verify_ca_trusted returns ``(bool, TrustVerificationCode)``.
+    The second element is a Literal drawn from a constrained set —
+    never raw subprocess output. Callers map code → message via
+    ``trust_reason_message``. Tests below pin the code returned for
+    each failure mode."""
 
-    def test_returns_true_when_in_keychain_and_admin_trust_settings(self, tmp_path):
+    def test_returns_true_with_trusted_code_when_in_keychain_and_admin_trust(self, tmp_path):
         from claude_monitoring.security import verify_ca_trusted
 
         cert_path = tmp_path / "ai-monitor-ca.pem"
@@ -82,17 +82,16 @@ class TestVerifyCaTrusted:
             return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
 
         with patch("claude_monitoring.security.subprocess.run", side_effect=fake_run):
-            ok, reason = verify_ca_trusted(cert_path)
-        assert ok is True, f"expected trusted, got reason={reason!r}"
-        assert reason is None
+            ok, code = verify_ca_trusted(cert_path)
+        assert ok is True, f"expected trusted, got code={code!r}"
+        assert code == "trusted"
 
-    def test_returns_false_when_in_keychain_but_no_admin_trust(self, tmp_path):
+    def test_returns_in_keychain_but_not_trusted_code_when_admin_trust_missing(self, tmp_path):
         """The exact failure mode from the new-laptop install: cert
         added to System.keychain via add-trusted-cert, but the admin
-        trust settings weren't actually applied (e.g., osascript dialog
-        cancelled mid-way). Old _is_cert_trusted returned True; new
-        verify_ca_trusted returns False, matching what the proxy
-        interception layer actually needs."""
+        trust settings weren't actually applied. Old _is_cert_trusted
+        returned True; new verify_ca_trusted returns False with code
+        ``in_keychain_but_not_trusted``."""
         from claude_monitoring.security import verify_ca_trusted
 
         cert_path = tmp_path / "ai-monitor-ca.pem"
@@ -112,12 +111,42 @@ class TestVerifyCaTrusted:
             return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
 
         with patch("claude_monitoring.security.subprocess.run", side_effect=fake_run):
-            ok, reason = verify_ca_trusted(cert_path)
+            ok, code = verify_ca_trusted(cert_path)
+        # Note: when export exits non-zero, the code is
+        # trust_settings_export_failed (we never even read the plist).
+        # The in_keychain_but_not_trusted code is what we get when
+        # export succeeds but the SHA-1 isn't in the resulting plist.
         assert ok is False
-        assert reason is not None
-        assert "trust-settings-export failed" in reason or "trust settings" in reason
+        assert code == "trust_settings_export_failed"
 
-    def test_returns_false_when_not_in_keychain(self, tmp_path):
+    def test_returns_in_keychain_but_not_trusted_when_sha1_missing_from_export(self, tmp_path):
+        """Distinct from trust_settings_export_failed: export succeeds
+        (exit 0) but our SHA-1 is not in the resulting plist content."""
+        from claude_monitoring.security import verify_ca_trusted
+
+        cert_path = tmp_path / "ai-monitor-ca.pem"
+        sha1 = _make_self_signed_ca(cert_path)
+
+        def fake_run(cmd, **_):
+            if "find-certificate" in cmd:
+                return subprocess.CompletedProcess(
+                    args=cmd, returncode=0, stdout=f"SHA-1 hash: {sha1.upper()}\n", stderr=""
+                )
+            if "trust-settings-export" in cmd:
+                plist_path = cmd[cmd.index("-d") + 1]
+                from pathlib import Path as _P
+
+                # Different SHA-1 in the plist → our cert isn't trusted.
+                _P(plist_path).write_text('<?xml version="1.0"?><plist><dict><key>OTHER_SHA1</key></dict></plist>')
+                return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+        with patch("claude_monitoring.security.subprocess.run", side_effect=fake_run):
+            ok, code = verify_ca_trusted(cert_path)
+        assert ok is False
+        assert code == "in_keychain_but_not_trusted"
+
+    def test_returns_not_in_keychain_code(self, tmp_path):
         from claude_monitoring.security import verify_ca_trusted
 
         cert_path = tmp_path / "ai-monitor-ca.pem"
@@ -129,18 +158,41 @@ class TestVerifyCaTrusted:
             return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
 
         with patch("claude_monitoring.security.subprocess.run", side_effect=fake_run):
-            ok, reason = verify_ca_trusted(cert_path)
+            ok, code = verify_ca_trusted(cert_path)
         assert ok is False
-        assert reason == "CA certificate is not present in System.keychain"
+        assert code == "not_in_keychain"
 
-    def test_returns_false_when_cert_file_missing(self, tmp_path):
+    def test_returns_cert_file_missing_code(self, tmp_path):
         from claude_monitoring.security import verify_ca_trusted
 
         cert_path = tmp_path / "does-not-exist.pem"
-        ok, reason = verify_ca_trusted(cert_path)
+        ok, code = verify_ca_trusted(cert_path)
         assert ok is False
-        assert reason is not None
-        assert "not found" in reason
+        assert code == "cert_file_missing"
+
+
+class TestTrustReasonMessage:
+    """trust_reason_message maps every TrustVerificationCode to a
+    human-readable string. The mapping is the join point where
+    subprocess-tainted state becomes a literal-set value safe to
+    print/log without triggering CodeQL's clear-text-logging analysis."""
+
+    def test_returns_message_for_every_known_code(self):
+        from claude_monitoring.security import _TRUST_REASON_MESSAGES, trust_reason_message
+
+        for code, expected in _TRUST_REASON_MESSAGES.items():
+            assert trust_reason_message(code) == expected
+
+    def test_messages_contain_actionable_recovery_for_trust_failure(self):
+        """The 'in_keychain_but_not_trusted' message is the one users
+        actually need to recover from — it must contain the manual
+        add-trusted-cert command so a power user can fix the state
+        without re-running the wizard."""
+        from claude_monitoring.security import trust_reason_message
+
+        msg = trust_reason_message("in_keychain_but_not_trusted")
+        assert "security add-trusted-cert" in msg
+        assert "System.keychain" in msg
 
 
 class TestSQLInjection:

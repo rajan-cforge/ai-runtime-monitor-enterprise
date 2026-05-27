@@ -25,6 +25,7 @@ import socket
 import subprocess
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Literal
 
 from claude_monitoring.config import get_db_path, get_output_dir
 
@@ -246,6 +247,64 @@ def trust_ca_cert(cert_path: Path | None = None) -> bool:
         return False
 
 
+# ─────────────────────────────────────────────────────────────
+# Section 2c: CA trust verification (PR #50)
+# ─────────────────────────────────────────────────────────────
+#
+# verify_ca_trusted returns a Literal-typed reason code, not a raw
+# string. Callers map the code to a human message via
+# trust_reason_message(). Doing the mapping at the call site (with a
+# literal-keyed dict) means the data flowing into print/log statements
+# is provably from a constrained set, not from a subprocess. CodeQL's
+# clear-text-logging taint analysis stops tracking subprocess
+# provenance once the return type narrows to a Literal set; the static
+# type system proves what taint analysis can't infer.
+#
+# This is the project convention for surfacing subprocess-derived state
+# to users — see CLAUDE.md (will be added in PR 4 / defensive ergonomics).
+
+TrustVerificationCode = Literal[
+    "trusted",
+    "cert_file_missing",
+    "sha1_fingerprint_failed",
+    "find_certificate_failed",
+    "not_in_keychain",
+    "trust_settings_export_failed",
+    "in_keychain_but_not_trusted",
+    "verification_error",
+]
+
+
+_TRUST_REASON_MESSAGES: dict[TrustVerificationCode, str] = {
+    "trusted": "CA is trusted in admin trust settings",
+    "cert_file_missing": "CA certificate file is not present on disk — run ai-monitor --setup",
+    "sha1_fingerprint_failed": "Could not compute CA certificate SHA-1 fingerprint",
+    "find_certificate_failed": "security find-certificate could not be invoked",
+    "not_in_keychain": "CA certificate is not present in the System keychain",
+    "trust_settings_export_failed": (
+        "Could not read the admin trust-settings export — trust may not be applied. Try ai-monitor --setup."
+    ),
+    "in_keychain_but_not_trusted": (
+        "CA is in System.keychain but admin trust settings are not applied. "
+        "Run: sudo security add-trusted-cert -d -r trustRoot "
+        "-k /Library/Keychains/System.keychain <CA cert path>"
+    ),
+    "verification_error": "Trust verification error — see logs",
+}
+
+
+def trust_reason_message(code: TrustVerificationCode) -> str:
+    """Map a TrustVerificationCode to a human-readable message.
+
+    The dict is keyed by Literal values and contains only hardcoded
+    strings, so the returned message is provably from a literal set
+    rather than tainted subprocess data. Callers can pass the returned
+    string directly to print/log without triggering CodeQL's
+    clear-text-logging-sensitive-data alert.
+    """
+    return _TRUST_REASON_MESSAGES[code]
+
+
 def _ca_cert_sha1(cert_path: Path) -> str | None:
     """Compute the SHA-1 fingerprint of a PEM-encoded CA cert.
 
@@ -270,9 +329,17 @@ def _ca_cert_sha1(cert_path: Path) -> str | None:
         return None
 
 
-def verify_ca_trusted(cert_path: Path | None = None) -> tuple[bool, str | None]:
-    """Return (True, None) iff the CA cert is in System.keychain AND has
-    admin trust settings applied. (False, reason) otherwise.
+def verify_ca_trusted(cert_path: Path | None = None) -> tuple[bool, TrustVerificationCode]:
+    """Return (True, "trusted") iff the CA cert is in System.keychain AND
+    has admin trust settings applied. (False, <code>) otherwise.
+
+    The reason channel is a TrustVerificationCode (Literal[str]) drawn
+    from a constrained set — never raw subprocess output. Callers map
+    the code to a human message via ``trust_reason_message(code)``.
+    The discriminated return type breaks CodeQL's taint analysis at
+    the function boundary: the literal codes are defined in source, so
+    the static type system proves what taint analysis can't infer
+    (that the value flowing to print/log is from a literal set).
 
     A cert can be present in System.keychain without being trusted as a
     root anchor. The two states must be distinguished — only the second
@@ -293,18 +360,12 @@ def verify_ca_trusted(cert_path: Path | None = None) -> tuple[bool, str | None]:
     """
     cert_path = cert_path or get_ca_cert_path()
     if not cert_path.exists():
-        return False, "CA certificate file not found"
+        return False, "cert_file_missing"
 
     sha1 = _ca_cert_sha1(cert_path)
     if sha1 is None:
-        return False, "could not compute CA certificate SHA-1 fingerprint"
+        return False, "sha1_fingerprint_failed"
     sha1_upper = sha1.upper()
-
-    # Reason strings are intentionally canned (no subprocess stderr,
-    # no exception messages, no SHA-1 leakage) so CodeQL's
-    # clear-text-logging taint analysis stays clean — callers print
-    # `reason` directly to stdout via show_status and the setup wizard.
-    # Diagnostic detail still lands in logs via the standard logger.
 
     # Step 1: keychain presence by SHA-1.
     try:
@@ -322,9 +383,9 @@ def verify_ca_trusted(cert_path: Path | None = None) -> tuple[bool, str | None]:
             timeout=10,
         )
     except Exception:
-        return False, "security find-certificate could not be invoked"
+        return False, "find_certificate_failed"
     if sha1_upper not in find_result.stdout.upper():
-        return False, "CA certificate is not present in System.keychain"
+        return False, "not_in_keychain"
 
     # Step 2: admin trust settings export by SHA-1.
     import tempfile
@@ -343,17 +404,14 @@ def verify_ca_trusted(cert_path: Path | None = None) -> tuple[bool, str | None]:
         )
         if export_result.returncode != 0:
             # macOS exits non-zero with "no trust settings were found"
-            # when the admin trust domain is empty. Surface that as a
-            # canned reason — never include the stderr verbatim, since
-            # CodeQL flags subprocess-stderr → print flows as clear-text
-            # logging of sensitive data even though our stderr here is
-            # not actually sensitive.
-            return False, "no admin trust settings present (trust-settings-export found nothing)"
+            # when the admin trust domain is empty. Map to a Literal
+            # code; the stderr is never propagated.
+            return False, "trust_settings_export_failed"
         # security trust-settings-export rewrites the file with its own
         # umask (typically 0o644), so the mkstemp 0o600 doesn't survive.
         # Tighten before reading — the plist lists every cert with
-        # admin trust + their SHA-1 fingerprints, which is local-only
-        # state that shouldn't be world-readable even briefly.
+        # admin trust + their SHA-1 fingerprints, local-only state
+        # that shouldn't be world-readable even briefly.
         try:
             os.chmod(str(plist_path), 0o600)
         except Exception:
@@ -362,10 +420,10 @@ def verify_ca_trusted(cert_path: Path | None = None) -> tuple[bool, str | None]:
             pass
         plist_bytes = plist_path.read_bytes()
         if sha1_upper not in plist_bytes.decode("utf-8", errors="ignore").upper():
-            return False, "CA is in System.keychain but admin trust settings are not applied"
-        return True, None
+            return False, "in_keychain_but_not_trusted"
+        return True, "trusted"
     except Exception:
-        return False, "trust verification error (see logs)"
+        return False, "verification_error"
     finally:
         if plist_path is not None:
             plist_path.unlink(missing_ok=True)

@@ -245,7 +245,7 @@ class TestSetupWizard:
         # happy path. _is_cert_trusted is kept for callers that still
         # import the status helper.
         monkeypatch.setattr(wizard_mod, "_is_cert_trusted", lambda: True)
-        monkeypatch.setattr(wizard_mod, "verify_ca_trusted", lambda *a, **kw: (True, None))
+        monkeypatch.setattr(wizard_mod, "verify_ca_trusted", lambda *a, **kw: (True, "trusted"))
         monkeypatch.setattr(wizard_mod, "_is_system_proxy_configured", lambda: True)
         monkeypatch.setattr(wizard_mod, "get_ca_info", lambda: {"common_name": "Test CA"})
 
@@ -284,11 +284,13 @@ class TestSetupWizard:
         cert.write_bytes(b"-----BEGIN CERTIFICATE-----\nstub\n-----END CERTIFICATE-----\n")
 
         # osascript "succeeds" but verify says trust isn't actually applied.
+        # Pass the literal code; the wizard maps it to a human message
+        # via trust_reason_message().
         monkeypatch.setattr(wizard_mod, "trust_ca_cert", lambda *a, **kw: True)
         monkeypatch.setattr(
             wizard_mod,
             "verify_ca_trusted",
-            lambda *a, **kw: (False, "CA is in System.keychain but admin trust settings are not applied"),
+            lambda *a, **kw: (False, "in_keychain_but_not_trusted"),
         )
         monkeypatch.setattr(wizard_mod, "get_ca_info", lambda: {"common_name": "Test CA"})
         # User answers "yes" to the trust prompt — we want to verify the
@@ -337,7 +339,7 @@ class TestSetupWizard:
         monkeypatch.setattr(
             wizard_mod,
             "verify_ca_trusted",
-            lambda *a, **kw: (False, "trust-settings-export failed: no admin trust settings present"),
+            lambda *a, **kw: (False, "trust_settings_export_failed"),
         )
         monkeypatch.setattr(wizard_mod, "get_ca_info", lambda: {"common_name": "Test CA"})
         monkeypatch.setattr(wizard_mod, "_prompt", lambda *a, **kw: True)
@@ -352,10 +354,10 @@ class TestSetupWizard:
         assert "/Library/Keychains/System.keychain" in out
         assert str(cert) in out
         assert "Then re-run: ai-monitor --setup" in out
-        # The reason from verify_ca_trusted should be surfaced so the
-        # user knows whether the cert wasn't added at all vs. added but
-        # without trust settings.
-        assert "no admin trust settings present" in out
+        # trust_reason_message("trust_settings_export_failed") is what
+        # gets printed; the message must mention the export step so
+        # the user understands what failed.
+        assert "trust-settings export" in out or "trust settings export" in out.lower()
 
     def test_wizard_enables_system_proxy_when_trust_verified_and_user_accepts(self, tmp_path, monkeypatch):
         """Step 3 happy path: trust is verified, the system proxy isn't
@@ -383,8 +385,9 @@ class TestSetupWizard:
         def verify_after_trust(*a, **kw):
             verify_calls["n"] += 1
             # First call: pre-trust check at top of Step 2 — not trusted.
-            # Second call: post-trust verification — trusted.
-            return (True, None) if verify_calls["n"] >= 2 else (False, None)
+            # Second call: post-trust verification — trusted. Return
+            # the literal codes the new contract expects.
+            return (True, "trusted") if verify_calls["n"] >= 2 else (False, "not_in_keychain")
 
         monkeypatch.setattr(wizard_mod, "verify_ca_trusted", verify_after_trust)
         monkeypatch.setattr(wizard_mod, "trust_ca_cert", lambda *a, **kw: True)
@@ -425,7 +428,9 @@ class TestSetupWizard:
         cert.write_bytes(b"-----BEGIN CERTIFICATE-----\nstub\n-----END CERTIFICATE-----\n")
 
         # Cert not trusted, user declines the trust prompt.
-        monkeypatch.setattr(wizard_mod, "verify_ca_trusted", lambda *a, **kw: (False, None))
+        # verify_ca_trusted returns a literal code; for the decline
+        # path the code never gets read (we set state to 'skipped').
+        monkeypatch.setattr(wizard_mod, "verify_ca_trusted", lambda *a, **kw: (False, "not_in_keychain"))
         monkeypatch.setattr(wizard_mod, "get_ca_info", lambda: {"common_name": "Test CA"})
         monkeypatch.setattr(wizard_mod, "_prompt", lambda *a, **kw: False)
 
@@ -461,7 +466,7 @@ class TestSetupWizard:
         cert.write_bytes(b"-----BEGIN CERTIFICATE-----\n-----END CERTIFICATE-----\n")
 
         monkeypatch.setattr(wizard_mod, "_is_cert_trusted", lambda: True)
-        monkeypatch.setattr(wizard_mod, "verify_ca_trusted", lambda *a, **kw: (True, None))
+        monkeypatch.setattr(wizard_mod, "verify_ca_trusted", lambda *a, **kw: (True, "trusted"))
         monkeypatch.setattr(wizard_mod, "_is_system_proxy_configured", lambda: True)
         monkeypatch.setattr(wizard_mod, "get_ca_info", lambda: {"common_name": "Existing"})
 
