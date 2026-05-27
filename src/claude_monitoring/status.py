@@ -398,6 +398,24 @@ def show_status() -> int:
         if cert_message:
             print(f"                    Reason: {cert_message}")
     print(f"    SSL inspection: {'API + Browser metadata' if cert_ok else 'API only'}")
+    # PR #54 defensive ergonomics: surface the actual allow_hosts
+    # scope so a config-drift regression of PR #51's API-only
+    # invariant is visible at --status time without re-reading
+    # constants.py. Counts and a one-line summary.
+    try:
+        from claude_monitoring.constants import AI_BROWSER_DOMAINS, AI_PROXY_DOMAINS
+
+        leaked = sorted(set(AI_PROXY_DOMAINS) & set(AI_BROWSER_DOMAINS))
+        if leaked:
+            print(
+                f"    allow_hosts:    ⚠ {len(AI_PROXY_DOMAINS)} hosts, but {leaked} are browser UI sites (regression)"
+            )
+        else:
+            print(f"    allow_hosts:    ✅ {len(AI_PROXY_DOMAINS)} API endpoints (browser UI excluded)")
+    except Exception:
+        # Defensive: never let the status display crash on a constants
+        # import error — fall through silently.
+        pass
     print()
     print("  Capture matrix:")
     print(f"    Claude Code:      ✅ JSONL + {p_mark} Proxy")

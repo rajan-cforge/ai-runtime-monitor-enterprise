@@ -93,11 +93,10 @@ src/claude_monitoring/monitor.py:4996: public function 'signal_handler' missing 
 src/claude_monitoring/monitor.py:5005: empty 'except Exception: pass' (silently swallowing errors)
 src/claude_monitoring/monitor.py:5014: empty 'except Exception: pass' (silently swallowing errors)
 src/claude_monitoring/monitor.py:504: empty 'except Exception: pass' (silently swallowing errors)
-src/claude_monitoring/monitor.py:5153: empty 'except Exception: pass' (silently swallowing errors)
-src/claude_monitoring/monitor.py:5159: empty 'except Exception: pass' (silently swallowing errors)
+src/claude_monitoring/monitor.py:5152: empty 'except Exception: pass' (silently swallowing errors)
 src/claude_monitoring/monitor.py:515: empty 'except Exception: pass' (silently swallowing errors)
-src/claude_monitoring/monitor.py:5164: public function 'main' missing docstring
-src/claude_monitoring/monitor.py:5346: empty 'except Exception: pass' (silently swallowing errors)
+src/claude_monitoring/monitor.py:5198: public function 'main' missing docstring
+src/claude_monitoring/monitor.py:5369: empty 'except Exception: pass' (silently swallowing errors)
 src/claude_monitoring/monitor.py:543: empty 'except Exception: pass' (silently swallowing errors)
 src/claude_monitoring/monitor.py:565: empty 'except Exception: pass' (silently swallowing errors)
 src/claude_monitoring/monitor.py:584: empty 'except Exception: pass' (silently swallowing errors)
@@ -117,8 +116,9 @@ src/claude_monitoring/security.py:522: empty 'except Exception: pass' (silently 
 src/claude_monitoring/security.py:529: empty 'except Exception: pass' (silently swallowing errors)
 src/claude_monitoring/security.py:54: public function 'get_token_path' missing docstring
 src/claude_monitoring/security.py:58: public function 'get_setup_marker_path' missing docstring
-src/claude_monitoring/status.py:452: empty 'except Exception: pass' (silently swallowing errors)
-src/claude_monitoring/status.py:476: empty 'except Exception: pass' (silently swallowing errors)
+src/claude_monitoring/status.py:415: empty 'except Exception: pass' (silently swallowing errors)
+src/claude_monitoring/status.py:470: empty 'except Exception: pass' (silently swallowing errors)
+src/claude_monitoring/status.py:494: empty 'except Exception: pass' (silently swallowing errors)
 src/claude_monitoring/supply_chain.py:486: empty 'except Exception: pass' (silently swallowing errors)
 src/claude_monitoring/supply_chain.py:720: empty 'except Exception: pass' (silently swallowing errors)
 src/claude_monitoring/supply_chain.py:744: empty 'except Exception: pass' (silently swallowing errors)

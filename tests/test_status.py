@@ -287,6 +287,56 @@ class TestShowStatus:
         assert "mitmproxy:" in output
         assert "Claude Code:" in output
 
+    def test_show_status_allow_hosts_line_shows_api_count_when_no_browser_leak(self, monkeypatch):
+        """PR #54: show_status emits a new 'allow_hosts:' line under
+        Proxy. Happy path — AI_PROXY_DOMAINS ∩ AI_BROWSER_DOMAINS is
+        empty (PR #51 invariant) — line reads '✅ N API endpoints'."""
+        monkeypatch.setattr(status_mod, "_is_mitmproxy_running", lambda: False)
+        monkeypatch.setattr(status_mod, "_is_system_proxy_configured", lambda: False)
+        monkeypatch.setattr(status_mod, "_get_ca_trust_state", lambda: (True, True, "trusted"))
+        monkeypatch.setattr(status_mod, "_is_monitor_running", lambda: False)
+        monkeypatch.setattr(status_mod, "_is_db_encrypted", lambda: False)
+        monkeypatch.setattr(status_mod, "_check_permissions", lambda: True)
+        monkeypatch.setattr(status_mod, "_has_dashboard_token", lambda: False)
+        monkeypatch.setattr(status_mod, "_has_custom_ca", lambda: True)
+        monkeypatch.setattr(status_mod, "_check_extension_heartbeat", lambda: None)
+
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            status_mod.show_status()
+        out = buf.getvalue()
+
+        assert "allow_hosts:" in out
+        assert "API endpoints (browser UI excluded)" in out
+        assert "✅" in out  # the ok marker on the allow_hosts line
+
+    def test_show_status_allow_hosts_line_flags_browser_ui_regression(self, monkeypatch):
+        """If AI_PROXY_DOMAINS regressed and gained a browser UI host,
+        show_status surfaces it as ⚠ on the allow_hosts line so a
+        config-drift regression is visible at --status time without
+        having to re-read constants.py."""
+        monkeypatch.setattr(status_mod, "_is_mitmproxy_running", lambda: False)
+        monkeypatch.setattr(status_mod, "_is_system_proxy_configured", lambda: False)
+        monkeypatch.setattr(status_mod, "_get_ca_trust_state", lambda: (True, True, "trusted"))
+        monkeypatch.setattr(status_mod, "_is_monitor_running", lambda: False)
+        monkeypatch.setattr(status_mod, "_is_db_encrypted", lambda: False)
+        monkeypatch.setattr(status_mod, "_check_permissions", lambda: True)
+        monkeypatch.setattr(status_mod, "_has_dashboard_token", lambda: False)
+        monkeypatch.setattr(status_mod, "_has_custom_ca", lambda: True)
+        monkeypatch.setattr(status_mod, "_check_extension_heartbeat", lambda: None)
+        # Force a regression: stuff a browser UI host into AI_PROXY_DOMAINS.
+        monkeypatch.setattr("claude_monitoring.constants.AI_PROXY_DOMAINS", ["api.anthropic.com", "claude.ai"])
+
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            status_mod.show_status()
+        out = buf.getvalue()
+
+        assert "allow_hosts:" in out
+        assert "regression" in out
+        assert "claude.ai" in out
+        assert "⚠" in out
+
     def test_show_status_partial_trust_state_distinguishes_keychain_from_admin_trust(self, monkeypatch):
         """The two-line CA cert + CA trust display must distinguish the
         three states (trusted / in-keychain-but-not-trusted /
