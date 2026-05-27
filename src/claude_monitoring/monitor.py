@@ -4839,7 +4839,7 @@ def start_monitoring(cp_url=None, cp_api_key=None):
     finally:
         check_db.close()
 
-    # Detect plan/subscription
+    # CodeQL py/clear-text-logging flag: tier is OAuth subscriptionType enum, not the token. Pattern B dismissal.
     info = detect_plan_info()
     if info["is_subscription"]:
         tier = info.get("plan_tier", "")

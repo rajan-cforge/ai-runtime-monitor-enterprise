@@ -285,7 +285,12 @@ def _is_valid_package_name(name):
         return False
     if name.endswith("-"):
         return False
-    # Scoped npm (@scope/pkg) and Go modules (github.com/x/y) allow /
+    # Scoped npm (@scope/pkg) and Go modules (github.com/x/y) allow /.
+    # CodeQL py/incomplete-url-substring-sanitization flags the
+    # `startswith("github.com/")` here but `name` is a package
+    # identifier from a manifest file (package.json / go.mod), not a
+    # URL — the rule's threat model doesn't apply. Dismissed in code
+    # scanning UI with this rationale.
     if name.startswith("@") or name.startswith("github.com/"):
         return _VALID_PKG_RE.match(name) is not None
     # Regular packages: no / allowed (would be a path)

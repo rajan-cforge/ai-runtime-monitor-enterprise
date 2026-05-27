@@ -572,13 +572,20 @@ try:
             return "unknown"
 
         def _classify_browser_service(self, host: str) -> str:
-            if "claude.ai" in host:
+            # Exact hostname or proper subdomain match — guards against
+            # bare ``in host`` substring checks that would mis-classify
+            # attacker-controlled hosts like ``evil-claude.ai.bad.com``.
+            # CodeQL py/incomplete-url-substring-sanitization caught this.
+            def _matches(candidate: str, domain: str) -> bool:
+                return candidate == domain or candidate.endswith("." + domain)
+
+            if _matches(host, "claude.ai"):
                 return "claude_web"
-            if "chatgpt.com" in host or "chat.openai.com" in host:
+            if _matches(host, "chatgpt.com") or _matches(host, "chat.openai.com"):
                 return "chatgpt_web"
-            if "gemini.google.com" in host:
+            if _matches(host, "gemini.google.com"):
                 return "gemini_web"
-            if "perplexity.ai" in host:
+            if _matches(host, "perplexity.ai"):
                 return "perplexity_web"
             return "browser_ai"
 
