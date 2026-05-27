@@ -348,7 +348,12 @@ class TestValidatePassword:
 
 class TestValidateSlackWebhook:
     def test_valid_webhook(self):
-        url = "https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX"
+        # Synthetic fixture: matches the validator's regex shape
+        # (T[A-Z0-9]+/B[A-Z0-9]+/[A-Za-z0-9]+) but the literal strings
+        # contain "EXAMPLE" / "PLACEHOLDER" so secret scanners and human
+        # readers immediately see it's not a credential. See
+        # docs/spec/synthetic-fixtures.md for the convention rationale.
+        url = "https://hooks.slack.com/services/TEXAMPLEWORKSPACE/BEXAMPLEBOT/EXAMPLEPLACEHOLDERTOKEN24"
         result = validate_slack_webhook(url)
         assert result["valid"] is True
 
