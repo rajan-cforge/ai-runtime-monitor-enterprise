@@ -108,14 +108,14 @@ src/claude_monitoring/security.py:104: empty 'except Exception: pass' (silently 
 src/claude_monitoring/security.py:37: public function 'get_cert_dir' missing docstring
 src/claude_monitoring/security.py:41: public function 'get_ca_cert_path' missing docstring
 src/claude_monitoring/security.py:45: public function 'get_ca_key_path' missing docstring
-src/claude_monitoring/security.py:481: empty 'except Exception: pass' (silently swallowing errors)
-src/claude_monitoring/security.py:496: public function 'untrust_ca_cert' missing docstring
-src/claude_monitoring/security.py:548: empty 'except Exception: pass' (silently swallowing errors)
+src/claude_monitoring/security.py:494: empty 'except Exception: pass' (silently swallowing errors)
+src/claude_monitoring/security.py:509: public function 'untrust_ca_cert' missing docstring
 src/claude_monitoring/security.py:54: public function 'get_token_path' missing docstring
-src/claude_monitoring/security.py:563: empty 'except Exception: pass' (silently swallowing errors)
-src/claude_monitoring/security.py:586: empty 'except Exception: pass' (silently swallowing errors)
+src/claude_monitoring/security.py:561: empty 'except Exception: pass' (silently swallowing errors)
+src/claude_monitoring/security.py:576: empty 'except Exception: pass' (silently swallowing errors)
 src/claude_monitoring/security.py:58: public function 'get_setup_marker_path' missing docstring
-src/claude_monitoring/security.py:593: empty 'except Exception: pass' (silently swallowing errors)
+src/claude_monitoring/security.py:599: empty 'except Exception: pass' (silently swallowing errors)
+src/claude_monitoring/security.py:606: empty 'except Exception: pass' (silently swallowing errors)
 src/claude_monitoring/status.py:415: empty 'except Exception: pass' (silently swallowing errors)
 src/claude_monitoring/status.py:470: empty 'except Exception: pass' (silently swallowing errors)
 src/claude_monitoring/status.py:494: empty 'except Exception: pass' (silently swallowing errors)

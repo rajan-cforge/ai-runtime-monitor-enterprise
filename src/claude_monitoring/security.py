@@ -231,24 +231,37 @@ def ensure_ca_cert(
 
 def _existing_cert_is_reusable(cert_path: Path, expected_domains: list[str], min_remaining_days: int) -> bool:
     """Return True iff the cert on disk is parseable, not expiring soon, and has
-    NameConstraints matching ``expected_domains``. Any parse failure → False
-    (caller regenerates rather than crashing)."""
+    NameConstraints whose ``DNSName`` subtrees match ``expected_domains``. Any
+    parse failure → False (caller regenerates rather than crashing)."""
     from cryptography import x509
-    from cryptography.x509 import ExtensionNotFound
+    from cryptography.x509 import DNSName, ExtensionNotFound
 
     try:
         cert = x509.load_pem_x509_certificate(cert_path.read_bytes())
     except (ValueError, OSError):
         return False
-    buffer = datetime.now(timezone.utc) + timedelta(days=min_remaining_days)
-    if cert.not_valid_after_utc <= buffer:
+    try:
+        # not_valid_after_utc can call into key/algorithm accessors that
+        # raise cryptography.exceptions.UnsupportedAlgorithm — treat any
+        # such failure as a drift signal and regenerate (fail-closed).
+        buffer = datetime.now(timezone.utc) + timedelta(days=min_remaining_days)
+        if cert.not_valid_after_utc <= buffer:
+            return False
+    except Exception:
         return False
     try:
         nc_ext = cert.extensions.get_extension_for_class(x509.NameConstraints)
-        permitted = [d.value for d in (nc_ext.value.permitted_subtrees or [])]
+        subtrees = nc_ext.value.permitted_subtrees or []
     except ExtensionNotFound:
-        permitted = []
-    return set(permitted) == set(expected_domains)
+        subtrees = []
+    # Filter to DNSName-only — any IPAddress / DirectoryName / URI entry
+    # is treated as drift so the cert is regenerated. Without this guard,
+    # mixed-type subtrees compare IPv4Network() to str and silently
+    # mismatch every time → Bug 8 loop under a different root cause.
+    dns_entries = [d.value for d in subtrees if isinstance(d, DNSName)]
+    if len(dns_entries) != len(subtrees):
+        return False
+    return set(dns_entries) == set(expected_domains)
 
 
 def get_ca_info(cert_path: Path | None = None) -> dict | None:

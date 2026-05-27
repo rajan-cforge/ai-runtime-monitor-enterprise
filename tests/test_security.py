@@ -295,6 +295,58 @@ class TestEnsureCaCert:
         _, _, regenerated = ensure_ca_cert(cert_path=cert_path, key_path=key_path)
         assert regenerated is True
 
+    def test_regenerates_when_subtrees_contain_non_dns_entries(self, tmp_path):
+        """Reviewer finding 2: if NameConstraints permitted_subtrees mix
+        DNSName with IPAddress / DirectoryName / URI entries, the prior
+        equality check compared IPv4Network to str and silently regenerated
+        on every --setup invocation — reproducing the Bug 8 loop under a
+        different root cause. The filter now treats mixed entries as drift
+        and regenerates explicitly (not silently)."""
+        import ipaddress
+        from datetime import datetime, timedelta, timezone
+
+        from cryptography import x509
+        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives.asymmetric import rsa
+        from cryptography.x509.oid import NameOID
+
+        from claude_monitoring.security import ensure_ca_cert
+
+        cert_path = tmp_path / "mixed-subtrees.pem"
+        key_path = tmp_path / "mixed-subtrees.key"
+        key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        now = datetime.now(timezone.utc)
+        permitted = [
+            x509.DNSName("api.anthropic.com"),
+            x509.IPAddress(ipaddress.IPv4Network("127.0.0.1/32")),
+        ]
+        subject = issuer = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Mixed Subtrees Test CA")])
+        cert = (
+            x509.CertificateBuilder()
+            .subject_name(subject)
+            .issuer_name(issuer)
+            .public_key(key.public_key())
+            .serial_number(x509.random_serial_number())
+            .not_valid_before(now - timedelta(days=1))
+            .not_valid_after(now + timedelta(days=365))
+            .add_extension(x509.BasicConstraints(ca=True, path_length=0), critical=True)
+            .add_extension(x509.NameConstraints(permitted_subtrees=permitted, excluded_subtrees=None), critical=True)
+            .sign(key, hashes.SHA256())
+        )
+        cert_path.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+        key_path.write_bytes(
+            key.private_bytes(
+                encoding=serialization.Encoding.PEM,
+                format=serialization.PrivateFormat.TraditionalOpenSSL,
+                encryption_algorithm=serialization.NoEncryption(),
+            )
+        )
+
+        _, _, regenerated = ensure_ca_cert(
+            cert_path=cert_path, key_path=key_path, domains=["api.anthropic.com"]
+        )
+        assert regenerated is True
+
 
 class TestTrustReasonMessage:
     """trust_reason_message maps every TrustVerificationCode to a
