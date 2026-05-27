@@ -147,5 +147,5 @@ src/claude_monitoring/watch.py:590: public function 'request' missing docstring
 src/claude_monitoring/watch.py:674: empty 'except Exception: pass' (silently swallowing errors)
 src/claude_monitoring/watch.py:679: public function 'response' missing docstring
 src/claude_monitoring/watch.py:704: empty 'except Exception: pass' (silently swallowing errors)
-src/claude_monitoring/wizard.py:313: empty 'except Exception: pass' (silently swallowing errors)
-src/claude_monitoring/wizard.py:53: public function 'is_first_run' missing docstring
+src/claude_monitoring/wizard.py:371: empty 'except Exception: pass' (silently swallowing errors)
+src/claude_monitoring/wizard.py:54: public function 'is_first_run' missing docstring

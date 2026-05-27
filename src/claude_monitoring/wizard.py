@@ -6,9 +6,9 @@ The wizard is invoked automatically the first time `ai-monitor --start`
 is run on a fresh install (no .setup_complete marker). It walks the user
 through:
 
-    [1/4] Generate a unique CA cert for this machine
-    [2/4] Trust the cert (native macOS admin dialog)
-    [3/4] Enable AI traffic monitoring (system proxy)
+    [1/5] Generate a unique CA cert for this machine
+    [2/5] Trust the cert (native macOS admin dialog)
+    [3/5] Enable AI traffic monitoring (system proxy)
     [4/4] Initialize DB, generate dashboard token, enforce permissions
 
 Every step is opt-in with a clear explanation of what it does and what
@@ -29,6 +29,7 @@ import socket
 import subprocess
 import sys
 from datetime import datetime, timezone
+from pathlib import Path
 
 from claude_monitoring.config import get_db_path, get_output_dir, get_proxy_port
 from claude_monitoring.security import (
@@ -129,7 +130,7 @@ def run_setup_wizard(force: bool = False) -> bool:
 
     # ── Step 1: Generate the CA ───────────────────────────────────
     cert_path = get_ca_cert_path()
-    print("[1/4] Generating unique monitoring certificate...")
+    print("[1/5] Generating unique monitoring certificate...")
     if cert_path.exists() and not force:
         info = get_ca_info()
         cn = info["common_name"] if info else "unknown"
@@ -160,10 +161,10 @@ def run_setup_wizard(force: bool = False) -> bool:
     print()
     already_trusted, _existing_reason = verify_ca_trusted(cert_path)
     if already_trusted:
-        print("[2/4] ✅ Certificate already trusted (verified in admin settings)")
+        print("[2/5] ✅ Certificate already trusted (verified in admin settings)")
         state["steps"]["trust_ca"] = "already_trusted"
     else:
-        print("[2/4] Trust the monitoring certificate")
+        print("[2/5] Trust the monitoring certificate")
         print()
         print("  What this does:")
         print("  - Allows inspection of AI API traffic (Anthropic, OpenAI, etc.)")
@@ -246,18 +247,18 @@ def run_setup_wizard(force: bool = False) -> bool:
     print()
     if trust_blocked:
         if skipped_by_choice:
-            print("[3/4] ⏭ System proxy skipped — CA trust was declined (see step 2)")
+            print("[3/5] ⏭ System proxy skipped — CA trust was declined (see step 2)")
             print("       Without trust, the system proxy would produce cert errors")
             print("       in browsers/apps with zero useful capture.")
         else:
-            print("[3/4] ⏭ System proxy skipped — CA trust verification failed (see step 2)")
+            print("[3/5] ⏭ System proxy skipped — CA trust verification failed (see step 2)")
             print("       The system proxy would have no effect until trust is applied.")
         state["steps"]["system_proxy"] = "skipped_trust_required"
     elif _is_system_proxy_configured():
-        print("[3/4] ✅ System proxy already enabled")
+        print("[3/5] ✅ System proxy already enabled")
         state["steps"]["system_proxy"] = "already_enabled"
     else:
-        print("[3/4] Enable AI traffic monitoring for desktop apps")
+        print("[3/5] Enable AI traffic monitoring for desktop apps")
         print()
         print("  What this does:")
         print("  - Routes AI API traffic from desktop apps through the local monitor")
@@ -282,9 +283,66 @@ def run_setup_wizard(force: bool = False) -> bool:
             print(f"    export HTTPS_PROXY=http://127.0.0.1:{get_proxy_port()}")
             state["steps"]["system_proxy"] = "skipped"
 
-    # ── Step 4: Initialize ────────────────────────────────────────
+    # ── Step 4: Browser extension install prompt ──────────────────
+    #
+    # Closes the capture-coverage gap surfaced by the install-journey
+    # notes (2026-05-25): the wizard previously said nothing about the
+    # Chrome extension, so first-time users finished setup thinking
+    # the proxy alone handled browser AI usage. It doesn't — the proxy
+    # intentionally excludes browser UIs (PR #51's allow_hosts
+    # invariant). Without the extension, browser AI is dark.
+    #
+    # We don't verify at wizard time because the daemon isn't running
+    # yet — the heartbeat endpoint that confirms install is on the
+    # daemon, which the user starts AFTER setup. Instead we open
+    # chrome://extensions (if the user accepts), show the absolute
+    # path to the extension folder, and rely on `ai-monitor --status`
+    # to surface extension state once the daemon is running.
     print()
-    print("[4/4] Initializing...")
+    repo_root = Path(__file__).resolve().parents[2]
+    extension_path = repo_root / "browser-extension"
+    print("[4/5] Browser AI capture (Chrome extension)")
+    print()
+    print("  The proxy intercepts HTTPS traffic from desktop AI apps")
+    print("  (Claude Desktop, ChatGPT Desktop, Cursor) and CLI tools")
+    print("  (Claude Code).")
+    print()
+    print("  For browser AI usage (claude.ai, chatgpt.com, gemini.google.com),")
+    print("  Vigil uses a Chrome extension that reads conversations directly")
+    print("  from the page DOM. The extension captures the same sensitive-")
+    print("  data patterns and supply-chain signals as the proxy.")
+    print()
+    print("  Without the extension, browser AI usage is not monitored.")
+    print()
+    print("  The extension is at:")
+    print(f"    {extension_path}")
+    print()
+    print("  To install:")
+    print("    1. Open Chrome to chrome://extensions")
+    print('    2. Toggle "Developer mode" on (top right)')
+    print('    3. Click "Load unpacked"')
+    print("    4. Select the folder shown above")
+    print()
+    if _prompt("Open Chrome extensions page now?", default_yes=True):
+        try:
+            subprocess.run(["open", "chrome://extensions"], check=False, timeout=5)
+            print("  ✅ Opened chrome://extensions")
+            print("  → Extension status will appear in 'ai-monitor --status'")
+            print("    once the daemon is running and the extension sends its")
+            print("    first heartbeat (~60 seconds after Chrome reloads it).")
+            state["steps"]["browser_extension"] = "opened"
+        except Exception as exc:
+            print(f"  ⚠ Could not open chrome://extensions: {exc}")
+            print("  Open it manually in Chrome to complete install.")
+            state["steps"]["browser_extension"] = "manual_required"
+    else:
+        print("  ⏭ Skipped — Vigil will not capture browser AI usage until")
+        print("    the extension is loaded manually.")
+        state["steps"]["browser_extension"] = "skipped"
+
+    # ── Step 5: Initialize ────────────────────────────────────────
+    print()
+    print("[5/5] Initializing...")
     try:
         from claude_monitoring.db import HAS_SQLCIPHER, init_db
 
