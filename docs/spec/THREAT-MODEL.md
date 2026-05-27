@@ -216,6 +216,12 @@ Five boundaries today, with a sixth planned for v0.3:
 - *Mitigation:* The custom CA is generated per-install by `security.py::generate_custom_ca` with X.509 NameConstraints limiting it to AI domains only. The setup wizard explains this in plain language before prompting for trust.
 - *Residual risk:* A compromised installer could ship a backdoored `security.py`. Mitigated by Apache 2.0 licensing (anyone can audit), code signing (planned v0.3), and reproducible builds (planned v1.0).
 
+**T4.1a: Proxy is enabled without the CA actually being trusted (partial trust state).**
+
+- *Vector:* `security.py::trust_ca_cert` invokes `security add-trusted-cert` via osascript. osascript can return exit 0 even when the admin password dialog was cancelled, Touch ID timed out, or `add-trusted-cert` ran but the user has not actually applied admin trust settings. Pre-fix the wizard recorded `trust_ca = ok` based on osascript exit; the system proxy was then enabled and routed AI traffic through a CA that browsers/apps did not actually trust, producing cert errors with zero useful capture and exposing the user to a confused trust state.
+- *Mitigation:* `security.py::verify_ca_trusted` is called immediately after `trust_ca_cert` and joins on the cert's SHA-1 fingerprint to confirm presence in both (a) `security find-certificate -Z -a /Library/Keychains/System.keychain` and (b) `security trust-settings-export` admin-domain output. The setup wizard gates Step 3 (system proxy) on this verification — refusing to enable the system proxy if trust did not actually apply. `--status` shows the two-line CA cert + CA trust state so a partial-trust drift is visible without re-running setup.
+- *Residual risk:* Trust state can drift after install (admin trust settings cleared by another tool, FileVault rotation in macOS upgrade scenarios). `--status` surfaces the current state; the user must re-run `ai-monitor --setup` to recover. The trust-settings-export plist is written to a `tempfile.mkstemp`-allocated path; `security` rewrites it with its own umask, so the chmod 600 is reapplied before reading and the file is unlinked in `finally`.
+
 ### 6.2 Tampering
 
 **T4.2: Proxy modifies AI API responses.**

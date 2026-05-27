@@ -239,8 +239,13 @@ class TestSetupWizard:
         cert.parent.mkdir(parents=True)
         cert.write_bytes(b"-----BEGIN CERTIFICATE-----\n-----END CERTIFICATE-----\n")
 
-        # Stub all interactive bits
+        # Stub all interactive bits. verify_ca_trusted is now the source of
+        # truth for "is the CA actually trusted as a root anchor"; stub it
+        # to report verified-trusted so the wizard's Step 2 takes the
+        # happy path. _is_cert_trusted is kept for callers that still
+        # import the status helper.
         monkeypatch.setattr(wizard_mod, "_is_cert_trusted", lambda: True)
+        monkeypatch.setattr(wizard_mod, "verify_ca_trusted", lambda *a, **kw: (True, "trusted"))
         monkeypatch.setattr(wizard_mod, "_is_system_proxy_configured", lambda: True)
         monkeypatch.setattr(wizard_mod, "get_ca_info", lambda: {"common_name": "Test CA"})
 
@@ -260,6 +265,194 @@ class TestSetupWizard:
         assert state["proxy_enabled"] is True
         assert "dashboard_token" in state
 
+    def test_wizard_blocks_proxy_if_trust_verification_fails(self, tmp_path, monkeypatch):
+        """The defect this PR fixes: trust_ca_cert() returns True from
+        osascript exit, but admin trust settings aren't actually applied
+        (user cancelled the dialog mid-way, Touch ID timed out, etc.).
+        verify_ca_trusted() catches it. Step 3 (system proxy) must be
+        skipped entirely — enabling the system proxy without trust
+        breaks browsers and captures nothing useful."""
+        monkeypatch.setattr("claude_monitoring.security.get_output_dir", lambda: tmp_path)
+        monkeypatch.setattr("claude_monitoring.security.get_db_path", lambda: tmp_path / "monitor.db")
+        monkeypatch.setattr("claude_monitoring.config.get_output_dir", lambda: tmp_path)
+        monkeypatch.setattr("claude_monitoring.config.get_db_path", lambda: tmp_path / "monitor.db")
+        monkeypatch.setattr("claude_monitoring.db.get_output_dir", lambda: tmp_path)
+        monkeypatch.setattr("claude_monitoring.db.get_db_path", lambda: tmp_path / "monitor.db")
+
+        cert = tmp_path / "certs" / "ai-monitor-ca.pem"
+        cert.parent.mkdir(parents=True)
+        cert.write_bytes(b"-----BEGIN CERTIFICATE-----\nstub\n-----END CERTIFICATE-----\n")
+
+        # osascript "succeeds" but verify says trust isn't actually applied.
+        # Pass the literal code; the wizard maps it to a human message
+        # via trust_reason_message().
+        monkeypatch.setattr(wizard_mod, "trust_ca_cert", lambda *a, **kw: True)
+        monkeypatch.setattr(
+            wizard_mod,
+            "verify_ca_trusted",
+            lambda *a, **kw: (False, "in_keychain_but_not_trusted"),
+        )
+        monkeypatch.setattr(wizard_mod, "get_ca_info", lambda: {"common_name": "Test CA"})
+        # User answers "yes" to the trust prompt — we want to verify the
+        # post-trust verification rejects despite the user opting in.
+        monkeypatch.setattr(wizard_mod, "_prompt", lambda *a, **kw: True)
+
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            result = wizard_mod.run_setup_wizard()
+
+        out = buf.getvalue()
+        # Wizard returns False so monitor.py:run_setup_wizard caller exits 1
+        assert result is False
+        # Step 2 must report the failure
+        assert "Certificate trust step appeared to succeed, but verification failed" in out
+        # Step 3 must be the skipped-due-to-trust message, NOT the
+        # interactive proxy-enable prompt
+        assert "System proxy skipped" in out
+        assert "CA trust verification failed" in out
+        # The final summary must reflect the caveat
+        assert "Setup completed with caveats" in out
+        # Marker still written so --status can read trust_ca state
+        marker = tmp_path / ".setup_complete"
+        assert marker.exists()
+        state = json.loads(marker.read_text())
+        assert state["steps"]["trust_ca"] == "manual_required"
+        assert state["steps"]["system_proxy"] == "skipped_trust_required"
+
+    def test_wizard_prints_actionable_manual_command_if_trust_fails(self, tmp_path, monkeypatch):
+        """When trust verification fails, the user must be told exactly
+        what to run to recover. Generic 'something went wrong' isn't
+        actionable. We assert the exact `security add-trusted-cert`
+        invocation and the cert path appear in the output."""
+        monkeypatch.setattr("claude_monitoring.security.get_output_dir", lambda: tmp_path)
+        monkeypatch.setattr("claude_monitoring.security.get_db_path", lambda: tmp_path / "monitor.db")
+        monkeypatch.setattr("claude_monitoring.config.get_output_dir", lambda: tmp_path)
+        monkeypatch.setattr("claude_monitoring.config.get_db_path", lambda: tmp_path / "monitor.db")
+        monkeypatch.setattr("claude_monitoring.db.get_output_dir", lambda: tmp_path)
+        monkeypatch.setattr("claude_monitoring.db.get_db_path", lambda: tmp_path / "monitor.db")
+
+        cert = tmp_path / "certs" / "ai-monitor-ca.pem"
+        cert.parent.mkdir(parents=True)
+        cert.write_bytes(b"-----BEGIN CERTIFICATE-----\nstub\n-----END CERTIFICATE-----\n")
+
+        monkeypatch.setattr(wizard_mod, "trust_ca_cert", lambda *a, **kw: False)
+        monkeypatch.setattr(
+            wizard_mod,
+            "verify_ca_trusted",
+            lambda *a, **kw: (False, "trust_settings_export_failed"),
+        )
+        monkeypatch.setattr(wizard_mod, "get_ca_info", lambda: {"common_name": "Test CA"})
+        monkeypatch.setattr(wizard_mod, "_prompt", lambda *a, **kw: True)
+
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            wizard_mod.run_setup_wizard()
+
+        out = buf.getvalue()
+        # The exact recovery command, plus the cert path, must appear.
+        assert "sudo security add-trusted-cert -d -r trustRoot" in out
+        assert "/Library/Keychains/System.keychain" in out
+        assert str(cert) in out
+        assert "Then re-run: ai-monitor --setup" in out
+        # trust_reason_message("trust_settings_export_failed") is what
+        # gets printed; the message must mention the export step so
+        # the user understands what failed.
+        assert "trust-settings export" in out or "trust settings export" in out.lower()
+
+    def test_wizard_enables_system_proxy_when_trust_verified_and_user_accepts(self, tmp_path, monkeypatch):
+        """Step 3 happy path: trust is verified, the system proxy isn't
+        already enabled, the user accepts the prompt, and
+        _enable_system_proxy returns True. Records 'ok' in the state
+        marker. Closes a coverage gap in the verification-passes +
+        proxy-enable-accepted branch."""
+        monkeypatch.setattr("claude_monitoring.security.get_output_dir", lambda: tmp_path)
+        monkeypatch.setattr("claude_monitoring.security.get_db_path", lambda: tmp_path / "monitor.db")
+        monkeypatch.setattr("claude_monitoring.config.get_output_dir", lambda: tmp_path)
+        monkeypatch.setattr("claude_monitoring.config.get_db_path", lambda: tmp_path / "monitor.db")
+        monkeypatch.setattr("claude_monitoring.db.get_output_dir", lambda: tmp_path)
+        monkeypatch.setattr("claude_monitoring.db.get_db_path", lambda: tmp_path / "monitor.db")
+
+        cert = tmp_path / "certs" / "ai-monitor-ca.pem"
+        cert.parent.mkdir(parents=True)
+        cert.write_bytes(b"-----BEGIN CERTIFICATE-----\nstub\n-----END CERTIFICATE-----\n")
+
+        # Trust prompt path: cert not yet trusted, user accepts, trust
+        # succeeds and verifies. Then system proxy isn't enabled yet;
+        # the user accepts the enable prompt; _enable_system_proxy
+        # returns True.
+        verify_calls = {"n": 0}
+
+        def verify_after_trust(*a, **kw):
+            verify_calls["n"] += 1
+            # First call: pre-trust check at top of Step 2 — not trusted.
+            # Second call: post-trust verification — trusted. Return
+            # the literal codes the new contract expects.
+            return (True, "trusted") if verify_calls["n"] >= 2 else (False, "not_in_keychain")
+
+        monkeypatch.setattr(wizard_mod, "verify_ca_trusted", verify_after_trust)
+        monkeypatch.setattr(wizard_mod, "trust_ca_cert", lambda *a, **kw: True)
+        monkeypatch.setattr(wizard_mod, "_is_system_proxy_configured", lambda: False)
+        monkeypatch.setattr(wizard_mod, "_enable_system_proxy", lambda: True)
+        monkeypatch.setattr(wizard_mod, "get_ca_info", lambda: {"common_name": "Test CA"})
+        monkeypatch.setattr(wizard_mod, "_prompt", lambda *a, **kw: True)
+
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            result = wizard_mod.run_setup_wizard()
+
+        out = buf.getvalue()
+        assert result is True
+        assert "Certificate trusted (verified in admin trust settings)" in out
+        assert "System proxy enabled" in out
+        marker = tmp_path / ".setup_complete"
+        state = json.loads(marker.read_text())
+        assert state["steps"]["trust_ca"] == "ok"
+        assert state["steps"]["system_proxy"] == "ok"
+
+    def test_wizard_skips_system_proxy_when_user_declines_trust(self, tmp_path, monkeypatch):
+        """When the user answers 'no' to the trust prompt, Step 3 must
+        NOT offer the system proxy — enabling it without trust would
+        route AI traffic through an untrusted CA and break browsers
+        with zero useful capture. The wizard still returns True because
+        the decline was an intentional user choice (not a verification
+        failure), but the runtime behavior of Step 3 is the same."""
+        monkeypatch.setattr("claude_monitoring.security.get_output_dir", lambda: tmp_path)
+        monkeypatch.setattr("claude_monitoring.security.get_db_path", lambda: tmp_path / "monitor.db")
+        monkeypatch.setattr("claude_monitoring.config.get_output_dir", lambda: tmp_path)
+        monkeypatch.setattr("claude_monitoring.config.get_db_path", lambda: tmp_path / "monitor.db")
+        monkeypatch.setattr("claude_monitoring.db.get_output_dir", lambda: tmp_path)
+        monkeypatch.setattr("claude_monitoring.db.get_db_path", lambda: tmp_path / "monitor.db")
+
+        cert = tmp_path / "certs" / "ai-monitor-ca.pem"
+        cert.parent.mkdir(parents=True)
+        cert.write_bytes(b"-----BEGIN CERTIFICATE-----\nstub\n-----END CERTIFICATE-----\n")
+
+        # Cert not trusted, user declines the trust prompt.
+        # verify_ca_trusted returns a literal code; for the decline
+        # path the code never gets read (we set state to 'skipped').
+        monkeypatch.setattr(wizard_mod, "verify_ca_trusted", lambda *a, **kw: (False, "not_in_keychain"))
+        monkeypatch.setattr(wizard_mod, "get_ca_info", lambda: {"common_name": "Test CA"})
+        monkeypatch.setattr(wizard_mod, "_prompt", lambda *a, **kw: False)
+
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            result = wizard_mod.run_setup_wizard()
+
+        out = buf.getvalue()
+        # User's intentional decline → wizard exit code is success.
+        assert result is True
+        # But Step 3 must still be blocked from prompting for the system proxy.
+        assert "System proxy skipped" in out
+        assert "CA trust was declined" in out
+        # No interactive system-proxy prompt should appear; assert by
+        # absence of the prompt's distinctive opener phrasing.
+        assert "Enable AI traffic monitoring for desktop apps" not in out
+        # Marker reflects both intentional decline and blocked step.
+        marker = tmp_path / ".setup_complete"
+        state = json.loads(marker.read_text())
+        assert state["steps"]["trust_ca"] == "skipped"
+        assert state["steps"]["system_proxy"] == "skipped_trust_required"
+
     def test_wizard_skips_already_present_cert(self, tmp_path, monkeypatch):
         monkeypatch.setattr("claude_monitoring.security.get_output_dir", lambda: tmp_path)
         monkeypatch.setattr("claude_monitoring.security.get_db_path", lambda: tmp_path / "monitor.db")
@@ -273,6 +466,7 @@ class TestSetupWizard:
         cert.write_bytes(b"-----BEGIN CERTIFICATE-----\n-----END CERTIFICATE-----\n")
 
         monkeypatch.setattr(wizard_mod, "_is_cert_trusted", lambda: True)
+        monkeypatch.setattr(wizard_mod, "verify_ca_trusted", lambda *a, **kw: (True, "trusted"))
         monkeypatch.setattr(wizard_mod, "_is_system_proxy_configured", lambda: True)
         monkeypatch.setattr(wizard_mod, "get_ca_info", lambda: {"common_name": "Existing"})
 

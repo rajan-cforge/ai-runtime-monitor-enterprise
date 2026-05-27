@@ -64,29 +64,57 @@ class TestSystemProxyConfigured:
 
 
 class TestCertTrusted:
-    def test_detects_custom_ca(self):
-        def fake_run(cmd, **_):
-            if "AI Runtime Monitor" in cmd:
-                return _mock_completed("AI Runtime Monitor - Mac-3155")
-            return _mock_completed("")
+    """_is_cert_trusted now reflects 'admin trust settings applied', not
+    just 'cert exists in keychain'. The two are distinct macOS keychain
+    states and only the second makes TLS chains validate. Tests mock at
+    the verify_ca_trusted boundary so we don't have to set up real
+    keychain state for each case."""
 
-        with patch("claude_monitoring.status.subprocess.run", side_effect=fake_run):
-            assert status_mod._is_cert_trusted() is True
+    def test_returns_true_when_cert_in_keychain_and_admin_trust_settings(self, monkeypatch, tmp_path):
+        cert = tmp_path / "ai-monitor-ca.pem"
+        cert.write_bytes(b"-----BEGIN CERTIFICATE-----\nstub\n-----END CERTIFICATE-----\n")
+        monkeypatch.setattr("claude_monitoring.security.get_ca_cert_path", lambda: cert)
+        monkeypatch.setattr("claude_monitoring.security.verify_ca_trusted", lambda *a, **kw: (True, None))
+        assert status_mod._is_cert_trusted() is True
 
-    def test_fallback_to_mitmproxy_cert(self):
+    def test_returns_false_when_in_keychain_but_no_admin_trust(self, monkeypatch, tmp_path):
+        """This is the critical state we missed pre-fix: cert was added to
+        the System keychain but admin trust settings were never applied
+        (e.g., osascript dialog cancelled). The old _is_cert_trusted
+        returned True (find-certificate found it). The new one returns
+        False — matching what the proxy interception layer actually needs."""
+        cert = tmp_path / "ai-monitor-ca.pem"
+        cert.write_bytes(b"-----BEGIN CERTIFICATE-----\nstub\n-----END CERTIFICATE-----\n")
+        monkeypatch.setattr("claude_monitoring.security.get_ca_cert_path", lambda: cert)
+        monkeypatch.setattr(
+            "claude_monitoring.security.verify_ca_trusted",
+            lambda *a, **kw: (False, "in_keychain_but_not_trusted"),
+        )
+        assert status_mod._is_cert_trusted() is False
+
+    def test_returns_false_when_cert_file_missing(self, monkeypatch, tmp_path):
+        cert = tmp_path / "ai-monitor-ca.pem"  # does not exist
+        monkeypatch.setattr("claude_monitoring.security.get_ca_cert_path", lambda: cert)
+        # legacy mitmproxy CA also absent — _find_certificate path returns False
+        with patch("claude_monitoring.status.subprocess.run", return_value=_mock_completed("")):
+            assert status_mod._is_cert_trusted() is False
+
+    def test_falls_back_to_legacy_mitmproxy_ca_when_custom_cert_file_missing(self, monkeypatch, tmp_path):
+        """Pre-custom-CA installs only had the default mitmproxy CA. We
+        can't SHA-1-verify without the cert file, so we fall back to
+        name-based search and report keychain-only (trust state unknown).
+        Returns False because we can't confirm admin trust."""
+        cert = tmp_path / "ai-monitor-ca.pem"  # does not exist
+        monkeypatch.setattr("claude_monitoring.security.get_ca_cert_path", lambda: cert)
+
         def fake_run(cmd, **_):
             if "mitmproxy" in cmd:
                 return _mock_completed("mitmproxy")
             return _mock_completed("")
 
         with patch("claude_monitoring.status.subprocess.run", side_effect=fake_run):
-            assert status_mod._is_cert_trusted() is True
-
-    def test_neither_cert_present(self):
-        with patch(
-            "claude_monitoring.status.subprocess.run",
-            return_value=_mock_completed(""),
-        ):
+            # _is_cert_trusted is strict: only True when admin trust is verified.
+            # Legacy path can only confirm presence, so it returns False.
             assert status_mod._is_cert_trusted() is False
 
 
@@ -188,10 +216,80 @@ class TestShowStatus:
         assert "mitmproxy:" in output
         assert "Claude Code:" in output
 
+    def test_show_status_partial_trust_state_distinguishes_keychain_from_admin_trust(self, monkeypatch):
+        """The two-line CA cert + CA trust display must distinguish the
+        three states (trusted / in-keychain-but-not-trusted /
+        not-in-keychain). Pre-fix the status only showed Trusted/Not
+        Trusted, which masked the failure mode this PR catches."""
+        monkeypatch.setattr(status_mod, "_is_mitmproxy_running", lambda: False)
+        monkeypatch.setattr(status_mod, "_is_system_proxy_configured", lambda: False)
+        # The critical state: cert exists in keychain but admin trust
+        # settings are not applied. Old _is_cert_trusted returned True
+        # here; the new contract has trust=False with a specific reason.
+        monkeypatch.setattr(
+            status_mod,
+            "_get_ca_trust_state",
+            lambda: (True, False, "in_keychain_but_not_trusted"),
+        )
+        monkeypatch.setattr(status_mod, "_is_monitor_running", lambda: False)
+        monkeypatch.setattr(status_mod, "_is_db_encrypted", lambda: False)
+        monkeypatch.setattr(status_mod, "_check_permissions", lambda: True)
+        monkeypatch.setattr(status_mod, "_has_dashboard_token", lambda: False)
+        monkeypatch.setattr(status_mod, "_has_custom_ca", lambda: True)
+        monkeypatch.setattr(status_mod, "_check_extension_heartbeat", lambda: None)
+
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            rc = status_mod.show_status()
+        output = buf.getvalue()
+
+        assert rc == 0
+        assert "CA cert:" in output
+        assert "✅ In keychain" in output
+        assert "CA trust:" in output
+        assert "Not in admin trust settings — proxy interception will fail" in output
+        # The reason from _get_ca_trust_state is passed through
+        # trust_reason_message, which maps "in_keychain_but_not_trusted"
+        # to a string that includes the actionable recovery command.
+        assert "admin trust settings are not applied" in output
+        assert "security add-trusted-cert" in output
+
+    def test_show_status_no_keychain_state(self, monkeypatch):
+        """show_status with cert not in keychain at all (pre-setup,
+        or post-purge). Different from the partial-trust state."""
+        monkeypatch.setattr(status_mod, "_is_mitmproxy_running", lambda: False)
+        monkeypatch.setattr(status_mod, "_is_system_proxy_configured", lambda: False)
+        # cert_code=None signals legacy fallback path (no SHA-1 verification
+        # available); _get_ca_trust_state returns None when the custom CA
+        # cert file is absent.
+        monkeypatch.setattr(
+            status_mod,
+            "_get_ca_trust_state",
+            lambda: (False, False, None),
+        )
+        monkeypatch.setattr(status_mod, "_is_monitor_running", lambda: False)
+        monkeypatch.setattr(status_mod, "_is_db_encrypted", lambda: False)
+        monkeypatch.setattr(status_mod, "_check_permissions", lambda: True)
+        monkeypatch.setattr(status_mod, "_has_dashboard_token", lambda: False)
+        monkeypatch.setattr(status_mod, "_has_custom_ca", lambda: False)
+        monkeypatch.setattr(status_mod, "_check_extension_heartbeat", lambda: None)
+
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            rc = status_mod.show_status()
+        output = buf.getvalue()
+
+        assert rc == 0
+        assert "CA cert:" in output
+        assert "❌ Not in keychain" in output
+        assert "CA trust:" in output
+        assert "❌ Not trusted" in output
+
     def test_show_status_with_everything_ok(self, monkeypatch):
         monkeypatch.setattr(status_mod, "_is_mitmproxy_running", lambda: True)
         monkeypatch.setattr(status_mod, "_is_system_proxy_configured", lambda: True)
         monkeypatch.setattr(status_mod, "_is_cert_trusted", lambda: True)
+        monkeypatch.setattr(status_mod, "_get_ca_trust_state", lambda: (True, True, None))
         monkeypatch.setattr(status_mod, "_is_monitor_running", lambda: True)
         monkeypatch.setattr(status_mod, "_is_db_encrypted", lambda: True)
         monkeypatch.setattr(status_mod, "_check_permissions", lambda: True)

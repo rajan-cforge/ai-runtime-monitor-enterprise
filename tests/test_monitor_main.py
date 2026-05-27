@@ -516,6 +516,19 @@ class TestFormatUptime:
 class TestMainArgumentParsing:
     """Tests that main() dispatches to the correct function based on CLI args."""
 
+    @pytest.fixture(autouse=True)
+    def _skip_first_run_wizard(self, monkeypatch):
+        """Stub is_first_run() to False so --start tests don't trigger the
+        setup wizard. PR #50 changed the wizard return semantics so trust-
+        verification failure → return False → sys.exit(1) in monitor.py.
+        On CI Linux runners (no osascript, no keychain) the wizard fails
+        and these dispatch tests now hit the exit-1 path. The dispatch
+        tests are about argument routing, not the wizard itself — wizard
+        behavior is covered in tests/test_cleanup_wizard_purge.py."""
+        from claude_monitoring import wizard as wizard_mod
+
+        monkeypatch.setattr(wizard_mod, "is_first_run", lambda: False)
+
     def test_start_calls_start_monitoring(self):
         """--start should call start_monitoring()."""
         with patch("claude_monitoring.monitor.start_monitoring") as mock_start:
