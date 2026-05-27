@@ -453,6 +453,96 @@ class TestSetupWizard:
         assert state["steps"]["trust_ca"] == "skipped"
         assert state["steps"]["system_proxy"] == "skipped_trust_required"
 
+    def test_wizard_browser_extension_step_opens_chrome_extensions(self, tmp_path, monkeypatch):
+        """PR #55: the wizard's Step 4 prompts for browser-extension
+        install and, on yes, calls `open chrome://extensions`. Also
+        surfaces the absolute path to the browser-extension folder so
+        the user can drag it into the Load-unpacked dialog."""
+        monkeypatch.setattr("claude_monitoring.security.get_output_dir", lambda: tmp_path)
+        monkeypatch.setattr("claude_monitoring.security.get_db_path", lambda: tmp_path / "monitor.db")
+        monkeypatch.setattr("claude_monitoring.config.get_output_dir", lambda: tmp_path)
+        monkeypatch.setattr("claude_monitoring.config.get_db_path", lambda: tmp_path / "monitor.db")
+        monkeypatch.setattr("claude_monitoring.db.get_output_dir", lambda: tmp_path)
+        monkeypatch.setattr("claude_monitoring.db.get_db_path", lambda: tmp_path / "monitor.db")
+
+        cert = tmp_path / "certs" / "ai-monitor-ca.pem"
+        cert.parent.mkdir(parents=True)
+        cert.write_bytes(b"-----BEGIN CERTIFICATE-----\nstub\n-----END CERTIFICATE-----\n")
+
+        monkeypatch.setattr(wizard_mod, "_is_cert_trusted", lambda: True)
+        monkeypatch.setattr(wizard_mod, "verify_ca_trusted", lambda *a, **kw: (True, "trusted"))
+        monkeypatch.setattr(wizard_mod, "_is_system_proxy_configured", lambda: True)
+        monkeypatch.setattr(wizard_mod, "get_ca_info", lambda: {"common_name": "Test CA"})
+
+        # Capture the subprocess.run call without actually opening Chrome
+        open_calls = []
+
+        def fake_run(cmd, **kw):
+            open_calls.append(list(cmd))
+            return type("R", (), {"returncode": 0})()
+
+        monkeypatch.setattr(wizard_mod.subprocess, "run", fake_run)
+
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            assert wizard_mod.run_setup_wizard() is True
+
+        out = buf.getvalue()
+        # Step 4 label is present, with the new 5-step numbering.
+        assert "[4/5] Browser AI capture" in out
+        # Absolute extension path is surfaced.
+        assert "browser-extension" in out
+        # On the yes path (default), subprocess.run was called with
+        # the chrome://extensions URL.
+        assert any(cmd[:2] == ["open", "chrome://extensions"] for cmd in open_calls)
+        # State recorded so future --status / re-runs can see it.
+        marker = tmp_path / ".setup_complete"
+        state = json.loads(marker.read_text())
+        assert state["steps"]["browser_extension"] == "opened"
+
+    def test_wizard_browser_extension_step_records_skip_when_user_declines(self, tmp_path, monkeypatch):
+        """When the user answers 'no' to the chrome://extensions prompt,
+        wizard records 'skipped' and prints a note that browser AI
+        capture won't work until the extension is loaded manually."""
+        monkeypatch.setattr("claude_monitoring.security.get_output_dir", lambda: tmp_path)
+        monkeypatch.setattr("claude_monitoring.security.get_db_path", lambda: tmp_path / "monitor.db")
+        monkeypatch.setattr("claude_monitoring.config.get_output_dir", lambda: tmp_path)
+        monkeypatch.setattr("claude_monitoring.config.get_db_path", lambda: tmp_path / "monitor.db")
+        monkeypatch.setattr("claude_monitoring.db.get_output_dir", lambda: tmp_path)
+        monkeypatch.setattr("claude_monitoring.db.get_db_path", lambda: tmp_path / "monitor.db")
+
+        cert = tmp_path / "certs" / "ai-monitor-ca.pem"
+        cert.parent.mkdir(parents=True)
+        cert.write_bytes(b"-----BEGIN CERTIFICATE-----\nstub\n-----END CERTIFICATE-----\n")
+
+        monkeypatch.setattr(wizard_mod, "_is_cert_trusted", lambda: True)
+        monkeypatch.setattr(wizard_mod, "verify_ca_trusted", lambda *a, **kw: (True, "trusted"))
+        monkeypatch.setattr(wizard_mod, "_is_system_proxy_configured", lambda: True)
+        monkeypatch.setattr(wizard_mod, "get_ca_info", lambda: {"common_name": "Test CA"})
+
+        # All prompts return False — user declines.
+        monkeypatch.setattr(wizard_mod, "_prompt", lambda *a, **kw: False)
+        # Ensure subprocess.run is NOT called for chrome://extensions.
+        open_calls = []
+
+        def fake_run(cmd, **kw):
+            open_calls.append(list(cmd))
+            return type("R", (), {"returncode": 0})()
+
+        monkeypatch.setattr(wizard_mod.subprocess, "run", fake_run)
+
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            wizard_mod.run_setup_wizard()
+
+        out = buf.getvalue()
+        assert "extension is loaded manually" in out
+        # subprocess.run('open', 'chrome://extensions') must NOT have fired
+        assert not any(cmd[:2] == ["open", "chrome://extensions"] for cmd in open_calls)
+        marker = tmp_path / ".setup_complete"
+        state = json.loads(marker.read_text())
+        assert state["steps"]["browser_extension"] == "skipped"
+
     def test_wizard_skips_already_present_cert(self, tmp_path, monkeypatch):
         monkeypatch.setattr("claude_monitoring.security.get_output_dir", lambda: tmp_path)
         monkeypatch.setattr("claude_monitoring.security.get_db_path", lambda: tmp_path / "monitor.db")
