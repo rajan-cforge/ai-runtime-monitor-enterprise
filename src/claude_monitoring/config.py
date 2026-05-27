@@ -12,7 +12,6 @@ Config file search paths:
 
 import sys
 from pathlib import Path
-from typing import Optional
 
 # Use tomllib (3.11+) or tomli fallback
 if sys.version_info >= (3, 11):
@@ -71,7 +70,7 @@ def _deep_merge(base: dict, override: dict) -> dict:
     return result
 
 
-def load_config(path: Optional[str] = None) -> dict:
+def load_config(path: str | None = None) -> dict:
     """Load config from TOML file, with defaults for missing keys.
 
     Args:
@@ -246,7 +245,7 @@ alert_on_unknown = true        # Alert when an unknown MCP server is detected
 """
 
 
-def generate_default_config(path: Optional[Path] = None) -> Path:
+def generate_default_config(path: Path | None = None) -> Path:
     """Write default config.toml with comments.
 
     Args:

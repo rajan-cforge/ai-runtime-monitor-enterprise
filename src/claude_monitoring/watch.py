@@ -41,7 +41,6 @@ import uuid
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
 
 from claude_monitoring.config import (
     get_dashboard_port,
@@ -1024,7 +1023,7 @@ echo "   Run: claude"
         sys.exit(1)
 
 
-def run_analyze(sessions_dir: Optional[str] = None):
+def run_analyze(sessions_dir: str | None = None):
     """Quick terminal analysis of latest CSV session."""
     search_dir = Path(sessions_dir) if sessions_dir else get_session_dir()
 
@@ -1097,7 +1096,7 @@ def run_analyze(sessions_dir: Optional[str] = None):
 # ─────────────────────────────────────────────
 
 
-def _load_latest_csv(sessions_dir: Optional[str] = None) -> tuple[Optional[Path], list[dict]]:
+def _load_latest_csv(sessions_dir: str | None = None) -> tuple[Path | None, list[dict]]:
     """Load the latest CSV file and return (path, rows)."""
     search_dir = Path(sessions_dir) if sessions_dir else get_session_dir()
     csvs = sorted(search_dir.glob("claude_watch_*.csv"), key=os.path.getmtime)
@@ -1111,7 +1110,7 @@ def _load_latest_csv(sessions_dir: Optional[str] = None) -> tuple[Optional[Path]
     return latest, rows
 
 
-def run_plot(sessions_dir: Optional[str] = None):
+def run_plot(sessions_dir: str | None = None):
     """Generate comprehensive matplotlib dashboard from captured CSV data."""
     try:
         import matplotlib
@@ -1149,7 +1148,7 @@ def run_plot(sessions_dir: Optional[str] = None):
     res_sizes = [int(r.get("response_size_bytes", 0)) for r in rows]
     cumulative_tokens = []
     running = 0
-    for it, ot in zip(input_tokens, output_tokens):
+    for it, ot in zip(input_tokens, output_tokens, strict=False):
         running += it + ot
         cumulative_tokens.append(running)
 
@@ -1281,7 +1280,7 @@ def run_plot(sessions_dir: Optional[str] = None):
         bars = ax6.bar(range(len(m_names)), m_counts, color=colors["output"], alpha=0.8)
         ax6.set_xticks(range(len(m_names)))
         ax6.set_xticklabels(m_names, rotation=30, ha="right", fontsize=7)
-        for bar, count in zip(bars, m_counts):
+        for bar, count in zip(bars, m_counts, strict=False):
             ax6.text(
                 bar.get_x() + bar.get_width() / 2.0,
                 bar.get_height() + 0.1,
@@ -1341,7 +1340,7 @@ def run_plot(sessions_dir: Optional[str] = None):
             zorder=5,
             label=f"{len(sensitive_turns)} alerts",
         )
-        for i, (turn, label) in enumerate(zip(sensitive_turns, sensitive_labels)):
+        for i, (turn, label) in enumerate(zip(sensitive_turns, sensitive_labels, strict=False)):
             ax8.annotate(
                 label,
                 (turn, 1),
@@ -1372,7 +1371,7 @@ def run_plot(sessions_dir: Optional[str] = None):
 
     # 9) Tokens per turn (bar) — bottom left
     ax9 = fig.add_subplot(gs[3, 0])
-    tokens_per_turn = [it + ot for it, ot in zip(input_tokens, output_tokens)]
+    tokens_per_turn = [it + ot for it, ot in zip(input_tokens, output_tokens, strict=False)]
     ax9.bar(range(len(rows)), tokens_per_turn, color=colors["cumulative"], alpha=0.8, width=1.0)
     ax9.set_title("Tokens Per Turn", fontweight="bold")
     ax9.set_xlabel("Turn #")
@@ -1457,7 +1456,7 @@ def run_plot(sessions_dir: Optional[str] = None):
 # ─────────────────────────────────────────────
 
 
-def run_dashboard(sessions_dir: Optional[str] = None):
+def run_dashboard(sessions_dir: str | None = None):
     """Launch a live web dashboard to explore captured CSV data."""
     import http.server
     import threading
