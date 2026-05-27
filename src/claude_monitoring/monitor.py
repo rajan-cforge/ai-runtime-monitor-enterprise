@@ -5137,20 +5137,13 @@ def _update_port(port):
 
 
 def _resolve_version() -> str:
-    """Return the installed package version, with sensible fallbacks.
-
-    Order: importlib.metadata (installed wheel/sdist), then
-    setuptools_scm dev tag (editable install during development),
-    then a static fallback. We never raise — `--version` must always
-    print something rather than crashing.
-    """
+    """Return installed package version. Order: importlib.metadata, setuptools_scm, static fallback.
+    Never raises — `--version` must print something rather than crash."""
     try:
         from importlib.metadata import PackageNotFoundError, version
 
         return version("ai-runtime-monitor")
-    except PackageNotFoundError:
-        pass
-    except Exception:
+    except (PackageNotFoundError, Exception):
         pass
     try:
         from setuptools_scm import get_version
@@ -5163,9 +5156,7 @@ def _resolve_version() -> str:
 
 def _preflight_proxy_start():
     """Pre-flight checks before spawning mitmdump. Returns ``(exit_code, stderr_message)``.
-    Exit codes: 0 proceed, 2 mitmproxy missing, 3 CA not trusted. allow_hosts regression
-    returns (0, warning) — caller prints but doesn't exit.
-    """
+    Exit codes: 0 proceed, 2 mitmproxy missing, 3 CA not trusted; allow_hosts regression returns (0, warning)."""
     import importlib.util as _ilu
 
     if _ilu.find_spec("mitmproxy") is None:
@@ -5206,14 +5197,7 @@ def _preflight_proxy_start():
 
 def main():
     parser = argparse.ArgumentParser(description="AI Runtime Monitor — Full visibility into AI agent activity")
-    # --version is the standard CLI affordance; expected by any tool
-    # that invokes ai-monitor in a discovery flow (Homebrew formula
-    # tests, package-manager wrappers, automated audits).
-    parser.add_argument(
-        "--version",
-        action="version",
-        version=f"ai-monitor {_resolve_version()}",
-    )
+    parser.add_argument("--version", action="version", version=f"ai-monitor {_resolve_version()}")
     parser.add_argument("--start", action="store_true", help="Start monitoring and dashboard")
     parser.add_argument("--scan", action="store_true", help="One-shot process scan")
     parser.add_argument(
@@ -5222,11 +5206,7 @@ def main():
     parser.add_argument("--uninstall-agent", action="store_true", help="Remove macOS LaunchAgent")
     parser.add_argument("--port", type=int, default=DASHBOARD_PORT, help=f"Dashboard port (default: {DASHBOARD_PORT})")
     parser.add_argument("--init-config", action="store_true", help="Generate default config.toml")
-    # As of PR #52, --start activates the HTTPS proxy by default. The
-    # legacy --with-proxy flag is kept as a no-op for backwards-compat
-    # with scripts, LaunchAgent plists, and docs that pass it
-    # explicitly. New users get full proxy capture without any flag.
-    # Pass --no-proxy to opt out (JSONL + extension capture only).
+    # Proxy on by default since PR #52; --with-proxy kept as no-op for backwards-compat.
     parser.add_argument(
         "--with-proxy",
         action="store_true",

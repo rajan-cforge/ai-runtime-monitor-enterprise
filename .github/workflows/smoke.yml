@@ -28,8 +28,11 @@ jobs:
           mkdir -p ~/claude_watch_output
           touch ~/claude_watch_output/.setup_complete
       - name: Start daemon
+        # --no-proxy because CI has no Vigil CA trusted; PR #54's preflight
+        # exits 3 otherwise. e2e covers dashboard + feed endpoints, which
+        # don't depend on proxy capture.
         run: |
-          ai-monitor --start --daemon --port 9081 &
+          ai-monitor --start --no-proxy --daemon --port 9081 &
           echo $! > /tmp/daemon.pid
           for i in $(seq 1 30); do
             if curl -fsS http://localhost:9081/api/stats >/dev/null 2>&1; then

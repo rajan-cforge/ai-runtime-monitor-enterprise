@@ -530,9 +530,11 @@ class TestMainArgumentParsing:
         monkeypatch.setattr(wizard_mod, "is_first_run", lambda: False)
 
     def test_start_calls_start_monitoring(self):
-        """--start should call start_monitoring()."""
+        """--start should call start_monitoring(). Pass --no-proxy so the
+        PR #54 preflight (which exits 3 if the CA isn't trusted) doesn't
+        run — this test covers argument dispatch, not the proxy preflight."""
         with patch("claude_monitoring.monitor.start_monitoring") as mock_start:
-            with patch("sys.argv", ["ai-monitor", "--start"]):
+            with patch("sys.argv", ["ai-monitor", "--start", "--no-proxy"]):
                 from claude_monitoring.monitor import main
 
                 main()
@@ -575,10 +577,11 @@ class TestMainArgumentParsing:
         assert "AI Runtime Monitor" in captured.out
 
     def test_port_override(self):
-        """--port should update DASHBOARD_PORT via _update_port."""
+        """--port should update DASHBOARD_PORT via _update_port. --no-proxy
+        keeps the preflight from running (see test_start_calls_start_monitoring)."""
         with patch("claude_monitoring.monitor.start_monitoring") as mock_start:
             with patch("claude_monitoring.monitor._update_port") as mock_port:
-                with patch("sys.argv", ["ai-monitor", "--start", "--port", "5555"]):
+                with patch("sys.argv", ["ai-monitor", "--start", "--no-proxy", "--port", "5555"]):
                     from claude_monitoring.monitor import main
 
                     main()
@@ -670,12 +673,14 @@ class TestMainArgumentParsing:
     def test_start_argparse_accepts_legacy_with_proxy_flag(self):
         """PR #52: --with-proxy is preserved as a no-op for backwards-
         compat (LaunchAgent plists, docs, user scripts may still pass
-        it). argparse must accept it without erroring."""
+        it). argparse must accept it without erroring. Mock preflight
+        so we don't trip the PR #54 CA-not-trusted exit-3 branch in CI."""
         with patch("claude_monitoring.monitor.start_monitoring"):
-            with patch("sys.argv", ["ai-monitor", "--start", "--with-proxy"]):
-                from claude_monitoring.monitor import main
+            with patch("claude_monitoring.monitor._preflight_proxy_start", return_value=(0, None)):
+                with patch("sys.argv", ["ai-monitor", "--start", "--with-proxy"]):
+                    from claude_monitoring.monitor import main
 
-                main()
+                    main()
 
     def test_preflight_exits_2_when_mitmproxy_missing(self, monkeypatch):
         """PR #54: --start --with-proxy must refuse to start when
@@ -736,6 +741,32 @@ class TestMainArgumentParsing:
         assert msg is not None
         assert "claude.ai" in msg
         assert "regression" in msg.lower()
+
+    def test_start_propagates_preflight_exit_code(self, capsys):
+        """The --start call site must propagate _preflight_proxy_start's
+        non-zero exit code via SystemExit and print the message to stderr.
+        Covers the call-site branch added by PR #54 (otherwise only the
+        helper is covered, not the wiring into main())."""
+        with patch("claude_monitoring.monitor._preflight_proxy_start", return_value=(3, "CA not trusted msg")):
+            with patch("sys.argv", ["ai-monitor", "--start"]):
+                from claude_monitoring.monitor import main
+
+                with pytest.raises(SystemExit) as exc:
+                    main()
+                assert exc.value.code == 3
+        assert "CA not trusted msg" in capsys.readouterr().err
+
+    def test_start_prints_warning_but_continues_on_preflight_warning(self):
+        """When preflight returns (0, warning_msg) the daemon should still
+        boot. Covers the warning-not-block branch at the call site."""
+        with patch("claude_monitoring.monitor._preflight_proxy_start", return_value=(0, "regression warning")):
+            with patch("claude_monitoring.monitor.start_monitoring") as mock_start:
+                with patch("claude_monitoring.lifecycle.ProxyManager"):
+                    with patch("sys.argv", ["ai-monitor", "--start"]):
+                        from claude_monitoring.monitor import main
+
+                        main()
+                    mock_start.assert_called_once()
 
     def test_install_has_priority_over_start(self):
         """When both --install-agent and --start are given, install wins (elif chain)."""
