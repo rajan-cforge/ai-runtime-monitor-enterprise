@@ -1,5 +1,10 @@
 # AI Runtime Monitor
 
+[![CI](https://github.com/rajan-cforge/ai-runtime-monitor-enterprise/actions/workflows/ci.yml/badge.svg)](https://github.com/rajan-cforge/ai-runtime-monitor-enterprise/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
+[![PyPI](https://img.shields.io/pypi/v/ai-runtime-monitor.svg)](https://pypi.org/project/ai-runtime-monitor/)
+[![Python](https://img.shields.io/pypi/pyversions/ai-runtime-monitor.svg)](https://pypi.org/project/ai-runtime-monitor/)
+
 **Endpoint security for the AI developer — monitor what AI coding agents actually do on your machine.**
 
 Runtime monitor for AI coding agents. Full visibility into what Claude Code, ChatGPT, Copilot, Cursor, and other AI tools are doing on your machine — network calls, file changes, process activity, token spend, and sensitive data exposure.

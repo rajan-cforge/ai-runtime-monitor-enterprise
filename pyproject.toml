@@ -5,15 +5,15 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "ai-runtime-monitor"
 dynamic = ["version"]
-description = "CrowdStrike-style runtime monitor for AI coding agents"
+description = "Endpoint security for the AI developer — monitor what AI coding agents actually do on your machine."
 readme = "README.md"
 license = { text = "Apache-2.0" }
 requires-python = ">=3.10"
 authors = [
-    { name = "Rajan Yadav", email = "rajan.conch@gmail.com" },
+    { name = "Rajan Yadav", email = "rajan@gocloudforge.com" },
     { name = "GoCloudForge, Inc." },
 ]
-maintainers = [{ name = "Rajan Yadav", email = "rajan.conch@gmail.com" }]
+maintainers = [{ name = "Rajan Yadav", email = "rajan@gocloudforge.com" }]
 keywords = ["ai", "monitoring", "security", "observability", "supply-chain"]
 classifiers = [
     "Development Status :: 4 - Beta",

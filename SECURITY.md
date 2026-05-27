@@ -1,70 +1,93 @@
-# Security Policy
+# Security Policy — Vigil
+
+Vigil is an endpoint security product. We take security reports seriously and aim to respond quickly.
 
 ## Reporting Vulnerabilities
 
-**Please do not open a public issue for security vulnerabilities.**
+**Please do not open a public GitHub issue for security vulnerabilities.**
 
-Email: **rajan.conch@gmail.com**
+Email: **security@gocloudforge.com**
 
 Include:
 - Description of the vulnerability
 - Steps to reproduce
 - Potential impact
 - Suggested fix (if available)
+- Whether you'd like credit in the disclosure
 
-You should receive a response within 48 hours. We will work with you to understand and address the issue before any public disclosure.
+PGP encryption is available on request — reply to our initial acknowledgement and we'll exchange keys before you send the full report.
+
+### Response Process
+
+| Stage | Target SLA |
+|-------|------------|
+| Acknowledgement of report | 48 hours |
+| Initial assessment + severity rating | 7 days |
+| Fix + private disclosure to reporter | 30 days (severity-dependent) |
+| Public advisory + CVE (if applicable) | 90 days from initial report |
+
+If a critical issue requires an out-of-cycle release, we'll coordinate the disclosure window with you before publishing.
 
 ## Supported Versions
 
-| Version | Supported |
-|---------|-----------|
-| 0.1.x   | Yes       |
+| Version | Supported            |
+|---------|----------------------|
+| 0.2.x   | Yes — active branch  |
+| 0.1.x   | No — please upgrade  |
+
+Security fixes only land on the active branch. v0.1.x users should upgrade to v0.2.x; the upgrade is a `pip install -U ai-runtime-monitor` away.
 
 ## Scope
 
-This project monitors AI agent activity on your local machine. Security concerns include:
+Vigil monitors AI agent activity on the local machine. The following components are in-scope for security reports:
 
-- **Data egress**: Sensitive data detected in AI sessions is stored locally in SQLite. Ensure the database file (`~/claude_watch_output/`) has appropriate file permissions.
-- **Dashboard access**: The HTTP dashboard binds to `localhost:9081` by default. Do not expose it to untrusted networks.
-- **mitmproxy mode**: The `claude-watch` proxy intercepts HTTPS traffic. The generated CA certificate should be treated as sensitive.
+- **Dashboard HTTP server** — binds to `127.0.0.1:9081` by default. Bearer-token authenticated.
+- **mitmproxy interception** — uses a locally-generated CA with `NameConstraints` (permitted to AI API hostnames only).
+- **SQLite event store** — `~/claude_watch_output/vigil.db`, mode `0600`.
+- **Browser extension** — content script reading AI chat page DOM, isolated world, localhost-only outbound.
+- **JSONL session transcripts** — read from `~/.claude/` and equivalent OpenCLAW paths.
+- **CLI entry points** — `ai-monitor`, `claude-watch`.
 
-## Threat Model
+Detailed threat model and trust boundaries: see [docs/spec/THREAT-MODEL.md](docs/spec/THREAT-MODEL.md).
 
-### Attack Surface
+Data classification (sensitivity tiers, storage, retention): see [docs/spec/DATA-CLASSIFICATION.md](docs/spec/DATA-CLASSIFICATION.md).
 
-| Component | Risk | Mitigation |
-|-----------|------|------------|
-| Dashboard HTTP server | Network exposure if bind changed from localhost | Default bind to 127.0.0.1; warn on non-localhost bind |
-| SQLite database | Contains sensitive session data (prompts, tool outputs, detected secrets) | File permissions 0600; stored in ~/claude_watch_output/ |
-| mitmproxy CA (proxy mode) | MITM on all HTTPS if CA key compromised | CA cert restricted permissions; document handling |
-| JSONL transcripts | Full conversation history including any secrets typed or generated | Inherit OS file permissions from ~/.claude/ and ~/.openclaw/ |
-| Browser extension | Content script reads AI chat page DOM | Isolated world; localhost-only network; no page modification |
-| Chrome History copy | Temporary copy of browser history during scan | Copied to temp file, deleted immediately after read |
+## Out of Scope
 
-### Data Classification
-
-| Data Type | Sensitivity | Storage | Retention |
-|-----------|-------------|---------|-----------|
-| Session transcripts | HIGH | events table | Indefinite (user manages) |
-| Detected secrets | CRITICAL | events.data_json (masked in UI) | Indefinite |
-| API traffic (proxy) | HIGH | api_calls table + CSV | Indefinite |
-| Browser visits | MEDIUM | browser_sessions table | Indefinite |
-| Process list | LOW | processes table | Overwritten each scan |
-| Network connections | LOW | connections table | Overwritten each scan |
-
-### Security Testing
-
-Run security scans locally:
-```bash
-make security    # Bandit static analysis
-pip-audit        # Dependency vulnerability check
-```
-
-Weekly automated scans run via GitHub Actions (.github/workflows/security.yml).
+- Findings that require local user access to a machine where Vigil is already running (Vigil's threat model assumes the operating user is trusted).
+- Vulnerabilities in upstream dependencies that are unreachable from any Vigil code path (please report those to the upstream project).
+- Self-XSS or social-engineering attacks against the operator.
 
 ## Best Practices
 
-- Run the monitor under your own user account, not as root
-- Keep `~/claude_watch_output/` permissions restricted (`chmod 700`)
-- Review alerts regularly for actual credential exposures
-- Do not commit the SQLite database to version control
+- Run Vigil under your own user account — never as root.
+- Keep `~/claude_watch_output/` permissions restricted (`chmod 700`). Vigil enforces this automatically via `security.enforce_permissions`.
+- Review DLP alerts regularly — Vigil flags but does not block.
+- Do not commit the SQLite database to version control.
+- Rotate the dashboard bearer token if you suspect it has been exposed (`ai-monitor --rotate-token`).
+- Trust the Vigil CA only on machines where you actively use the proxy — `claude-watch --uninstall-ca` removes it cleanly.
+
+## Security Testing
+
+Run security scans locally:
+
+```bash
+make security    # Bandit static analysis + ruff S* rules
+pip-audit        # Dependency CVE check
+make trivy       # Container scan (if using the Docker image)
+```
+
+Continuous scans run on every PR via:
+- CodeQL (`.github/workflows/codeql.yml`)
+- Bandit (`.github/workflows/security.yml`)
+- pip-audit + SBOM (`.github/workflows/supply-chain.yml`)
+- TruffleHog secret-history scan
+- detect-secrets pre-commit hook
+
+## Bug Bounty
+
+Vigil does not yet operate a formal bug bounty program. We acknowledge security researchers in release notes when they choose to be named. As we approach a 1.0 release we'll publish a bounty schedule.
+
+---
+
+Copyright 2026 GoCloudForge, Inc.
