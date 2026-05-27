@@ -171,6 +171,183 @@ class TestVerifyCaTrusted:
         assert code == "cert_file_missing"
 
 
+class TestEnsureCaCert:
+    """Bug 8 regression suite. ensure_ca_cert is idempotent on valid
+    existing certs and regenerates only when the cert is missing,
+    expired, or has drifted from the current AI_PROXY_DOMAINS."""
+
+    def test_does_not_regenerate_valid_existing_ca(self, tmp_path, monkeypatch):
+        """The Bug 8 root-cause test: pre-place a valid cert, run
+        ensure_ca_cert, and confirm the file bytes (and SHA) do NOT
+        change. Pre-PR-A the wizard's force=True path always rewrote
+        the cert, causing the user's manually-applied trust to be
+        rotated away."""
+        import hashlib
+
+        from claude_monitoring import constants
+        from claude_monitoring.security import ensure_ca_cert, generate_custom_ca
+
+        cert_path = tmp_path / "ca-cert.pem"
+        key_path = tmp_path / "ca-key.pem"
+
+        # Use the real generator to lay down a cert whose NameConstraints
+        # match the current AI_PROXY_DOMAINS — the same shape ensure_ca_cert
+        # is checking against.
+        generate_custom_ca(cert_path=cert_path, key_path=key_path, domains=list(constants.AI_PROXY_DOMAINS))
+        sha_before = hashlib.sha256(cert_path.read_bytes()).hexdigest()
+
+        # Re-run — must be a no-op.
+        returned_cert, returned_key, regenerated = ensure_ca_cert(cert_path=cert_path, key_path=key_path)
+        sha_after = hashlib.sha256(cert_path.read_bytes()).hexdigest()
+
+        assert returned_cert == cert_path
+        assert returned_key == key_path
+        assert regenerated is False
+        assert sha_before == sha_after, "Bug 8 regression: ensure_ca_cert rotated a valid cert"
+
+    def test_regenerates_when_cert_missing(self, tmp_path):
+        from claude_monitoring.security import ensure_ca_cert
+
+        cert_path = tmp_path / "missing-cert.pem"
+        key_path = tmp_path / "missing-key.pem"
+        assert not cert_path.exists()
+
+        _, _, regenerated = ensure_ca_cert(cert_path=cert_path, key_path=key_path)
+        assert regenerated is True
+        assert cert_path.exists()
+        assert key_path.exists()
+
+    def test_regenerates_when_cert_expired(self, tmp_path):
+        """A cert within the 30-day buffer is treated as expiring soon
+        and gets refreshed. Prevents the wizard from leaving the user
+        with a CA that's about to silently break the proxy."""
+        from datetime import datetime, timedelta, timezone
+
+        from cryptography import x509
+        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives.asymmetric import rsa
+        from cryptography.x509.oid import NameOID
+
+        from claude_monitoring import constants
+        from claude_monitoring.security import ensure_ca_cert
+
+        # Pre-place a cert that's valid only 10 days into the future —
+        # under the 30-day buffer ensure_ca_cert enforces.
+        cert_path = tmp_path / "expiring.pem"
+        key_path = tmp_path / "expiring.key"
+        key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        now = datetime.now(timezone.utc)
+        permitted = [x509.DNSName(d) for d in constants.AI_PROXY_DOMAINS]
+        subject = issuer = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Expiring Test CA")])
+        cert = (
+            x509.CertificateBuilder()
+            .subject_name(subject)
+            .issuer_name(issuer)
+            .public_key(key.public_key())
+            .serial_number(x509.random_serial_number())
+            .not_valid_before(now - timedelta(days=1))
+            .not_valid_after(now + timedelta(days=10))  # within buffer
+            .add_extension(x509.BasicConstraints(ca=True, path_length=0), critical=True)
+            .add_extension(x509.NameConstraints(permitted_subtrees=permitted, excluded_subtrees=None), critical=True)
+            .sign(key, hashes.SHA256())
+        )
+        cert_path.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+        key_path.write_bytes(
+            key.private_bytes(
+                encoding=serialization.Encoding.PEM,
+                format=serialization.PrivateFormat.TraditionalOpenSSL,
+                encryption_algorithm=serialization.NoEncryption(),
+            )
+        )
+
+        _, _, regenerated = ensure_ca_cert(cert_path=cert_path, key_path=key_path)
+        assert regenerated is True
+
+    def test_regenerates_when_name_constraints_drift(self, tmp_path):
+        """If AI_PROXY_DOMAINS gained or lost a hostname, the cert's
+        NameConstraints no longer cover the right set — regenerate so
+        mitmproxy can actually sign leaves for the new domain set."""
+        from claude_monitoring.security import ensure_ca_cert, generate_custom_ca
+
+        cert_path = tmp_path / "drift.pem"
+        key_path = tmp_path / "drift.key"
+        # Lay down a cert with a deliberately narrower domain set
+        generate_custom_ca(cert_path=cert_path, key_path=key_path, domains=["example.com"])
+
+        # Now ask for a different domain set
+        _, _, regenerated = ensure_ca_cert(
+            cert_path=cert_path,
+            key_path=key_path,
+            domains=["api.anthropic.com", "api.openai.com"],
+        )
+        assert regenerated is True
+
+    def test_regenerates_when_cert_unparseable(self, tmp_path):
+        """A corrupted cert file shouldn't wedge the wizard; we just
+        regenerate."""
+        from claude_monitoring.security import ensure_ca_cert
+
+        cert_path = tmp_path / "garbage.pem"
+        key_path = tmp_path / "garbage.key"
+        cert_path.write_bytes(b"this is not a PEM cert")
+        key_path.write_bytes(b"this is not a PEM key")
+
+        _, _, regenerated = ensure_ca_cert(cert_path=cert_path, key_path=key_path)
+        assert regenerated is True
+
+    def test_regenerates_when_subtrees_contain_non_dns_entries(self, tmp_path):
+        """Reviewer finding 2: if NameConstraints permitted_subtrees mix
+        DNSName with IPAddress / DirectoryName / URI entries, the prior
+        equality check compared IPv4Network to str and silently regenerated
+        on every --setup invocation — reproducing the Bug 8 loop under a
+        different root cause. The filter now treats mixed entries as drift
+        and regenerates explicitly (not silently)."""
+        import ipaddress
+        from datetime import datetime, timedelta, timezone
+
+        from cryptography import x509
+        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives.asymmetric import rsa
+        from cryptography.x509.oid import NameOID
+
+        from claude_monitoring.security import ensure_ca_cert
+
+        cert_path = tmp_path / "mixed-subtrees.pem"
+        key_path = tmp_path / "mixed-subtrees.key"
+        key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        now = datetime.now(timezone.utc)
+        permitted = [
+            x509.DNSName("api.anthropic.com"),
+            x509.IPAddress(ipaddress.IPv4Network("127.0.0.1/32")),
+        ]
+        subject = issuer = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Mixed Subtrees Test CA")])
+        cert = (
+            x509.CertificateBuilder()
+            .subject_name(subject)
+            .issuer_name(issuer)
+            .public_key(key.public_key())
+            .serial_number(x509.random_serial_number())
+            .not_valid_before(now - timedelta(days=1))
+            .not_valid_after(now + timedelta(days=365))
+            .add_extension(x509.BasicConstraints(ca=True, path_length=0), critical=True)
+            .add_extension(x509.NameConstraints(permitted_subtrees=permitted, excluded_subtrees=None), critical=True)
+            .sign(key, hashes.SHA256())
+        )
+        cert_path.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+        key_path.write_bytes(
+            key.private_bytes(
+                encoding=serialization.Encoding.PEM,
+                format=serialization.PrivateFormat.TraditionalOpenSSL,
+                encryption_algorithm=serialization.NoEncryption(),
+            )
+        )
+
+        _, _, regenerated = ensure_ca_cert(
+            cert_path=cert_path, key_path=key_path, domains=["api.anthropic.com"]
+        )
+        assert regenerated is True
+
+
 class TestTrustReasonMessage:
     """trust_reason_message maps every TrustVerificationCode to a
     human-readable string. The mapping is the join point where
