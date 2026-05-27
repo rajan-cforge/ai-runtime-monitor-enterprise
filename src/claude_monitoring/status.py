@@ -487,15 +487,24 @@ def show_status_json() -> int:
         "proxy_port": get_proxy_port(),
         "extension": _extension_payload_safe(),
     }
-    # Round-trip through json.loads to break CodeQL's taint chain at
-    # this boundary. The output is identical to a direct json.dumps,
-    # but CodeQL treats json.loads as a sanitizer (it constructs new
-    # Python objects from text rather than re-using the originals), so
-    # the data flowing into sys.stdout.write is provably parsed JSON
-    # rather than DB-tainted values. Functionally a no-op; semantically
-    # a fresh allocation that severs the taint flow analyzer was tracking.
-    json_text = _json.dumps(_json.loads(_json.dumps(payload, default=str)), indent=2)
+    json_text = _json.dumps(payload, indent=2, default=str)
     import sys
 
+    # show_status_json emits the dashboard status payload as JSON for
+    # tooling consumers (CI scripts, the dashboard, future fleet-dashboard
+    # integration). The extension dict contents (hostname, last_seen,
+    # status) are intentionally serialized dashboard metadata — they are
+    # not sensitive data despite CodeQL flagging the DB-read → JSON-output
+    # chain as py/clear-text-logging-sensitive-data. This output path
+    # predates PR #50 and exists as a documented status interface for the
+    # dashboard. The TrustVerificationCode Literal pattern used elsewhere
+    # in this PR (see security.py) does not apply here because extension
+    # data is a flat heartbeat record, not a state enum.
+    #
+    # The matching CodeQL alert is dismissed in the GitHub UI with a
+    # reference back to this comment. See
+    # ~/Documents/vigil-notes/codeql-patterns.md for the project convention
+    # covering both this dismissal pattern and the Literal-code pattern
+    # used for state surfaces.
     sys.stdout.write(json_text + "\n")
     return 0
