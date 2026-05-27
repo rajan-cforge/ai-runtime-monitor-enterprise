@@ -75,3 +75,7 @@ node_modules/
 # Local-only operational notes, never committed
 docs/notes/
 docs/internal/
+# Brand-site copy lives canonically at ~/Documents/vigil-notes/brand-site-copy.md
+# (local launch-prep notes). A working-tree copy at this path keeps getting
+# swept in by `git add -A`; ignore it so it stops without forcing deletion.
+docs/brand-site-copy.md
