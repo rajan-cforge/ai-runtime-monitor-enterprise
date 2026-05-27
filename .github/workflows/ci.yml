@@ -33,10 +33,12 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
-        python-version: ["3.9", "3.11", "3.12", "3.13"]
+        # Python 3.10+ required as of PR #52 — mitmproxy>=10.0
+        # dropped 3.9 support and mitmproxy is now a base dependency.
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
         exclude:
           - os: macos-latest
-            python-version: "3.9"
+            python-version: "3.10"
           - os: macos-latest
             python-version: "3.11"
           - os: macos-latest

@@ -657,6 +657,26 @@ class TestMainArgumentParsing:
         # action='version' writes to stdout in Python 3.4+.
         assert captured.out.startswith("ai-monitor "), f"unexpected --version output: {captured.out!r}"
 
+    def test_start_argparse_accepts_no_proxy_flag(self):
+        """PR #52: --no-proxy is the new opt-out for HTTPS proxy.
+        argparse must accept it without erroring; the start path then
+        treats `not args.no_proxy` as the gate for ProxyManager start."""
+        with patch("claude_monitoring.monitor.start_monitoring"):
+            with patch("sys.argv", ["ai-monitor", "--start", "--no-proxy"]):
+                from claude_monitoring.monitor import main
+
+                main()
+
+    def test_start_argparse_accepts_legacy_with_proxy_flag(self):
+        """PR #52: --with-proxy is preserved as a no-op for backwards-
+        compat (LaunchAgent plists, docs, user scripts may still pass
+        it). argparse must accept it without erroring."""
+        with patch("claude_monitoring.monitor.start_monitoring"):
+            with patch("sys.argv", ["ai-monitor", "--start", "--with-proxy"]):
+                from claude_monitoring.monitor import main
+
+                main()
+
     def test_install_has_priority_over_start(self):
         """When both --install-agent and --start are given, install wins (elif chain)."""
         with patch("claude_monitoring.monitor.install_launch_agent") as mock_install:

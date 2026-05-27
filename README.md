@@ -58,10 +58,10 @@ make start     # launches dashboard on http://localhost:9081
 For full API-level traffic interception (every prompt, response, token count, and tool call):
 
 ```bash
-pip install "ai-runtime-monitor[watch]"
+pip install ai-runtime-monitor
 
 # First-time setup
-claude-watch --setup            # Install mitmproxy, generate & trust cert
+claude-watch --setup            # Generate & trust cert (mitmproxy already installed)
 claude-watch --verify           # Verify everything is ready
 
 # Option A: Start both together
