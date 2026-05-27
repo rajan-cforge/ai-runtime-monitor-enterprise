@@ -5161,6 +5161,49 @@ def _resolve_version() -> str:
     return "0.0.0+unknown"
 
 
+def _preflight_proxy_start():
+    """Pre-flight checks before spawning mitmdump. Returns ``(exit_code, stderr_message)``.
+    Exit codes: 0 proceed, 2 mitmproxy missing, 3 CA not trusted. allow_hosts regression
+    returns (0, warning) — caller prints but doesn't exit.
+    """
+    import importlib.util as _ilu
+
+    if _ilu.find_spec("mitmproxy") is None:
+        return 2, (
+            "❌ Proxy mode requires mitmproxy, which is not installed in this environment.\n"
+            "   Fix: pip install ai-runtime-monitor  (or, in this venv, pip install mitmproxy)\n"
+            "   Then re-run: ai-monitor --start"
+        )
+    try:
+        from claude_monitoring.security import get_ca_cert_path, verify_ca_trusted
+
+        ok, code = verify_ca_trusted(get_ca_cert_path())
+    except Exception:
+        ok, code = False, "verification_error"
+    if not ok:
+        from claude_monitoring.security import trust_reason_message
+
+        return 3, (
+            "❌ Proxy mode requires the CA to be trusted in System.keychain admin trust settings.\n"
+            f"   Current state: {trust_reason_message(code)}\n"
+            "   Fix: ai-monitor --setup  (re-runs the wizard and verifies trust)\n"
+            "   Refusing to enable the system proxy without trust — it would route\n"
+            "   AI traffic through an untrusted CA and produce cert errors with\n"
+            "   zero useful capture."
+        )
+    from claude_monitoring.constants import AI_BROWSER_DOMAINS, AI_PROXY_DOMAINS
+
+    leaked = sorted(set(AI_PROXY_DOMAINS) & set(AI_BROWSER_DOMAINS))
+    if leaked:
+        return 0, (
+            f"⚠ AI_PROXY_DOMAINS contains browser UI sites: {leaked}\n"
+            "  These should be captured by the Chrome extension, not the proxy.\n"
+            "  See claude_monitoring.constants comment for rationale.\n"
+            "  Proceeding anyway, but this is a regression from PR #51."
+        )
+    return 0, None
+
+
 def main():
     parser = argparse.ArgumentParser(description="AI Runtime Monitor — Full visibility into AI agent activity")
     # --version is the standard CLI affordance; expected by any tool
@@ -5451,6 +5494,12 @@ def main():
         if proxy_enabled:
             from claude_monitoring.config import get_proxy_port
             from claude_monitoring.lifecycle import ProxyManager
+
+            _preflight_code, _preflight_msg = _preflight_proxy_start()
+            if _preflight_msg:
+                print(_preflight_msg, file=sys.stderr)
+            if _preflight_code != 0:
+                sys.exit(_preflight_code)
 
             # Phase 1: ProxyManager owns the mitmdump subprocess lifecycle.
             # It tracks the PID, gets health-checked by the watchdog, and

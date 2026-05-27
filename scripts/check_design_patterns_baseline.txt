@@ -96,8 +96,8 @@ src/claude_monitoring/monitor.py:504: empty 'except Exception: pass' (silently s
 src/claude_monitoring/monitor.py:5153: empty 'except Exception: pass' (silently swallowing errors)
 src/claude_monitoring/monitor.py:5159: empty 'except Exception: pass' (silently swallowing errors)
 src/claude_monitoring/monitor.py:515: empty 'except Exception: pass' (silently swallowing errors)
-src/claude_monitoring/monitor.py:5164: public function 'main' missing docstring
-src/claude_monitoring/monitor.py:5346: empty 'except Exception: pass' (silently swallowing errors)
+src/claude_monitoring/monitor.py:5221: public function 'main' missing docstring
+src/claude_monitoring/monitor.py:5389: empty 'except Exception: pass' (silently swallowing errors)
 src/claude_monitoring/monitor.py:543: empty 'except Exception: pass' (silently swallowing errors)
 src/claude_monitoring/monitor.py:565: empty 'except Exception: pass' (silently swallowing errors)
 src/claude_monitoring/monitor.py:584: empty 'except Exception: pass' (silently swallowing errors)
@@ -117,8 +117,9 @@ src/claude_monitoring/security.py:522: empty 'except Exception: pass' (silently 
 src/claude_monitoring/security.py:529: empty 'except Exception: pass' (silently swallowing errors)
 src/claude_monitoring/security.py:54: public function 'get_token_path' missing docstring
 src/claude_monitoring/security.py:58: public function 'get_setup_marker_path' missing docstring
-src/claude_monitoring/status.py:452: empty 'except Exception: pass' (silently swallowing errors)
-src/claude_monitoring/status.py:476: empty 'except Exception: pass' (silently swallowing errors)
+src/claude_monitoring/status.py:415: empty 'except Exception: pass' (silently swallowing errors)
+src/claude_monitoring/status.py:470: empty 'except Exception: pass' (silently swallowing errors)
+src/claude_monitoring/status.py:494: empty 'except Exception: pass' (silently swallowing errors)
 src/claude_monitoring/supply_chain.py:486: empty 'except Exception: pass' (silently swallowing errors)
 src/claude_monitoring/supply_chain.py:720: empty 'except Exception: pass' (silently swallowing errors)
 src/claude_monitoring/supply_chain.py:744: empty 'except Exception: pass' (silently swallowing errors)
@@ -140,14 +141,14 @@ src/claude_monitoring/vuln_scanner.py:380: empty 'except Exception: pass' (silen
 src/claude_monitoring/vuln_scanner.py:395: empty 'except Exception: pass' (silently swallowing errors)
 src/claude_monitoring/vuln_scanner.py:46: empty 'except Exception: pass' (silently swallowing errors)
 src/claude_monitoring/vuln_scanner.py:82: empty 'except Exception: pass' (silently swallowing errors)
-src/claude_monitoring/watch.py:1016: empty 'except Exception: pass' (silently swallowing errors)
-src/claude_monitoring/watch.py:1473: public function 'log_message' missing docstring
-src/claude_monitoring/watch.py:1476: public function 'do_GET' missing docstring
-src/claude_monitoring/watch.py:1984: public function 'main' missing docstring
-src/claude_monitoring/watch.py:499: public function 'get_csv_path' missing docstring
-src/claude_monitoring/watch.py:589: public function 'request' missing docstring
-src/claude_monitoring/watch.py:673: empty 'except Exception: pass' (silently swallowing errors)
-src/claude_monitoring/watch.py:678: public function 'response' missing docstring
-src/claude_monitoring/watch.py:703: empty 'except Exception: pass' (silently swallowing errors)
+src/claude_monitoring/watch.py:1017: empty 'except Exception: pass' (silently swallowing errors)
+src/claude_monitoring/watch.py:1474: public function 'log_message' missing docstring
+src/claude_monitoring/watch.py:1477: public function 'do_GET' missing docstring
+src/claude_monitoring/watch.py:1985: public function 'main' missing docstring
+src/claude_monitoring/watch.py:500: public function 'get_csv_path' missing docstring
+src/claude_monitoring/watch.py:590: public function 'request' missing docstring
+src/claude_monitoring/watch.py:674: empty 'except Exception: pass' (silently swallowing errors)
+src/claude_monitoring/watch.py:679: public function 'response' missing docstring
+src/claude_monitoring/watch.py:704: empty 'except Exception: pass' (silently swallowing errors)
 src/claude_monitoring/wizard.py:371: empty 'except Exception: pass' (silently swallowing errors)
 src/claude_monitoring/wizard.py:54: public function 'is_first_run' missing docstring

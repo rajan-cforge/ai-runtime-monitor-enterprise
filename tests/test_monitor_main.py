@@ -677,6 +677,66 @@ class TestMainArgumentParsing:
 
                 main()
 
+    def test_preflight_exits_2_when_mitmproxy_missing(self, monkeypatch):
+        """PR #54: --start --with-proxy must refuse to start when
+        mitmproxy is not importable. Exit 2 + actionable message."""
+        from claude_monitoring import monitor as mon
+
+        monkeypatch.setattr("importlib.util.find_spec", lambda name: None if name == "mitmproxy" else MagicMock())
+        code, msg = mon._preflight_proxy_start()
+        assert code == 2
+        assert msg is not None
+        assert "mitmproxy" in msg
+        assert "pip install" in msg
+
+    def test_preflight_exits_3_when_ca_not_trusted(self, monkeypatch):
+        """PR #54: refuse proxy start when verify_ca_trusted reports a
+        non-trusted state. Exit 3 + reason from trust_reason_message."""
+        from claude_monitoring import monitor as mon
+
+        monkeypatch.setattr("importlib.util.find_spec", lambda name: MagicMock())
+        monkeypatch.setattr(
+            "claude_monitoring.security.verify_ca_trusted",
+            lambda *_a, **_kw: (False, "in_keychain_but_not_trusted"),
+        )
+        code, msg = mon._preflight_proxy_start()
+        assert code == 3
+        assert msg is not None
+        assert "CA to be trusted" in msg
+        # The trust_reason_message mapping for in_keychain_but_not_trusted
+        # contains the actionable recovery command — verify it surfaces.
+        assert "security add-trusted-cert" in msg
+
+    def test_preflight_returns_zero_on_happy_path(self, monkeypatch):
+        from claude_monitoring import monitor as mon
+
+        monkeypatch.setattr("importlib.util.find_spec", lambda name: MagicMock())
+        monkeypatch.setattr("claude_monitoring.security.verify_ca_trusted", lambda *_a, **_kw: (True, "trusted"))
+        code, msg = mon._preflight_proxy_start()
+        assert code == 0
+        assert msg is None
+
+    def test_preflight_warns_but_does_not_block_on_allow_hosts_regression(self, monkeypatch):
+        """If AI_PROXY_DOMAINS gains a browser UI host (regression of
+        PR #51's invariant), the preflight should emit a stderr warning
+        but still return exit_code=0 so the proxy starts. The intent is
+        visibility, not blocking — the regression should ship with the
+        offending change rather than mask the broken state."""
+        from claude_monitoring import monitor as mon
+
+        monkeypatch.setattr("importlib.util.find_spec", lambda name: MagicMock())
+        monkeypatch.setattr("claude_monitoring.security.verify_ca_trusted", lambda *_a, **_kw: (True, "trusted"))
+        # Force a regression: stuff a browser UI host into AI_PROXY_DOMAINS.
+        monkeypatch.setattr(
+            "claude_monitoring.constants.AI_PROXY_DOMAINS",
+            ["api.anthropic.com", "claude.ai"],
+        )
+        code, msg = mon._preflight_proxy_start()
+        assert code == 0  # Warning, not block
+        assert msg is not None
+        assert "claude.ai" in msg
+        assert "regression" in msg.lower()
+
     def test_install_has_priority_over_start(self):
         """When both --install-agent and --start are given, install wins (elif chain)."""
         with patch("claude_monitoring.monitor.install_launch_agent") as mock_install:
