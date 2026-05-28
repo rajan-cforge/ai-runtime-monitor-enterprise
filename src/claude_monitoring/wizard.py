@@ -40,9 +40,7 @@ from claude_monitoring.security import (
     get_ca_cert_path,
     get_ca_info,
     get_setup_marker_path,
-    trust_ca_cert,
     trust_ca_cert_with_fallback,
-    trust_reason_message,
     untrust_ca_cert,
     verify_ca_trusted,
 )

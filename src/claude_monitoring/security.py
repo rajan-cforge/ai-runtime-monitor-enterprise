@@ -219,7 +219,6 @@ def ensure_ca_cert(
     next ``--setup`` writes C → loop never converges. Idempotent
     generation breaks the loop.
     """
-    from cryptography import x509
 
     from claude_monitoring.constants import AI_PROXY_DOMAINS
 

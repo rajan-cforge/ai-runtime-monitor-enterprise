@@ -586,6 +586,81 @@ class TestSetupWizard:
         # Cert already present, should NOT have called generate
         assert gen_called["count"] == 0
 
+    def test_wizard_step1_reuses_cert_when_ensure_ca_cert_returns_false(self, tmp_path, monkeypatch):
+        """Bug 8 coverage: Step 1's 'Reusing existing certificate' branch
+        fires when ensure_ca_cert returns regenerated=False. The wizard
+        must print the reuse message and record state['steps']['generate_ca']
+        == 'reused' — proving the Bug 8 idempotent path is taken on a
+        repeat --setup invocation."""
+        monkeypatch.setattr("claude_monitoring.security.get_output_dir", lambda: tmp_path)
+        monkeypatch.setattr("claude_monitoring.security.get_db_path", lambda: tmp_path / "monitor.db")
+        monkeypatch.setattr("claude_monitoring.config.get_output_dir", lambda: tmp_path)
+        monkeypatch.setattr("claude_monitoring.config.get_db_path", lambda: tmp_path / "monitor.db")
+        monkeypatch.setattr("claude_monitoring.db.get_output_dir", lambda: tmp_path)
+        monkeypatch.setattr("claude_monitoring.db.get_db_path", lambda: tmp_path / "monitor.db")
+
+        cert = tmp_path / "certs" / "ai-monitor-ca.pem"
+        cert.parent.mkdir(parents=True)
+        cert.write_bytes(b"-----BEGIN CERTIFICATE-----\n-----END CERTIFICATE-----\n")
+
+        # ensure_ca_cert reports reuse (regenerated=False).
+        monkeypatch.setattr(wizard_mod, "ensure_ca_cert", lambda *a, **kw: (cert, tmp_path / "key.pem", False))
+        monkeypatch.setattr(wizard_mod, "verify_ca_trusted", lambda *a, **kw: (True, "trusted"))
+        monkeypatch.setattr(wizard_mod, "_is_system_proxy_configured", lambda: True)
+        monkeypatch.setattr(wizard_mod, "get_ca_info", lambda: {"common_name": "AI Runtime Monitor - testhost"})
+
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            wizard_mod.run_setup_wizard()
+
+        out = buf.getvalue()
+        assert "Reusing existing certificate" in out
+        assert "Skipping regeneration" in out
+        marker = tmp_path / ".setup_complete"
+        state = json.loads(marker.read_text())
+        assert state["steps"]["generate_ca"] == "reused"
+
+    def test_wizard_step1_force_path_regenerates_via_generate_custom_ca(self, tmp_path, monkeypatch):
+        """Bug 8 coverage: --regenerate-ca → wizard receives force=True,
+        which bypasses ensure_ca_cert and calls generate_custom_ca
+        directly. State records 'ok' (the regenerated branch)."""
+        monkeypatch.setattr("claude_monitoring.security.get_output_dir", lambda: tmp_path)
+        monkeypatch.setattr("claude_monitoring.security.get_db_path", lambda: tmp_path / "monitor.db")
+        monkeypatch.setattr("claude_monitoring.config.get_output_dir", lambda: tmp_path)
+        monkeypatch.setattr("claude_monitoring.config.get_db_path", lambda: tmp_path / "monitor.db")
+        monkeypatch.setattr("claude_monitoring.db.get_output_dir", lambda: tmp_path)
+        monkeypatch.setattr("claude_monitoring.db.get_db_path", lambda: tmp_path / "monitor.db")
+
+        cert = tmp_path / "certs" / "ai-monitor-ca.pem"
+        cert.parent.mkdir(parents=True)
+        cert.write_bytes(b"-----BEGIN CERTIFICATE-----\n-----END CERTIFICATE-----\n")
+
+        gen_calls = {"n": 0}
+
+        def fake_generate(*a, **kw):
+            gen_calls["n"] += 1
+
+        monkeypatch.setattr(wizard_mod, "generate_custom_ca", fake_generate)
+        # ensure_ca_cert should NOT be called on the force path — assert by
+        # making it raise if invoked.
+        monkeypatch.setattr(
+            wizard_mod, "ensure_ca_cert", lambda *a, **kw: (_ for _ in ()).throw(AssertionError("force path must skip ensure_ca_cert"))
+        )
+        monkeypatch.setattr(wizard_mod, "verify_ca_trusted", lambda *a, **kw: (True, "trusted"))
+        monkeypatch.setattr(wizard_mod, "_is_system_proxy_configured", lambda: True)
+        monkeypatch.setattr(wizard_mod, "get_ca_info", lambda: {"common_name": "AI Runtime Monitor - test"})
+
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            wizard_mod.run_setup_wizard(force=True)
+
+        out = buf.getvalue()
+        assert gen_calls["n"] == 1
+        assert "Reusing existing certificate" not in out  # NOT the reuse branch
+        marker = tmp_path / ".setup_complete"
+        state = json.loads(marker.read_text())
+        assert state["steps"]["generate_ca"] == "ok"
+
 
 # ─────────────────────────────────────────────────────────────
 # Section 9: purge
