@@ -96,7 +96,7 @@ src/claude_monitoring/monitor.py:504: empty 'except Exception: pass' (silently s
 src/claude_monitoring/monitor.py:5152: empty 'except Exception: pass' (silently swallowing errors)
 src/claude_monitoring/monitor.py:515: empty 'except Exception: pass' (silently swallowing errors)
 src/claude_monitoring/monitor.py:5198: public function 'main' missing docstring
-src/claude_monitoring/monitor.py:5368: empty 'except Exception: pass' (silently swallowing errors)
+src/claude_monitoring/monitor.py:5370: empty 'except Exception: pass' (silently swallowing errors)
 src/claude_monitoring/monitor.py:543: empty 'except Exception: pass' (silently swallowing errors)
 src/claude_monitoring/monitor.py:565: empty 'except Exception: pass' (silently swallowing errors)
 src/claude_monitoring/monitor.py:584: empty 'except Exception: pass' (silently swallowing errors)
@@ -109,13 +109,13 @@ src/claude_monitoring/security.py:43: public function 'get_cert_dir' missing doc
 src/claude_monitoring/security.py:47: public function 'get_ca_cert_path' missing docstring
 src/claude_monitoring/security.py:51: public function 'get_ca_key_path' missing docstring
 src/claude_monitoring/security.py:60: public function 'get_token_path' missing docstring
-src/claude_monitoring/security.py:633: empty 'except Exception: pass' (silently swallowing errors)
-src/claude_monitoring/security.py:648: public function 'untrust_ca_cert' missing docstring
+src/claude_monitoring/security.py:635: empty 'except Exception: pass' (silently swallowing errors)
 src/claude_monitoring/security.py:64: public function 'get_setup_marker_path' missing docstring
-src/claude_monitoring/security.py:700: empty 'except Exception: pass' (silently swallowing errors)
-src/claude_monitoring/security.py:715: empty 'except Exception: pass' (silently swallowing errors)
-src/claude_monitoring/security.py:738: empty 'except Exception: pass' (silently swallowing errors)
-src/claude_monitoring/security.py:745: empty 'except Exception: pass' (silently swallowing errors)
+src/claude_monitoring/security.py:650: public function 'untrust_ca_cert' missing docstring
+src/claude_monitoring/security.py:702: empty 'except Exception: pass' (silently swallowing errors)
+src/claude_monitoring/security.py:717: empty 'except Exception: pass' (silently swallowing errors)
+src/claude_monitoring/security.py:740: empty 'except Exception: pass' (silently swallowing errors)
+src/claude_monitoring/security.py:747: empty 'except Exception: pass' (silently swallowing errors)
 src/claude_monitoring/status.py:415: empty 'except Exception: pass' (silently swallowing errors)
 src/claude_monitoring/status.py:470: empty 'except Exception: pass' (silently swallowing errors)
 src/claude_monitoring/status.py:494: empty 'except Exception: pass' (silently swallowing errors)
