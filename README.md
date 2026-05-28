@@ -44,7 +44,72 @@ make install   # editable install with dev deps
 make start     # launches dashboard on http://localhost:9081
 ```
 
-> **Troubleshooting:** If `pip install` errors with `externally-managed-environment`, that's Homebrew Python protecting itself — use pipx or a venv as shown above. If `python3` itself isn't found, install Python 3.10+ from [python.org](https://www.python.org/downloads/) or `brew install python@3.12`.
+### What `ai-monitor --setup` prints on first run
+
+On macOS Sequoia (15) and later, expect output like this:
+
+```
+══════════════════════════════════════════════════════════════
+  AI Runtime Monitor — First-Time Setup
+══════════════════════════════════════════════════════════════
+
+  This tool monitors AI coding agents on YOUR machine.
+  All data stays local. Nothing leaves your computer.
+  You control what's monitored and can purge anytime.
+
+[1/5] Ensuring unique monitoring certificate...
+  ✅ Certificate: AI Runtime Monitor - <your-hostname>
+  ✅ Valid for: 1 year
+  ✅ Restricted to: AI domains only (Name Constraints)
+
+[2/5] Trust the monitoring certificate
+  ...
+  Trust the certificate? [Y/n]: y
+
+  macOS requires trust changes to be authorized from your
+  terminal. Run this one command:
+
+    sudo security add-trusted-cert -d -r trustRoot \
+      -k /Library/Keychains/System.keychain \
+      /Users/<you>/claude_watch_output/ca-cert.pem
+
+  Waiting for trust... (press Enter to check now, Ctrl-C to skip; up to 120s)
+```
+
+Paste the sudo command in the **same terminal** the wizard is running in (don't open a new window), enter your macOS password, and within 2-4 seconds the wizard will continue:
+
+```
+  ✅ Certificate trusted. Continuing setup.
+
+[3/5] System proxy
+  ...
+[4/5] Browser extension
+  ...
+[5/5] Dashboard token + permissions
+  ...
+
+  ✅ Setup complete — Vigil is ready
+```
+
+Re-running `ai-monitor --setup` after this is idempotent — Step 1 reports "Reusing existing certificate," Step 2 reports "Certificate already trusted," and the wizard exits 0 quickly without touching state.
+
+### Troubleshooting
+
+**`externally-managed-environment` from `pip install`** — Homebrew Python protects itself per PEP 668. Use `pipx install ai-runtime-monitor` (recommended) or a venv as shown above. Do not use `--break-system-packages`.
+
+**`python3` itself not found** — install Python 3.10+ from [python.org](https://www.python.org/downloads/) or `brew install python@3.12`.
+
+**Setup says "Certificate trust step failed" but you ran the sudo command** — the wizard polls for 120s. If you finished the paste after the window closed, just re-run `ai-monitor --setup` — Step 1 will reuse the existing cert (no rotation), Step 2 will recognize the trust you applied, and Step 3 onward proceeds. (This is the [Bug 8](https://github.com/rajan-cforge/ai-runtime-monitor-enterprise/pull/58) idempotency fix.)
+
+**Setup converges but `ai-monitor --start` still hits `Proxy mode requires the CA to be trusted`** — the sudo command needs all three flags: `-d` (admin domain), `-r trustRoot` (root cert), `-k /Library/Keychains/System.keychain` (target). Without any one, the cert is in the keychain but trust isn't applied. Re-run the command verbatim as the wizard printed it.
+
+**Cert in keychain but trust-settings-export doesn't show it** — usually means the second-stage authorization (`SecTrustSettingsSetTrustSettings`) was denied. This is the [Bug 2](https://github.com/rajan-cforge/ai-runtime-monitor-enterprise/pull/59) failure mode the terminal-sudo fallback works around. The wizard's poll loop is the right path; don't try to apply trust via the macOS Keychain Access GUI (also subject to the same restriction on Sequoia+).
+
+**"Address already in use" on port 9081 or 9080** — another process is using the port. Run `lsof -iTCP:9081 -sTCP:LISTEN` to find it, or start Vigil on a different port: `ai-monitor --start --port 9082`.
+
+**Chrome extension card shows errors** — open the extension's "Errors" panel in `chrome://extensions/`. Most common cause: pointing "Load unpacked" at the parent directory instead of the `browser_extension/` folder itself. The wizard prints the exact path during Step 4.
+
+A full step-by-step verification plan with `What to do` / `What should happen` / `How to verify` for each gate lives in the project notes: `~/Documents/vigil-notes/v02-new-laptop-test-plan.md`.
 
 ## What Vigil monitors
 
