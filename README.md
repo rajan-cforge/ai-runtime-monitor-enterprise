@@ -13,36 +13,23 @@ Vigil is open-source runtime security monitoring for AI coding agents — Claude
 
 > macOS today (Sequoia 15 / 26 supported). Linux is best-effort; Windows planned for v0.3.
 
-The recommended path uses [pipx](https://pipx.pypa.io/), which installs Vigil into its own isolated environment and exposes `ai-monitor` / `claude-watch` on your PATH. This avoids the "externally-managed-environment" error you'll hit running bare `pip install` against Homebrew's Python.
+For v0.2, Vigil installs from source. Same flow for end users, security engineers, and contributors — clone the repo, create a venv, install editable, run setup.
 
 ```bash
-brew install pipx                    # if you don't have it; or: python3 -m pip install --user pipx
-pipx install ai-runtime-monitor
-ai-monitor --setup                   # one-time: generates CA cert, walks trust + extension steps
-ai-monitor --start                   # daemon + dashboard at http://localhost:9081
+git clone https://github.com/rajan-cforge/ai-runtime-monitor-enterprise.git vigil
+cd vigil
+python3.12 -m venv .venv
+source .venv/bin/activate
+pip install -e .
+ai-monitor --setup                  # follow prompts; paste sudo command when shown
+ai-monitor --start --with-proxy     # daemon + proxy + dashboard at http://localhost:9081
 ```
 
 On macOS Sequoia (15) and later, `--setup` will prompt you to paste a single `sudo security add-trusted-cert` command in the same terminal — that's the OS-imposed step for adding a cert to the admin trust store, the same one mitmproxy and Charles ask for. The wizard polls and auto-detects when it's applied.
 
-**Using a venv instead of pipx:**
+> Every new terminal where you want to run `ai-monitor` needs `cd vigil && source .venv/bin/activate` first. A published-package install path (PyPI / pipx) is planned for v0.3 alongside the privileged macOS helper.
 
-```bash
-python3 -m venv ~/.venvs/vigil
-source ~/.venvs/vigil/bin/activate
-pip install ai-runtime-monitor
-ai-monitor --setup
-ai-monitor --start
-```
-
-**From source (for development):**
-
-```bash
-git clone https://github.com/rajan-cforge/ai-runtime-monitor-enterprise
-cd ai-runtime-monitor-enterprise
-python3 -m venv .venv && source .venv/bin/activate
-make install   # editable install with dev deps
-make start     # launches dashboard on http://localhost:9081
-```
+The companion install guide with prerequisites, the full 5-step wizard walkthrough, and an 8-check verification protocol lives at `docs/INSTALL.md` (and in `~/Documents/vigil-notes/new-laptop-setup-guide.md` for ongoing iteration before it lands in the repo).
 
 ### What `ai-monitor --setup` prints on first run
 
@@ -95,7 +82,7 @@ Re-running `ai-monitor --setup` after this is idempotent — Step 1 reports "Reu
 
 ### Troubleshooting
 
-**`externally-managed-environment` from `pip install`** — Homebrew Python protects itself per PEP 668. Use `pipx install ai-runtime-monitor` (recommended) or a venv as shown above. Do not use `--break-system-packages`.
+**`externally-managed-environment` from `pip install -e .`** — you didn't activate the venv. Run `source .venv/bin/activate` (from inside the cloned `vigil/` directory) and re-run `pip install -e .`. Your shell prompt should show `(.venv)` after activation. Do not use `--break-system-packages`.
 
 **`python3` itself not found** — install Python 3.10+ from [python.org](https://www.python.org/downloads/) or `brew install python@3.12`.
 
