@@ -40,8 +40,7 @@ from claude_monitoring.security import (
     get_ca_cert_path,
     get_ca_info,
     get_setup_marker_path,
-    trust_ca_cert,
-    trust_reason_message,
+    trust_ca_cert_with_fallback,
     untrust_ca_cert,
     verify_ca_trusted,
 )
@@ -160,13 +159,15 @@ def run_setup_wizard(force: bool = False) -> bool:
 
     # ── Step 2: Trust the CA ──────────────────────────────────────
     #
-    # The CA trust step is the highest-failure-mode part of setup:
-    # osascript can return exit 0 even when the admin dialog was
-    # cancelled or Touch ID timed out, leaving the cert in the keychain
-    # but without admin trust settings applied. Proxy interception
-    # silently fails in that state. We always call verify_ca_trusted()
-    # after the trust attempt to confirm trust really applied — and
-    # block Step 3 (system proxy) if it didn't.
+    # On macOS Sequoia (15) and later, osascript "with administrator
+    # privileges" cannot complete SecTrustSettingsSetTrustSettings —
+    # the second-stage authorization needs GUI session ownership that
+    # the osascript subprocess lacks. trust_ca_cert_with_fallback
+    # runs osascript first (still works on Monterey/Ventura), then
+    # falls back to a terminal-sudo prompt + verify_ca_trusted poll
+    # for Sequoia+. See docs/design/bug2-osascript-trust.md.
+    import sys as _sys
+
     print()
     already_trusted, _existing_reason = verify_ca_trusted(cert_path)
     if already_trusted:
@@ -181,54 +182,23 @@ def run_setup_wizard(force: bool = False) -> bool:
         print("  - Same approach used by Zscaler and enterprise security tools")
         print("  - Certificate is restricted to AI domains only (X.509 NameConstraints)")
         print()
-        print("  Your data is protected:")
-        print("  - Certificate is unique to this machine")
-        print("  - Private key has owner-only permissions (chmod 600)")
-        print("  - Dashboard requires an authentication token")
-        print("  - You can purge everything anytime: ai-monitor --purge")
-        print()
         if _prompt("Trust the certificate?", default_yes=True):
-            osascript_ok = trust_ca_cert()
-            verified, code = verify_ca_trusted(cert_path)
-            if osascript_ok and verified:
-                print("  ✅ Certificate trusted (verified in admin trust settings)")
+            verified = trust_ca_cert_with_fallback(cert_path, stdin_fallback=_sys.stdin.isatty())
+            if verified:
                 state["steps"]["trust_ca"] = "ok"
             else:
-                # Whether osascript said success or not, the post-check is
-                # what we actually trust. The user's password dialog may
-                # have been cancelled or Touch ID may have failed mid-way.
-                if osascript_ok and not verified:
-                    print("  ❌ Certificate trust step appeared to succeed, but verification failed.")
-                else:
-                    print("  ❌ Certificate trust step failed.")
-                # Map the literal code to a human message via the
-                # discriminated-set mapping; the result is provably from
-                # a literal dict (no subprocess taint flowing through).
-                reason = trust_reason_message(code)
-                print(f"     Reason: {reason}")
+                # Fallback already printed the sudo command and any
+                # timeout / skip message. Record the literal code from
+                # the final verifier state so downstream tooling can
+                # dispatch on it.
+                _, code = verify_ca_trusted(cert_path)
                 print()
                 print("  Vigil's proxy cannot inspect HTTPS traffic without the CA")
-                print("  being trusted in the System keychain. Step 3 (system proxy)")
-                print("  is being skipped because it would have no effect.")
-                print()
-                print("  To complete trust manually, run this command:")
-                print("    sudo security add-trusted-cert -d -r trustRoot \\")
-                print("      -k /Library/Keychains/System.keychain \\")
-                print(f"      {cert_path}")
-                print()
-                print("  Then re-run: ai-monitor --setup")
-                print()
-                print("  Without trust, Vigil will still work for:")
-                print("  - JSONL session capture (Claude Code)")
-                print("  - Browser AI capture (via Chrome extension)")
-                print("  - Process and filesystem monitoring")
-                print("  But NOT for HTTPS traffic from desktop AI apps or CLI tools.")
+                print("  being trusted. Step 3 (system proxy) is being skipped.")
+                print("  Without trust, Vigil still captures JSONL sessions, browser AI,")
+                print("  process activity, and filesystem changes.")
                 state["steps"]["trust_ca"] = "manual_required"
-                # Record the literal code in the marker — it's a stable
-                # identifier (drawn from the TrustVerificationCode set)
-                # that downstream tooling can dispatch on without parsing
-                # human prose.
-                state["trust_ca_reason"] = code if not osascript_ok else (code or "verification_error")
+                state["trust_ca_reason"] = code or "verification_error"
         else:
             print("  ⏭ Skipped — proxy capture limited to CLI tools")
             state["steps"]["trust_ca"] = "skipped"

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
@@ -159,6 +160,210 @@ class TestTrustCACert:
             return_value=_sp.CompletedProcess([], 1, stdout="", stderr="cancelled"),
         ):
             assert security.trust_ca_cert(cert) is False
+
+
+class TestTrustCaCertWithFallback:
+    """Bug 2: two-attempt strategy. osascript first (Touch ID UX on
+    Monterey/Ventura), terminal-sudo fallback with poll-based
+    convergence on Sequoia+ (the common path on modern macOS)."""
+
+    def _cert(self, tmp_path):
+        cert = tmp_path / "ca.pem"
+        cert.write_bytes(b"-----BEGIN CERTIFICATE-----\n-----END CERTIFICATE-----\n")
+        return cert
+
+    def test_returns_true_when_osascript_succeeds_and_trust_verified(self, tmp_path):
+        cert = self._cert(tmp_path)
+        with patch("claude_monitoring.security._run_osascript_trust", return_value=(True, "")):
+            with patch("claude_monitoring.security.verify_ca_trusted", return_value=(True, "trusted")):
+                with patch("claude_monitoring.security._poll_until_trusted") as poll:
+                    assert security.trust_ca_cert_with_fallback(cert) is True
+                    poll.assert_not_called()
+
+    def test_returns_false_when_osascript_fails_and_stdin_fallback_disabled(self, tmp_path):
+        cert = self._cert(tmp_path)
+        with patch(
+            "claude_monitoring.security._run_osascript_trust",
+            return_value=(True, "SecTrustSettingsSetTrustSettings: errSecInteractionNotAllowed"),
+        ):
+            with patch(
+                "claude_monitoring.security.verify_ca_trusted",
+                return_value=(False, "in_keychain_but_not_trusted"),
+            ):
+                with patch("claude_monitoring.security._poll_until_trusted") as poll:
+                    assert security.trust_ca_cert_with_fallback(cert, stdin_fallback=False) is False
+                    poll.assert_not_called()
+
+    def test_polls_verify_until_success_after_sudo_fallback(self, tmp_path, capsys):
+        """Sequoia+ common path: osascript runs but doesn't apply trust,
+        the user runs sudo in their terminal, the wizard's poll loop
+        detects the trust application."""
+        cert = self._cert(tmp_path)
+        with patch(
+            "claude_monitoring.security._run_osascript_trust",
+            return_value=(True, "SecTrustSettingsSetTrustSettings: errSecInteractionNotAllowed"),
+        ):
+            # First verify (post-osascript) returns False; subsequent
+            # verifies in the poll loop return True on the first tick.
+            verify_results = iter([(False, "in_keychain_but_not_trusted"), (True, "trusted")])
+            with patch(
+                "claude_monitoring.security.verify_ca_trusted", side_effect=lambda *_a, **_kw: next(verify_results)
+            ):
+                # Mock the poll's select() and sleep so the test doesn't actually wait.
+                with patch("claude_monitoring.security.select.select", return_value=([], [], [])):
+                    with patch("claude_monitoring.security.time.sleep"):
+                        assert security.trust_ca_cert_with_fallback(cert, stdin_fallback=True) is True
+        out = capsys.readouterr().out
+        assert "sudo security add-trusted-cert" in out
+        assert "Waiting for trust" in out
+        assert "Certificate trusted" in out
+
+    def test_poll_times_out_when_user_never_runs_sudo(self, tmp_path, capsys):
+        """If max_wait_seconds elapses without a successful verify, the
+        function returns False and emits the timeout message."""
+        cert = self._cert(tmp_path)
+        with patch("claude_monitoring.security._run_osascript_trust", return_value=(False, "user cancelled")):
+            with patch(
+                "claude_monitoring.security.verify_ca_trusted",
+                return_value=(False, "in_keychain_but_not_trusted"),
+            ):
+                with patch("claude_monitoring.security.select.select", return_value=([], [], [])):
+                    # Fast-forward monotonic clock past the deadline after one tick.
+                    monotonic_values = iter([0.0, 0.0, 1000.0, 1000.0])
+                    with patch(
+                        "claude_monitoring.security.time.monotonic",
+                        side_effect=lambda: next(monotonic_values),
+                    ):
+                        assert (
+                            security.trust_ca_cert_with_fallback(
+                                cert, stdin_fallback=True, poll_seconds=0.01, max_wait_seconds=0.5
+                            )
+                            is False
+                        )
+        out = capsys.readouterr().out
+        assert "Timed out" in out
+
+    def test_keyboard_interrupt_during_poll_returns_false(self, tmp_path, capsys):
+        cert = self._cert(tmp_path)
+        with patch("claude_monitoring.security._run_osascript_trust", return_value=(False, "")):
+            with patch(
+                "claude_monitoring.security.verify_ca_trusted",
+                return_value=(False, "in_keychain_but_not_trusted"),
+            ):
+                with patch("claude_monitoring.security.select.select", side_effect=KeyboardInterrupt):
+                    assert security.trust_ca_cert_with_fallback(cert, stdin_fallback=True, max_wait_seconds=10) is False
+        assert "Skipped" in capsys.readouterr().out
+
+    def test_fallback_prints_exact_sudo_command_with_cert_path(self, tmp_path, capsys):
+        cert = self._cert(tmp_path)
+        with patch("claude_monitoring.security._run_osascript_trust", return_value=(False, "")):
+            with patch(
+                "claude_monitoring.security.verify_ca_trusted",
+                return_value=(False, "in_keychain_but_not_trusted"),
+            ):
+                # Force the poll loop to bail quickly via KeyboardInterrupt
+                # so we can inspect the printed command without waiting.
+                with patch("claude_monitoring.security.select.select", side_effect=KeyboardInterrupt):
+                    security.trust_ca_cert_with_fallback(cert, stdin_fallback=True, max_wait_seconds=1)
+        out = capsys.readouterr().out
+        assert "sudo security add-trusted-cert -d -r trustRoot" in out
+        assert "-k /Library/Keychains/System.keychain" in out
+        assert str(cert) in out
+
+    def test_osascript_stderr_is_logged(self, tmp_path, caplog):
+        """The SecTrustSettingsSetTrustSettings error must surface in logs."""
+        cert = self._cert(tmp_path)
+        import logging
+
+        stderr_msg = (
+            "SecTrustSettingsSetTrustSettings: The authorization was denied since no user interaction was possible."
+        )
+        with patch("claude_monitoring.security._run_osascript_trust", return_value=(True, stderr_msg)):
+            with patch("claude_monitoring.security.verify_ca_trusted", return_value=(True, "trusted")):
+                with caplog.at_level(logging.WARNING, logger="claude_monitoring.security"):
+                    security.trust_ca_cert_with_fallback(cert, stdin_fallback=False)
+        assert any("SecTrustSettingsSetTrustSettings" in r.message for r in caplog.records)
+
+    def test_eof_on_stdin_does_not_spin_loop(self, tmp_path):
+        """Reviewer finding 1: when stdin closes mid-poll, select() returns
+        it as ready forever and readline() returns "". The poll loop must
+        notice the EOF and switch to plain sleep so it doesn't call
+        verify_ca_trusted at maximum speed for the rest of the budget."""
+        cert = self._cert(tmp_path)
+        verify_call_count = {"n": 0}
+
+        def counting_verify(*a, **kw):
+            verify_call_count["n"] += 1
+            return (False, "in_keychain_but_not_trusted")
+
+        with patch("claude_monitoring.security._run_osascript_trust", return_value=(False, "")):
+            with patch("claude_monitoring.security.verify_ca_trusted", side_effect=counting_verify):
+                with patch("claude_monitoring.security.select.select", return_value=([sys.stdin], [], [])):
+                    with patch("claude_monitoring.security.sys.stdin.readline", return_value=""):
+                        # max_wait_seconds=0.05, poll_seconds=0.01 — without
+                        # the EOF guard, this loop would call verify_ca_trusted
+                        # dozens of times. With the guard, it sleeps poll_seconds
+                        # between verifies → ≤6 calls (5 ticks + 1 final).
+                        with patch("claude_monitoring.security.time.sleep") as sleep_mock:
+                            result = security.trust_ca_cert_with_fallback(
+                                cert,
+                                stdin_fallback=True,
+                                poll_seconds=0.01,
+                                max_wait_seconds=0.05,
+                            )
+        assert result is False
+        # The EOF-fallback sleep should be called at least once; that
+        # proves the loop took the no-spin path after detecting EOF.
+        assert sleep_mock.call_count >= 1, (
+            f"Expected at least one time.sleep call after EOF detection, got {sleep_mock.call_count}"
+        )
+
+    def test_fallback_does_not_call_generate_custom_ca(self, tmp_path, capsys):
+        """Regression guard: the fallback path must never invoke
+        generate_custom_ca. If a future refactor adds that call inside
+        trust_ca_cert_with_fallback, this test catches it. (Reviewer
+        finding 5: this test guards against future mistakes; the
+        present implementation has no regeneration path here.)"""
+        import hashlib
+
+        from claude_monitoring import constants
+
+        cert_path = tmp_path / "ca.pem"
+        key_path = tmp_path / "ca.key"
+        security.generate_custom_ca(cert_path=cert_path, key_path=key_path, domains=list(constants.AI_PROXY_DOMAINS))
+        sha_before = hashlib.sha256(cert_path.read_bytes()).hexdigest()
+
+        with patch("claude_monitoring.security._run_osascript_trust", return_value=(False, "")):
+            with patch(
+                "claude_monitoring.security.verify_ca_trusted",
+                return_value=(False, "in_keychain_but_not_trusted"),
+            ):
+                with patch("claude_monitoring.security.select.select", side_effect=KeyboardInterrupt):
+                    security.trust_ca_cert_with_fallback(cert_path, stdin_fallback=True, max_wait_seconds=1)
+
+        sha_after = hashlib.sha256(cert_path.read_bytes()).hexdigest()
+        assert sha_before == sha_after, "Bug 8/Bug 2 coordination: fallback path rotated the cert"
+        assert str(cert_path) in capsys.readouterr().out
+
+    def test_enter_keypress_triggers_immediate_recheck(self, tmp_path):
+        """Pressing Enter should not require waiting the full poll
+        tick — the wizard re-verifies as soon as select() returns."""
+        cert = self._cert(tmp_path)
+        # First verify (post-osascript) → False. Poll iteration 1:
+        # select() reports stdin ready (Enter), then verify returns True.
+        verify_results = iter([(False, "in_keychain_but_not_trusted"), (True, "trusted")])
+        with patch("claude_monitoring.security._run_osascript_trust", return_value=(False, "")):
+            with patch(
+                "claude_monitoring.security.verify_ca_trusted", side_effect=lambda *_a, **_kw: next(verify_results)
+            ):
+                with patch("claude_monitoring.security.select.select", return_value=([sys.stdin], [], [])):
+                    with patch("claude_monitoring.security.sys.stdin.readline", return_value="\n"):
+                        assert (
+                            security.trust_ca_cert_with_fallback(
+                                cert, stdin_fallback=True, poll_seconds=10, max_wait_seconds=120
+                            )
+                            is True
+                        )
 
 
 # ─────────────────────────────────────────────────────────────
