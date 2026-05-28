@@ -1,8 +1,28 @@
 # Changelog
 
-## [0.2.0] — Unreleased
+## [0.2.0] — 2026-05-28
+
+Verified end-to-end on two machines (primary + new laptop) before release. Capture matrix confirmed working for: Claude Code JSONL sessions, browser AI on claude.ai / chatgpt.com / gemini.google.com via the Chrome extension, full HTTPS proxy interception for routed CLI tools, process / filesystem / network observation.
+
+### Fixed (post-audit launch blockers)
+
+- **Bug 8 — wizard regenerates CA on every `--setup` invocation (PR #58).** `--setup` is now idempotent. The wizard reuses an existing valid cert (parseable PEM, NameConstraints match current `AI_PROXY_DOMAINS`, not expired within a 30-day buffer) instead of overwriting it. Closes the "trust applied to cert A, --setup rotates to cert B, verifier reports B as untrusted" loop that prevented the documented recovery path from converging. New `--regenerate-ca` flag for the explicit force-regen case.
+- **Bug 2 — osascript trust silently fails on macOS Sequoia+ (PR #59).** Root cause: `osascript "do shell script ... with administrator privileges"` runs root but lacks GUI session ownership; `SecTrustSettingsSetTrustSettings` returns `errSecInteractionNotAllowed` and the `security` binary exits 0 anyway. Apple DTS-confirmed; the `authorizationdb` workaround is SIP-protected dead on Sequoia. Fix: `trust_ca_cert_with_fallback` orchestrates a two-attempt strategy — osascript first (still works on Monterey/Ventura), then a terminal-sudo fallback that prints the exact `sudo security add-trusted-cert` command and polls `verify_ca_trusted` every 2s for up to 120s. Enter triggers an immediate recheck; Ctrl-C skips. Non-tty / CI returns False immediately without hanging on input.
+- **PR #51 verified on two machines.** `AI_PROXY_DOMAINS = AI_API_DOMAINS` invariant confirmed: claude.ai / gemini.google.com / chatgpt.com all load with their real upstream certs (Let's Encrypt / Google Trust Services), not Vigil's CA. Selective SSL inspection working as designed; browser UI sites captured by the Chrome extension exclusively.
+
+### Documentation accuracy (post-audit)
+
+- **README install model switched to clone + venv + `pip install -e .` (PR #60).** No PyPI / pipx path for v0.2 — same flow for end users, security engineers, and contributors. Published-package install scoped to v0.3 alongside the privileged macOS helper.
+- **README capability claims audited and reframed (PR #60).** Cost claim narrowed: per-message cost surfaces only for Claude Code sessions (read from the cost field Claude Code writes into its own JSONL); per-call dollar cost for non-Claude-Code traffic is v0.3 roadmap. Browser AI claim narrowed: verified end-to-end for claude.ai / chatgpt.com / gemini.google.com; coded support for perplexity.ai / copilot.microsoft.com / deepseek.com with verification in progress. "Zero configuration" softened to "set up once, captures continuously." `claude-watch` removed from the main README's flag table; full reference moved to new `docs/CLAUDE-WATCH.md` with explicit "when NOT to use claude-watch" warnings.
+- **Dashboard cost card relabeled (PR #62).** "Est. Total Cost" → "Claude Code Spend / From session logs" — matches the README's honest cost framing. Same numeric source, more accurate label.
+
+### Fixed (dashboard auth)
+
+- **Export functions returning 401 (PR #61).** Root cause: the dashboard monkey-patches `window.fetch` to auto-attach the session token, but four call sites used `window.open` / `window.location.href` / `<a href>` — full-page navigations that bypass the fetch interceptor. Affected: CSV/JSON exports, Weekly Report HTML, Weekly Report Markdown, SBOM export. Fix: new `window.withAuthToken(url)` helper inside the same IIFE; all four call sites wrap their URL with it before navigating.
 
 ### Brand
+
+### Brand renamed
 
 - Renamed product from "AI Runtime Monitor" to **Vigil**. Package name (`ai-runtime-monitor`) and module name (`claude_monitoring`) preserved for v0.2.0 — module rename deferred to v0.3.
 
