@@ -421,16 +421,29 @@ def _poll_until_trusted(cert_path: Path, poll_seconds: float, max_wait_seconds: 
     Returns True on trust converged, False on timeout / skip / interrupt.
     """
     deadline = time.monotonic() + max_wait_seconds
+    stdin_at_eof = False
     while time.monotonic() < deadline:
         try:
-            # Wait up to poll_seconds for an Enter keypress; either way,
-            # re-verify once the wait ends. Using select() on stdin lets
-            # an early Enter shortcut the sleep.
-            ready, _, _ = select.select([sys.stdin], [], [], poll_seconds)
-            if ready:
-                # Drain the line so subsequent prompts (in other steps)
-                # don't see leftover input.
-                sys.stdin.readline()
+            if stdin_at_eof:
+                # stdin is closed / EOF — select() would return it as
+                # ready forever, causing a CPU-spin loop calling
+                # verify_ca_trusted at maximum speed. Plain sleep
+                # preserves the poll cadence (reviewer finding 1).
+                time.sleep(poll_seconds)
+            else:
+                # Wait up to poll_seconds for an Enter keypress; either
+                # way, re-verify once the wait ends. select() lets an
+                # early Enter shortcut the sleep.
+                ready, _, _ = select.select([sys.stdin], [], [], poll_seconds)
+                if ready:
+                    try:
+                        line = sys.stdin.readline()
+                    except OSError:
+                        line = ""
+                    if not line:
+                        # Empty string from readline() == EOF. From here
+                        # on, fall back to plain sleep so we don't spin.
+                        stdin_at_eof = True
         except KeyboardInterrupt:
             print("\n  ⏭ Skipped — proxy capture limited to non-HTTPS sources")
             return False

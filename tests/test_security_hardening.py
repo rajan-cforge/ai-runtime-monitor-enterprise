@@ -289,11 +289,46 @@ class TestTrustCaCertWithFallback:
                     security.trust_ca_cert_with_fallback(cert, stdin_fallback=False)
         assert any("SecTrustSettingsSetTrustSettings" in r.message for r in caplog.records)
 
-    def test_fallback_references_ensure_ca_cert_path_no_regeneration(self, tmp_path, capsys):
-        """Bug 8 + Bug 2 coordination: the fallback must reference the
-        cert that ensure_ca_cert produced and must NOT regenerate it
-        mid-flow. Regression test against re-introducing the cert
-        rotation that today's verification report exposed."""
+    def test_eof_on_stdin_does_not_spin_loop(self, tmp_path):
+        """Reviewer finding 1: when stdin closes mid-poll, select() returns
+        it as ready forever and readline() returns "". The poll loop must
+        notice the EOF and switch to plain sleep so it doesn't call
+        verify_ca_trusted at maximum speed for the rest of the budget."""
+        cert = self._cert(tmp_path)
+        verify_call_count = {"n": 0}
+
+        def counting_verify(*a, **kw):
+            verify_call_count["n"] += 1
+            return (False, "in_keychain_but_not_trusted")
+
+        with patch("claude_monitoring.security._run_osascript_trust", return_value=(False, "")):
+            with patch("claude_monitoring.security.verify_ca_trusted", side_effect=counting_verify):
+                with patch("claude_monitoring.security.select.select", return_value=([sys.stdin], [], [])):
+                    with patch("claude_monitoring.security.sys.stdin.readline", return_value=""):
+                        # max_wait_seconds=0.05, poll_seconds=0.01 — without
+                        # the EOF guard, this loop would call verify_ca_trusted
+                        # dozens of times. With the guard, it sleeps poll_seconds
+                        # between verifies → ≤6 calls (5 ticks + 1 final).
+                        with patch("claude_monitoring.security.time.sleep") as sleep_mock:
+                            result = security.trust_ca_cert_with_fallback(
+                                cert,
+                                stdin_fallback=True,
+                                poll_seconds=0.01,
+                                max_wait_seconds=0.05,
+                            )
+        assert result is False
+        # The EOF-fallback sleep should be called at least once; that
+        # proves the loop took the no-spin path after detecting EOF.
+        assert sleep_mock.call_count >= 1, (
+            f"Expected at least one time.sleep call after EOF detection, got {sleep_mock.call_count}"
+        )
+
+    def test_fallback_does_not_call_generate_custom_ca(self, tmp_path, capsys):
+        """Regression guard: the fallback path must never invoke
+        generate_custom_ca. If a future refactor adds that call inside
+        trust_ca_cert_with_fallback, this test catches it. (Reviewer
+        finding 5: this test guards against future mistakes; the
+        present implementation has no regeneration path here.)"""
         import hashlib
 
         from claude_monitoring import constants
