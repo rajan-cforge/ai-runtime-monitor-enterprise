@@ -644,7 +644,9 @@ class TestSetupWizard:
         # ensure_ca_cert should NOT be called on the force path — assert by
         # making it raise if invoked.
         monkeypatch.setattr(
-            wizard_mod, "ensure_ca_cert", lambda *a, **kw: (_ for _ in ()).throw(AssertionError("force path must skip ensure_ca_cert"))
+            wizard_mod,
+            "ensure_ca_cert",
+            lambda *a, **kw: (_ for _ in ()).throw(AssertionError("force path must skip ensure_ca_cert")),
         )
         monkeypatch.setattr(wizard_mod, "verify_ca_trusted", lambda *a, **kw: (True, "trusted"))
         monkeypatch.setattr(wizard_mod, "_is_system_proxy_configured", lambda: True)

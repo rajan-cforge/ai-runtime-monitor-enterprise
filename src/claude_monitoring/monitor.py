@@ -5217,7 +5217,9 @@ def main():
         action="store_true",
         help="Start the daemon without the HTTPS proxy (JSONL + extension capture only)",
     )
-    parser.add_argument("--enable-system-proxy", action="store_true", help="Enable macOS system proxy (AI domains only)")
+    parser.add_argument(
+        "--enable-system-proxy", action="store_true", help="Enable macOS system proxy (AI domains only)"
+    )
     parser.add_argument("--disable-system-proxy", action="store_true", help="Disable macOS system proxy")
     parser.add_argument("--status", action="store_true", help="Show runtime status (monitor, proxy, cert, security)")
     parser.add_argument("--status-json", action="store_true", help="Show runtime status as JSON (for scripts)")

@@ -222,9 +222,7 @@ class TestTrustCaCertWithFallback:
         """If max_wait_seconds elapses without a successful verify, the
         function returns False and emits the timeout message."""
         cert = self._cert(tmp_path)
-        with patch(
-            "claude_monitoring.security._run_osascript_trust", return_value=(False, "user cancelled")
-        ):
+        with patch("claude_monitoring.security._run_osascript_trust", return_value=(False, "user cancelled")):
             with patch(
                 "claude_monitoring.security.verify_ca_trusted",
                 return_value=(False, "in_keychain_but_not_trusted"),
@@ -236,32 +234,29 @@ class TestTrustCaCertWithFallback:
                         "claude_monitoring.security.time.monotonic",
                         side_effect=lambda: next(monotonic_values),
                     ):
-                        assert security.trust_ca_cert_with_fallback(
-                            cert, stdin_fallback=True, poll_seconds=0.01, max_wait_seconds=0.5
-                        ) is False
+                        assert (
+                            security.trust_ca_cert_with_fallback(
+                                cert, stdin_fallback=True, poll_seconds=0.01, max_wait_seconds=0.5
+                            )
+                            is False
+                        )
         out = capsys.readouterr().out
         assert "Timed out" in out
 
     def test_keyboard_interrupt_during_poll_returns_false(self, tmp_path, capsys):
         cert = self._cert(tmp_path)
-        with patch(
-            "claude_monitoring.security._run_osascript_trust", return_value=(False, "")
-        ):
+        with patch("claude_monitoring.security._run_osascript_trust", return_value=(False, "")):
             with patch(
                 "claude_monitoring.security.verify_ca_trusted",
                 return_value=(False, "in_keychain_but_not_trusted"),
             ):
                 with patch("claude_monitoring.security.select.select", side_effect=KeyboardInterrupt):
-                    assert security.trust_ca_cert_with_fallback(
-                        cert, stdin_fallback=True, max_wait_seconds=10
-                    ) is False
+                    assert security.trust_ca_cert_with_fallback(cert, stdin_fallback=True, max_wait_seconds=10) is False
         assert "Skipped" in capsys.readouterr().out
 
     def test_fallback_prints_exact_sudo_command_with_cert_path(self, tmp_path, capsys):
         cert = self._cert(tmp_path)
-        with patch(
-            "claude_monitoring.security._run_osascript_trust", return_value=(False, "")
-        ):
+        with patch("claude_monitoring.security._run_osascript_trust", return_value=(False, "")):
             with patch(
                 "claude_monitoring.security.verify_ca_trusted",
                 return_value=(False, "in_keychain_but_not_trusted"),
@@ -269,9 +264,7 @@ class TestTrustCaCertWithFallback:
                 # Force the poll loop to bail quickly via KeyboardInterrupt
                 # so we can inspect the printed command without waiting.
                 with patch("claude_monitoring.security.select.select", side_effect=KeyboardInterrupt):
-                    security.trust_ca_cert_with_fallback(
-                        cert, stdin_fallback=True, max_wait_seconds=1
-                    )
+                    security.trust_ca_cert_with_fallback(cert, stdin_fallback=True, max_wait_seconds=1)
         out = capsys.readouterr().out
         assert "sudo security add-trusted-cert -d -r trustRoot" in out
         assert "-k /Library/Keychains/System.keychain" in out
@@ -282,7 +275,9 @@ class TestTrustCaCertWithFallback:
         cert = self._cert(tmp_path)
         import logging
 
-        stderr_msg = "SecTrustSettingsSetTrustSettings: The authorization was denied since no user interaction was possible."
+        stderr_msg = (
+            "SecTrustSettingsSetTrustSettings: The authorization was denied since no user interaction was possible."
+        )
         with patch("claude_monitoring.security._run_osascript_trust", return_value=(True, stderr_msg)):
             with patch("claude_monitoring.security.verify_ca_trusted", return_value=(True, "trusted")):
                 with caplog.at_level(logging.WARNING, logger="claude_monitoring.security"):
@@ -335,9 +330,7 @@ class TestTrustCaCertWithFallback:
 
         cert_path = tmp_path / "ca.pem"
         key_path = tmp_path / "ca.key"
-        security.generate_custom_ca(
-            cert_path=cert_path, key_path=key_path, domains=list(constants.AI_PROXY_DOMAINS)
-        )
+        security.generate_custom_ca(cert_path=cert_path, key_path=key_path, domains=list(constants.AI_PROXY_DOMAINS))
         sha_before = hashlib.sha256(cert_path.read_bytes()).hexdigest()
 
         with patch("claude_monitoring.security._run_osascript_trust", return_value=(False, "")):
@@ -346,9 +339,7 @@ class TestTrustCaCertWithFallback:
                 return_value=(False, "in_keychain_but_not_trusted"),
             ):
                 with patch("claude_monitoring.security.select.select", side_effect=KeyboardInterrupt):
-                    security.trust_ca_cert_with_fallback(
-                        cert_path, stdin_fallback=True, max_wait_seconds=1
-                    )
+                    security.trust_ca_cert_with_fallback(cert_path, stdin_fallback=True, max_wait_seconds=1)
 
         sha_after = hashlib.sha256(cert_path.read_bytes()).hexdigest()
         assert sha_before == sha_after, "Bug 8/Bug 2 coordination: fallback path rotated the cert"
@@ -366,12 +357,13 @@ class TestTrustCaCertWithFallback:
                 "claude_monitoring.security.verify_ca_trusted", side_effect=lambda *_a, **_kw: next(verify_results)
             ):
                 with patch("claude_monitoring.security.select.select", return_value=([sys.stdin], [], [])):
-                    with patch(
-                        "claude_monitoring.security.sys.stdin.readline", return_value="\n"
-                    ):
-                        assert security.trust_ca_cert_with_fallback(
-                            cert, stdin_fallback=True, poll_seconds=10, max_wait_seconds=120
-                        ) is True
+                    with patch("claude_monitoring.security.sys.stdin.readline", return_value="\n"):
+                        assert (
+                            security.trust_ca_cert_with_fallback(
+                                cert, stdin_fallback=True, poll_seconds=10, max_wait_seconds=120
+                            )
+                            is True
+                        )
 
 
 # ─────────────────────────────────────────────────────────────

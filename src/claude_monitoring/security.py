@@ -226,8 +226,10 @@ def ensure_ca_cert(
     key_path = key_path or get_ca_key_path()
     expected_domains = list(domains) if domains is not None else list(AI_PROXY_DOMAINS)
 
-    if cert_path.exists() and key_path.exists() and _existing_cert_is_reusable(
-        cert_path, expected_domains, min_remaining_days
+    if (
+        cert_path.exists()
+        and key_path.exists()
+        and _existing_cert_is_reusable(cert_path, expected_domains, min_remaining_days)
     ):
         return cert_path, key_path, False
     generate_custom_ca(cert_path=cert_path, key_path=key_path, domains=expected_domains)
