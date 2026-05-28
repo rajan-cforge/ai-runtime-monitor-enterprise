@@ -342,9 +342,7 @@ class TestEnsureCaCert:
             )
         )
 
-        _, _, regenerated = ensure_ca_cert(
-            cert_path=cert_path, key_path=key_path, domains=["api.anthropic.com"]
-        )
+        _, _, regenerated = ensure_ca_cert(cert_path=cert_path, key_path=key_path, domains=["api.anthropic.com"])
         assert regenerated is True
 
 
