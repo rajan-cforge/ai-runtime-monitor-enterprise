@@ -100,13 +100,13 @@ A full step-by-step verification plan with `What to do` / `What should happen` /
 
 ## What Vigil monitors
 
-**Four layers of visibility, zero configuration:**
+**Four layers of visibility — set up once, captures continuously:**
 
 | Layer | What it captures | How |
 |-------|------------------|-----|
 | **AI API traffic** | Every prompt, response, token count, and tool call from agents that route through the HTTPS proxy | mitmproxy addon with selective SSL inspection — only AI API hostnames (X.509 NameConstraints) |
 | **CLI agent sessions** | Full Claude Code conversation transcripts including system prompts, file reads, bash commands, and tool use | JSONL transcript tailing under `~/.claude/projects/` |
-| **Browser AI** | ChatGPT, Gemini, Claude Web, Copilot, Perplexity, DeepSeek conversations | Chrome extension (content script, isolated world) + Chrome history fallback |
+| **Browser AI** | claude.ai, chatgpt.com, gemini.google.com — full conversation capture (verified end-to-end during v0.2 launch testing on two machines). Coded support for perplexity.ai, copilot.microsoft.com, deepseek.com — end-to-end verification in progress | Chrome extension (content script, isolated world) + Chrome history fallback |
 | **Process / filesystem / network** | Agent process lifecycle, files read or written, outbound connections, CPU and memory | `psutil` + `watchdog` / FSEvents |
 
 The capture is selective: the proxy's `--allow-hosts` regex only intercepts AI API endpoints. Banking, email, and unrelated traffic flow through untouched.
@@ -143,7 +143,7 @@ Both approaches are complementary. Static scanners catch known-bad versions befo
 - **Security engineers** monitoring AI tool usage across an engineering org — what agents are being used, what they're capturing, what credentials might be exposed
 - **Developers** running Claude Code, Cursor, or similar agents on their own machine who want a local audit log of what the agent actually did, including which files it read and which APIs it called
 - **Incident responders** investigating a suspected supply chain attack via AI coding agents — the local SQLite store has the full conversation, the API traffic, and the install commands the agent issued
-- **Anyone curious where their Anthropic / OpenAI spend is going** — token-accurate cost tracking with subscription plan detection and burn-rate forecasting
+- **Claude Code users** who want to see what their session actually cost — Vigil surfaces the per-message cost that Claude Code writes into its own JSONL session logs (the cost field is computed and recorded client-side by Claude Code; Vigil reads and aggregates). Token counts captured for every intercepted call across all providers; per-call dollar cost for non-Claude-Code traffic (OpenAI, Anthropic API direct, Cohere, etc.) is on the v0.3 roadmap.
 
 ## Dashboard
 
@@ -151,7 +151,7 @@ The dashboard at `http://localhost:9081` is bearer-token authenticated and bound
 
 - **Session Explorer** — full conversation timeline replay with Deep Dive cockpit (turn rail, API inspector, context gauge)
 - **Live Feed** — real-time stream of all agent events
-- **Analytics** — token usage charts, cost trends, tool frequency, model distribution, burn rate
+- **Analytics** — token usage charts across all providers; Claude Code spend (from the cost field Claude Code writes into its JSONL session logs); tool frequency, model distribution
 - **System** — process table, network connections, file activity
 - **Alerts** — sensitive data alerts with pattern filtering and session-level triage
 - **Activity Timeline** — unified chronological feed across all AI sources
@@ -163,7 +163,7 @@ export HTTPS_PROXY=http://127.0.0.1:9080
 claude                 # API calls now appear in the API Traffic tab
 ```
 
-**Per-agent helper:**
+**Per-agent helper** (uses the lower-level `claude-watch` CLI — see [docs/CLAUDE-WATCH.md](docs/CLAUDE-WATCH.md) for the full flag reference; most users only need the `--configure` form below):
 
 ```bash
 claude-watch --configure claude_code   # Adds HTTPS_PROXY to your shell profile
@@ -205,18 +205,7 @@ ai-monitor --init-config    # Creates ~/.config/ai-runtime-monitor/config.toml
 | `--init-config` | — | Generate default config.toml |
 | `--version` | — | Print installed version |
 
-**claude-watch flags:**
-
-| Option | Default | Description |
-|--------|---------|-------------|
-| `--setup` | — | First-time: install mitmproxy, trust cert |
-| `--start` | — | Start proxy interceptor |
-| `--verify` | — | Health-check proxy setup |
-| `--configure <agent>` | — | Configure HTTPS_PROXY for an agent |
-| `--unconfigure` | — | Remove proxy config from shell profiles |
-| `--analyze` | — | Terminal analysis of latest session |
-| `--plot` | — | Generate PNG dashboard charts |
-| `--dashboard` | — | Launch standalone web dashboard |
+**`claude-watch` is a lower-level CLI** for advanced use (proxy-only mode without the dashboard daemon, per-agent shell profile configuration, ad-hoc debugging). Most users never need it directly — `ai-monitor --setup` and `ai-monitor --start --with-proxy` handle the full install + capture flow. Full flag reference: [docs/CLAUDE-WATCH.md](docs/CLAUDE-WATCH.md).
 
 Output directory: `~/claude_watch_output/`
 
