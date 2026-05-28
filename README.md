@@ -106,7 +106,7 @@ A full step-by-step verification plan with `What to do` / `What should happen` /
 |-------|------------------|-----|
 | **AI API traffic** | Every prompt, response, token count, and tool call from agents that route through the HTTPS proxy | mitmproxy addon with selective SSL inspection — only AI API hostnames (X.509 NameConstraints) |
 | **CLI agent sessions** | Full Claude Code conversation transcripts including system prompts, file reads, bash commands, and tool use | JSONL transcript tailing under `~/.claude/projects/` |
-| **Browser AI** | claude.ai, chatgpt.com, gemini.google.com — full conversation capture (verified end-to-end during v0.2 launch testing on two machines). Coded support for perplexity.ai, copilot.microsoft.com, deepseek.com — end-to-end verification in progress | Chrome extension (content script, isolated world) + Chrome history fallback |
+| **Browser AI** | Claude Web (claude.ai), ChatGPT (chatgpt.com), Gemini (gemini.google.com) conversations — verified end-to-end in v0.2. Perplexity, Copilot, and DeepSeek have coded support; verification in progress. | Chrome extension (content script, isolated world) + Chrome history fallback |
 | **Process / filesystem / network** | Agent process lifecycle, files read or written, outbound connections, CPU and memory | `psutil` + `watchdog` / FSEvents |
 
 The capture is selective: the proxy's `--allow-hosts` regex only intercepts AI API endpoints. Banking, email, and unrelated traffic flow through untouched.
