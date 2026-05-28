@@ -18,16 +18,22 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import logging
 import os
 import secrets
+import select
 import shlex
 import socket
 import subprocess
+import sys
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Literal
 
 from claude_monitoring.config import get_db_path, get_output_dir
+
+logger = logging.getLogger(__name__)
 
 # ─────────────────────────────────────────────────────────────
 # Path helpers
@@ -292,20 +298,21 @@ def get_ca_info(cert_path: Path | None = None) -> dict | None:
         return None
 
 
-def trust_ca_cert(cert_path: Path | None = None) -> bool:
-    """Prompt for admin password and add the CA to the system keychain.
+def _run_osascript_trust(cert_path: Path) -> tuple[bool, str]:
+    """Run the osascript-driven `security add-trusted-cert` invocation.
 
-    Uses osascript for a native macOS password dialog (Touch ID supported)
-    rather than a Python subprocess + sudo.
+    Returns ``(returncode_ok, stderr_text)`` so the caller can both
+    surface the failure mode and log the stderr message. osascript's
+    own returncode reflects whether the script ran (almost always 0);
+    the inner ``security`` exit status is what matters — but the
+    `security` binary often exits 0 even when
+    ``SecTrustSettingsSetTrustSettings`` returns
+    ``errSecInteractionNotAllowed``. So ``returncode_ok`` is necessary
+    but not sufficient; the caller must verify with
+    ``verify_ca_trusted`` afterward.
     """
-    cert_path = cert_path or get_ca_cert_path()
     if not cert_path.exists():
-        return False
-    # The `do shell script` payload is a POSIX-shell-evaluated string;
-    # shlex.quote keeps paths with spaces / shell metacharacters from
-    # breaking the invocation. cert_path is config-derived (not user
-    # input) so injection isn't the threat — silent misparse of a home
-    # directory containing a space is.
+        return False, "cert file does not exist"
     quoted_cert = shlex.quote(str(cert_path))
     script = (
         f'do shell script "security add-trusted-cert -d -r trustRoot '
@@ -319,9 +326,129 @@ def trust_ca_cert(cert_path: Path | None = None) -> bool:
             text=True,
             timeout=60,
         )
-        return result.returncode == 0
-    except Exception:
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        return False, f"osascript invocation error: {exc}"
+    return result.returncode == 0, result.stderr or ""
+
+
+def trust_ca_cert(cert_path: Path | None = None) -> bool:
+    """Run the osascript trust step. Returns True iff osascript itself exited 0.
+
+    This does NOT guarantee admin trust was applied — on Sequoia+ the
+    inner ``security`` binary commonly exits 0 even when
+    ``SecTrustSettingsSetTrustSettings`` is denied. Callers must verify
+    via ``verify_ca_trusted`` afterward. For a complete trust-with-
+    convergence flow that handles the Sequoia failure mode, use
+    ``trust_ca_cert_with_fallback``.
+    """
+    cert_path = cert_path or get_ca_cert_path()
+    rc_ok, stderr_text = _run_osascript_trust(cert_path)
+    if stderr_text:
+        logger.warning("osascript trust stderr: %s", stderr_text.strip())
+    return rc_ok
+
+
+def trust_ca_cert_with_fallback(
+    cert_path: Path | None = None,
+    *,
+    stdin_fallback: bool | None = None,
+    poll_seconds: float = 2.0,
+    max_wait_seconds: float = 120.0,
+) -> bool:
+    """Apply CA trust with a two-attempt strategy that converges on Sequoia+.
+
+    Attempt 1: osascript "with administrator privileges". This works on
+    macOS where Touch ID can satisfy the SecTrustSettingsSetTrustSettings
+    user-interaction check (Monterey/Ventura). On Sequoia (15) and later,
+    the second-stage authorization fails silently because osascript's
+    subprocess lacks GUI session ownership — see
+    ``docs/design/bug2-osascript-trust.md``.
+
+    Attempt 2 (Sequoia+ common path): print the exact
+    ``sudo security add-trusted-cert ...`` command for the user's
+    terminal and poll ``verify_ca_trusted`` every ``poll_seconds`` for
+    up to ``max_wait_seconds``. Pressing Enter triggers an early
+    recheck. Ctrl-C / EOF skips the step.
+
+    Args:
+        cert_path: Path to the CA cert PEM. Defaults to ``get_ca_cert_path()``.
+        stdin_fallback: When ``None`` (default), auto-detect via
+            ``sys.stdin.isatty()``. When ``False``, skip the fallback
+            entirely — used by CI / daemon mode to avoid hanging on
+            ``input()``.
+        poll_seconds: Re-check cadence during the fallback poll loop.
+        max_wait_seconds: Total fallback budget. After this, the call
+            returns ``False`` regardless of whether the user has run
+            the sudo command.
+
+    Returns:
+        ``True`` iff ``verify_ca_trusted`` confirms admin trust was applied.
+    """
+    cert_path = cert_path or get_ca_cert_path()
+    if stdin_fallback is None:
+        stdin_fallback = sys.stdin.isatty()
+
+    # Attempt 1 — osascript.
+    rc_ok, stderr_text = _run_osascript_trust(cert_path)
+    if stderr_text:
+        logger.warning("osascript trust stderr: %s", stderr_text.strip())
+    verified, _ = verify_ca_trusted(cert_path)
+    if verified:
+        return True
+
+    # Non-interactive: don't hang waiting for terminal sudo.
+    if not stdin_fallback:
         return False
+
+    # Attempt 2 — terminal sudo + poll-based convergence.
+    print()
+    print("  macOS requires trust changes to be authorized from your")
+    print("  terminal. Run this one command:")
+    print()
+    print("    sudo security add-trusted-cert -d -r trustRoot \\")
+    print("      -k /Library/Keychains/System.keychain \\")
+    print(f"      {cert_path}")
+    print()
+    print(f"  Waiting for trust... (press Enter to check now, Ctrl-C to skip; up to {int(max_wait_seconds)}s)")
+
+    return _poll_until_trusted(cert_path, poll_seconds, max_wait_seconds)
+
+
+def _poll_until_trusted(cert_path: Path, poll_seconds: float, max_wait_seconds: float) -> bool:
+    """Block until verify_ca_trusted returns trusted, the budget expires,
+    or the user signals skip. Enter triggers an immediate recheck.
+
+    Returns True on trust converged, False on timeout / skip / interrupt.
+    """
+    deadline = time.monotonic() + max_wait_seconds
+    while time.monotonic() < deadline:
+        try:
+            # Wait up to poll_seconds for an Enter keypress; either way,
+            # re-verify once the wait ends. Using select() on stdin lets
+            # an early Enter shortcut the sleep.
+            ready, _, _ = select.select([sys.stdin], [], [], poll_seconds)
+            if ready:
+                # Drain the line so subsequent prompts (in other steps)
+                # don't see leftover input.
+                sys.stdin.readline()
+        except KeyboardInterrupt:
+            print("\n  ⏭ Skipped — proxy capture limited to non-HTTPS sources")
+            return False
+        except (OSError, ValueError):
+            # select() can raise if stdin isn't a real fd (some test
+            # environments swap it for StringIO). Fall back to a plain
+            # sleep so the poll still works.
+            time.sleep(poll_seconds)
+        verified, _ = verify_ca_trusted(cert_path)
+        if verified:
+            print()
+            print("  ✅ Certificate trusted. Continuing setup.")
+            return True
+    print()
+    print("  ⏱  Timed out waiting for trust to be applied.")
+    print("     The sudo command above is safe to re-run later, then:")
+    print("     ai-monitor --setup")
+    return False
 
 
 # ─────────────────────────────────────────────────────────────
