@@ -270,8 +270,8 @@ body { background:var(--bg); color:var(--text); font-family:var(--font-sans); fo
         <a onclick="exportData('traffic','csv')" style="display:block;padding:6px 12px;color:var(--text);font-size:13px;cursor:pointer;text-decoration:none">Traffic</a>
         <div style="border-top:1px solid var(--border);margin:4px 0"></div>
         <div style="padding:4px 12px;font-size:11px;color:var(--text2);text-transform:uppercase">Reports</div>
-        <a onclick="window.open(API+'/api/report?days=7&format=html','_blank')" style="display:block;padding:6px 12px;color:var(--text);font-size:13px;cursor:pointer;text-decoration:none">Weekly Report (HTML)</a>
-        <a onclick="window.location.href=API+'/api/report?days=7&format=markdown'" style="display:block;padding:6px 12px;color:var(--text);font-size:13px;cursor:pointer;text-decoration:none">Weekly Report (Markdown)</a>
+        <a onclick="window.open(window.withAuthToken(API+'/api/report?days=7&format=html'),'_blank')" style="display:block;padding:6px 12px;color:var(--text);font-size:13px;cursor:pointer;text-decoration:none">Weekly Report (HTML)</a>
+        <a onclick="window.location.href=window.withAuthToken(API+'/api/report?days=7&format=markdown')" style="display:block;padding:6px 12px;color:var(--text);font-size:13px;cursor:pointer;text-decoration:none">Weekly Report (Markdown)</a>
       </div>
     </div>
     <div class="status"><div class="dot"></div><span style="font-size:12px;color:var(--text2)">Monitoring</span></div>
@@ -481,7 +481,7 @@ body { background:var(--bg); color:var(--text); font-family:var(--font-sans); fo
       <div id="sc-scan-bar" style="display:flex;align-items:center;gap:8px;margin-bottom:6px;font-size:12px;color:var(--text2)"></div>
       <div style="display:flex;gap:8px;margin-bottom:10px;font-size:11px;color:var(--text2)">
         <span id="sc-watchlist-indicator"></span>
-        <a href="javascript:void(0)" onclick="window.open('/api/supply-chain/sbom' + location.search, '_blank')" style="color:var(--cyan);text-decoration:none;font-size:11px">Export SBOM ↗</a>
+        <a href="javascript:void(0)" onclick="window.open(window.withAuthToken('/api/supply-chain/sbom' + location.search), '_blank')" style="color:var(--cyan);text-decoration:none;font-size:11px">Export SBOM ↗</a>
       </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px" id="sc-stats"></div>
       <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
@@ -609,6 +609,18 @@ const API = '';
       }
       return resp;
     });
+  };
+
+  // Helper for window.open() / window.location.href / <a href> navigations
+  // to /api/* endpoints. The fetch monkey-patch above only intercepts
+  // fetch() calls; full-page navigations (export downloads, report HTML
+  // viewer, SBOM export) bypass it and otherwise hit the server with no
+  // token, returning 401. Always route those navigations through this
+  // helper to append the session token consistently.
+  window.withAuthToken = function(url) {
+    if (!token) return url;
+    const sep = url.indexOf('?') >= 0 ? '&' : '?';
+    return url + sep + 'token=' + encodeURIComponent(token);
   };
 })();
 
@@ -2430,7 +2442,7 @@ async function dismissAlert(eventId, btn, reason) {
 // Export
 function exportData(type, format) {
   document.getElementById('export-dropdown').style.display = 'none';
-  window.open(API + '/api/export?type=' + type + '&format=' + format, '_blank');
+  window.open(window.withAuthToken(API + '/api/export?type=' + type + '&format=' + format), '_blank');
 }
 // Close dropdown on click outside
 document.addEventListener('click', e => {
