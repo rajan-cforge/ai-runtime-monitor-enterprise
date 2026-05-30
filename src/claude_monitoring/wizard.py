@@ -44,7 +44,11 @@ from claude_monitoring.security import (
     untrust_ca_cert,
     verify_ca_trusted,
 )
-from claude_monitoring.status import _is_cert_trusted, _is_system_proxy_configured
+from claude_monitoring.status import (
+    _is_cert_trusted,
+    _is_system_proxy_configured,
+    _render_next_steps_lines,
+)
 
 WIZARD_VERSION = "1.0.0"
 
@@ -352,12 +356,11 @@ def run_setup_wizard(force: bool = False) -> bool:
 
     # Phase 3: nudge users toward the LaunchAgent install path. We don't
     # add a 5th wizard step — installing the service should be a deliberate
-    # decision, not a default.
+    # decision, not a default. The capture-traffic guidance lives in the
+    # success branch below (see _render_next_steps_lines).
     print()
-    print("  💡 Next steps:")
-    print("     Run at login:  ai-monitor --install-service")
-    print("     View logs:     ai-monitor --logs")
-    print("     Check status:  ai-monitor --status")
+    print("  Run at login (optional):  ai-monitor --install-service")
+    print("  View logs:                ai-monitor --logs")
     print()
 
     # Final summary
@@ -375,11 +378,22 @@ def run_setup_wizard(force: bool = False) -> bool:
         print("  Re-run 'ai-monitor --setup' after applying trust to complete.")
         print()
     else:
-        print("  ✅ Setup complete!")
+        print("  ✅ Setup complete.")
         print(_SEPARATOR)
         print()
+        print("  Your next command is:")
+        print()
+        print("     ai-monitor --start --with-proxy")
+        print()
+        # Reuse the same Next-steps block --status renders, so the wizard
+        # and --status footer stay literally identical and never drift.
+        for line in _render_next_steps_lines(proxy_port=get_proxy_port()):
+            print(line)
+        print()
     if token:
-        print(f"  Dashboard:  http://localhost:9081?token={token}")
+        from claude_monitoring.config import get_dashboard_port
+
+        print(f"  Dashboard:  http://localhost:{get_dashboard_port()}?token={token}")
     print("  Status:     ai-monitor --status")
     print("  Cleanup:    ai-monitor --cleanup")
     print("  Re-setup:   ai-monitor --setup")
