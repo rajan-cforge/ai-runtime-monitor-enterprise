@@ -5,6 +5,8 @@ _write_row, response finalization (inline in response()), and the
 DashboardHandler served by run_dashboard.
 """
 
+from __future__ import annotations
+
 import csv
 import json
 import sqlite3
@@ -703,3 +705,239 @@ class TestGetCsvPath:
             path = get_csv_path()
             assert session_dir.exists()
             assert path.parent == session_dir
+
+
+# ===================================================================
+# Response dispatch — Issue #65 fix
+#
+# Pre-fix dispatch at watch.py:705 was `raw.startswith("data:")` which
+# matched OpenAI SSE but missed Anthropic SSE (which leads with
+# `event: message_start\n...`). The SSE parser never ran for Anthropic
+# streaming responses; the JSON fallback raised; the bare except: pass
+# silently swallowed the error. Every streaming /v1/messages call was
+# captured with zero tokens and empty content.
+#
+# These tests pin the new dispatch contract so the regression can't
+# return: Content-Type header is the canonical signal; body sniff
+# (event:|data:) is the fallback for servers that omit the header.
+# ===================================================================
+
+
+class TestIsSseResponse:
+    """The dispatch gate used by ClaudeWatchAddon.response."""
+
+    def test_content_type_event_stream_returns_true(self):
+        from claude_monitoring.watch import _is_sse_response
+
+        assert _is_sse_response("text/event-stream", "") is True
+
+    def test_content_type_event_stream_with_charset_returns_true(self):
+        from claude_monitoring.watch import _is_sse_response
+
+        assert _is_sse_response("text/event-stream; charset=utf-8", "") is True
+
+    def test_anthropic_event_prefix_body_returns_true(self):
+        """The smoking-gun case for Issue #65 — Anthropic SSE starts with
+        ``event:``, which the old dispatch missed."""
+        from claude_monitoring.watch import _is_sse_response
+
+        anthropic_sse = "event: message_start\ndata: {}\n\n"
+        assert _is_sse_response("application/octet-stream", anthropic_sse) is True
+
+    def test_openai_data_prefix_body_returns_true(self):
+        """Regression — OpenAI SSE (data:-led) must still route to the
+        SSE parser. The old dispatch worked for this case and the new
+        dispatch must keep working."""
+        from claude_monitoring.watch import _is_sse_response
+
+        openai_sse = 'data: {"choices":[{"delta":{"content":"hi"}}]}\n\n'
+        assert _is_sse_response("application/json", openai_sse) is True
+
+    def test_plain_json_body_returns_false(self):
+        from claude_monitoring.watch import _is_sse_response
+
+        assert _is_sse_response("application/json", '{"role":"assistant"}') is False
+
+    def test_empty_body_and_unknown_content_type_returns_false(self):
+        from claude_monitoring.watch import _is_sse_response
+
+        assert _is_sse_response("", "") is False
+
+    def test_leading_whitespace_does_not_fool_sniff(self):
+        """The body sniff tolerates leading ASCII whitespace.
+
+        mitmproxy reassembles the full body before the response hook
+        fires, so chunk-boundary whitespace shouldn't actually appear at
+        this layer in production. This test pins the lstrip() behavior
+        anyway so a future refactor that removes ``lstrip()`` as
+        "unnecessary" fails CI rather than silently regressing.
+        """
+        from claude_monitoring.watch import _is_sse_response
+
+        assert _is_sse_response("", "\n\nevent: message_start\n") is True
+        assert _is_sse_response("", "  data: {}\n") is True
+
+    def test_content_type_header_wins_over_body_sniff(self):
+        """When the Content-Type says SSE, route to the SSE parser even
+        if the body happens to look like JSON (mid-stream chunk could
+        begin with ``{`` from a buffered delta event)."""
+        from claude_monitoring.watch import _is_sse_response
+
+        assert _is_sse_response("text/event-stream", '{"looks":"json"}') is True
+
+
+class TestAddonResponseDispatch:
+    """Integration: drive ClaudeWatchAddon.response() with a fake flow
+    and assert the SSE parser is reached for Anthropic streaming.
+
+    This is the test that would have caught Issue #65. The pre-fix code
+    would write a row with input_tokens=0 / output_tokens=0 / empty
+    assistant_msg_preview. The post-fix code writes a row with the real
+    token counts and the assistant text extracted from text_delta chunks.
+    """
+
+    ANTHROPIC_SSE_REPLAY = (
+        "event: message_start\n"
+        'data: {"type":"message_start","message":{"id":"msg_01TEST",'
+        '"model":"claude-sonnet-4-6",'
+        '"usage":{"input_tokens":42,"cache_read_input_tokens":7,'
+        '"cache_creation_input_tokens":3}}}\n'
+        "\n"
+        "event: content_block_start\n"
+        'data: {"type":"content_block_start","index":0,'
+        '"content_block":{"type":"text","text":""}}\n'
+        "\n"
+        "event: content_block_delta\n"
+        'data: {"type":"content_block_delta","index":0,'
+        '"delta":{"type":"text_delta","text":"PINEAPPLE-FROM-SSE"}}\n'
+        "\n"
+        "event: content_block_stop\n"
+        'data: {"type":"content_block_stop","index":0}\n'
+        "\n"
+        "event: message_delta\n"
+        'data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},'
+        '"usage":{"output_tokens":11}}\n'
+        "\n"
+        "event: message_stop\n"
+        'data: {"type":"message_stop"}\n'
+        "\n"
+    )
+
+    def _make_flow(self, *, flow_id: str, content: bytes, headers: dict):
+        """Build a mitmproxy-shaped flow stub touching only the attrs
+        the addon actually reads in response()."""
+        from unittest.mock import MagicMock
+
+        flow = MagicMock()
+        flow.id = flow_id
+        flow.response.status_code = 200
+        flow.response.content = content
+        flow.response.headers = headers
+        return flow
+
+    def _seed_pending(self, addon, flow_id: str):
+        """Populate the addon's pending dict the way request() would
+        have, so response() finds something to pop."""
+        import time as _time
+
+        addon.pending[flow_id] = {
+            "_start_time": _time.time(),
+            "_is_browser_metadata": False,
+            "destination_host": "api.anthropic.com",
+            "destination_service": "anthropic_api",
+            "endpoint_path": "/v1/messages",
+            "http_method": "POST",
+            "timestamp": "2026-05-31T18:00:00+00:00",
+            "session_id": "test-sess",
+            "turn_id": "turn-1",
+            "turn_number": 1,
+            "stream": "",
+            "model": "",
+            "tool_calls": "[]",
+        }
+
+    def test_anthropic_streaming_routes_to_sse_parser_and_populates_tokens(self, addon):
+        flow_id = "anthropic-streaming-flow"
+        self._seed_pending(addon, flow_id)
+        flow = self._make_flow(
+            flow_id=flow_id,
+            content=self.ANTHROPIC_SSE_REPLAY.encode("utf-8"),
+            headers={"content-type": "text/event-stream", "x-request-id": "req-1"},
+        )
+        captured: dict = {}
+        with patch.object(addon, "_write_row", side_effect=lambda r: captured.update(r)):
+            addon.response(flow)
+
+        assert captured.get("input_tokens") == 42, "SSE parser not reached or input_tokens missed"
+        assert captured.get("output_tokens") == 11
+        assert captured.get("cache_read_tokens") == 7
+        assert captured.get("cache_write_tokens") == 3
+        assert captured.get("stop_reason") == "end_turn"
+        assert "PINEAPPLE-FROM-SSE" in (captured.get("assistant_msg_preview") or "")
+        assert captured.get("stream") == "true"
+
+    def test_anthropic_streaming_without_content_type_still_routes_to_sse(self, addon):
+        """Body sniff fallback: even without text/event-stream header,
+        a body starting with ``event:`` must still route to the SSE
+        parser. Guards against upstream servers that emit SSE without
+        the canonical header."""
+        flow_id = "anthropic-no-ct-flow"
+        self._seed_pending(addon, flow_id)
+        flow = self._make_flow(
+            flow_id=flow_id,
+            content=self.ANTHROPIC_SSE_REPLAY.encode("utf-8"),
+            headers={"content-type": "application/octet-stream"},
+        )
+        captured: dict = {}
+        with patch.object(addon, "_write_row", side_effect=lambda r: captured.update(r)):
+            addon.response(flow)
+        assert captured.get("input_tokens") == 42
+        assert "PINEAPPLE-FROM-SSE" in (captured.get("assistant_msg_preview") or "")
+
+    def test_non_streaming_json_still_uses_json_parser(self, addon):
+        """Regression: non-streaming Anthropic responses (JSON body) must
+        keep working — they were the ONLY path that worked pre-fix and
+        the new dispatch must not break them."""
+        flow_id = "anthropic-nonstreaming-flow"
+        self._seed_pending(addon, flow_id)
+        body = json.dumps(
+            {
+                "id": "msg_01JSON",
+                "model": "claude-haiku-4-5-20251001",
+                "stop_reason": "end_turn",
+                "content": [{"type": "text", "text": "JSON-PATH-WORKS"}],
+                "usage": {
+                    "input_tokens": 123,
+                    "output_tokens": 45,
+                    "cache_read_input_tokens": 0,
+                    "cache_creation_input_tokens": 0,
+                },
+            }
+        )
+        flow = self._make_flow(
+            flow_id=flow_id,
+            content=body.encode("utf-8"),
+            headers={"content-type": "application/json"},
+        )
+        captured: dict = {}
+        with patch.object(addon, "_write_row", side_effect=lambda r: captured.update(r)):
+            addon.response(flow)
+        assert captured.get("input_tokens") == 123
+        assert captured.get("output_tokens") == 45
+
+    def test_parse_failures_log_at_warning_level_not_silent(self, addon, caplog):
+        """The previous bare except: pass made every parse failure
+        invisible. The two-tier handler must now emit a log line — at
+        warning for expected JSON/Unicode errors."""
+        flow_id = "garbage-flow"
+        self._seed_pending(addon, flow_id)
+        flow = self._make_flow(
+            flow_id=flow_id,
+            content=b"\xff\xfe NOT JSON, NOT SSE",
+            headers={"content-type": "application/json"},
+        )
+        with patch.object(addon, "_write_row"), caplog.at_level("WARNING"):
+            addon.response(flow)
+        # At least one warning/error mentioning the service name must surface.
+        messages = " ".join(r.message for r in caplog.records)
+        assert "anthropic_api" in messages, f"no log line mentioned the service: {caplog.text}"
