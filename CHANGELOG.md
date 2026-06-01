@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.2.1] — unreleased
+
+### Fixed
+
+- **Streaming response bodies from Anthropic Messages API are now correctly captured by the proxy addon (PR — issue #65).** Previously silently dropped due to a dispatch bug: the response hook used `raw.startswith("data:")` to decide between SSE and JSON parsers, which matched OpenAI SSE but missed Anthropic SSE (which leads with `event: message_start\n...`). The SSE parser was never reached for Anthropic streams; the JSON fallback raised `json.JSONDecodeError`; the bare `except: pass` silently swallowed the error. Affects all proxy-captured Claude Desktop, ChatGPT Desktop, Cursor, and streaming Claude Code sessions. Non-streaming responses were unaffected. The new dispatch uses `Content-Type: text/event-stream` as the canonical signal with a body-sniff fallback covering both `event:` (Anthropic) and `data:` (OpenAI) prefixes. The bare `except: pass` is replaced with a two-tier handler: expected parse failures log at WARNING; anything else logs at ERROR with full traceback. Historical rows with empty content cannot be backfilled.
+
 ## [0.2.0] — 2026-05-28
 
 Verified end-to-end on two machines (primary + new laptop) before release. Capture matrix confirmed working for: Claude Code JSONL sessions, browser AI on claude.ai / chatgpt.com / gemini.google.com via the Chrome extension, full HTTPS proxy interception for routed CLI tools, process / filesystem / network observation.
