@@ -941,3 +941,55 @@ class TestAddonResponseDispatch:
         # At least one warning/error mentioning the service name must surface.
         messages = " ".join(r.message for r in caplog.records)
         assert "anthropic_api" in messages, f"no log line mentioned the service: {caplog.text}"
+
+    def test_response_with_null_json_body_does_not_crash_or_log_error(self, addon, caplog):
+        """Regression test for the body-None crash exposed by PR #67's
+        two-tier handler.
+
+        Production traceback showed parse_response_body raising
+        ``AttributeError: 'NoneType' object has no attribute 'get'``
+        when the dispatch passed Python ``None`` (from
+        ``json.loads("null")``) to the parser.
+
+        Five explicit assertions:
+          1. ``addon.response()`` does not raise
+          2. A record is written (the row is not lost)
+          3. Envelope fields are preserved (destination_service, http_status, response_size_bytes)
+          4. Content fields are empty (parser returned without populating them)
+          5. NO ERROR-level log entry was emitted (the parser now
+             returns gracefully; only legitimate parse failures
+             should ever reach the ERROR tier)
+        """
+        flow_id = "null-body-flow"
+        self._seed_pending(addon, flow_id)
+        flow = self._make_flow(
+            flow_id=flow_id,
+            content=b"null",  # valid JSON, parses to Python None
+            headers={"content-type": "application/json"},
+        )
+        captured: dict = {}
+        with patch.object(addon, "_write_row", side_effect=lambda r: captured.update(r)), caplog.at_level("WARNING"):
+            addon.response(flow)  # assertion 1: must not raise
+
+        # 2. row was written
+        assert captured, "addon.response() must still write a record even when parser declines body"
+
+        # 3. envelope fields preserved
+        assert captured.get("destination_service") == "anthropic_api"
+        assert captured.get("http_status") == 200
+        assert captured.get("response_size_bytes") == len(b"null")
+
+        # 4. content fields untouched — the guard returns the record
+        # unchanged, so keys not present in the seed remain absent.
+        # Stronger than `get(..., 0) == 0` which would mask a future
+        # bug where the parser is accidentally reached and emits zeros.
+        assert "input_tokens" not in captured
+        assert "output_tokens" not in captured
+        assert "assistant_msg_preview" not in captured
+
+        # 5. no ERROR-level log entry (the body-None case used to land
+        # in the unexpected-Exception bucket via logger.exception)
+        error_records = [r for r in caplog.records if r.levelname == "ERROR"]
+        assert not error_records, (
+            f"body=None must not produce ERROR-level logs; got: {[r.message for r in error_records]}"
+        )

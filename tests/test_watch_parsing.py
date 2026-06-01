@@ -4,6 +4,8 @@ Tests parse_request_body, parse_response_body, and parse_sse_response
 with realistic Anthropic API payloads.
 """
 
+from __future__ import annotations
+
 import json
 
 from claude_monitoring.watch import parse_request_body, parse_response_body, parse_sse_response
@@ -1691,3 +1693,91 @@ class TestServiceParserDispatch:
 
         _, sse_parser = SERVICE_PARSERS_RESPONSE["gemini_api"]
         assert sse_parser is None
+
+
+# =====================================================================
+# Defensive guards — parsers must accept non-dict bodies without crashing
+#
+# Surfaced by PR #67's two-tier exception handler: production traceback
+# showed `parse_response_body` crashing on `body.get('usage', {})` when
+# json.loads returned None (the body was the JSON literal `null`). The
+# bare except: pass in the addon's response hook had silently swallowed
+# this for an unknown duration before PR #67 made it visible.
+#
+# Each parser now guards against body being non-dict (None, scalar,
+# list, string, etc.) by returning the record unchanged. The envelope
+# fields stay populated from the request hook; only content fields
+# remain empty.
+# =====================================================================
+
+
+class TestParsersHandleNoneBody:
+    """All three JSON response parsers must accept body=None without crashing.
+
+    The dispatch site at watch.py:735 does `body = json.loads(raw)` and
+    passes the result to the service-specific parser. JSON literals
+    `null`, `true`, `false`, numbers, strings, and arrays all parse
+    successfully but to non-dict Python values. The parsers must
+    defend.
+    """
+
+    def test_parse_response_body_none_returns_record_unchanged(self):
+        record = _fresh_record()
+        before = dict(record)
+        result = parse_response_body(None, record)
+        assert result == before, "non-dict body must not mutate the record"
+
+    def test_parse_openai_response_none_returns_record_unchanged(self):
+        from claude_monitoring.watch import parse_openai_response
+
+        record = _fresh_record()
+        before = dict(record)
+        result = parse_openai_response(None, record)
+        assert result == before
+
+    def test_parse_google_response_none_returns_record_unchanged(self):
+        from claude_monitoring.watch import parse_google_response
+
+        record = _fresh_record()
+        before = dict(record)
+        result = parse_google_response(None, record)
+        assert result == before
+
+    def test_parse_response_body_non_dict_scalar_returns_record_unchanged(self):
+        """Cover the other JSON-valid-but-non-dict cases: integer, string,
+        boolean, empty list. Any of these can come back from
+        json.loads() if upstream returns valid JSON that isn't an object."""
+        from claude_monitoring.watch import (
+            parse_google_response,
+            parse_openai_response,
+            parse_response_body,
+        )
+
+        for body in (42, "string", True, False, []):
+            for parser in (parse_response_body, parse_openai_response, parse_google_response):
+                record = _fresh_record()
+                before = dict(record)
+                result = parser(body, record)
+                assert result == before, (
+                    f"{parser.__name__}(body={body!r}) mutated the record; "
+                    "the defensive guard must reject non-dict bodies"
+                )
+
+    def test_request_parsers_also_handle_non_dict_bodies(self):
+        """Symmetric guards on the request side. Request bodies are
+        almost always JSON objects, but the addon's dispatch passes
+        ``json.loads(raw)`` directly — which can return any JSON shape
+        if the upstream is malformed. Keep parsers robust so the
+        ``body: dict`` annotation isn't a lie. Surfaced by code-reviewer
+        agent pass on PR #1."""
+        from claude_monitoring.watch import parse_openai_request
+
+        for body in (None, 42, "string", True, False, []):
+            for parser in (parse_request_body, parse_openai_request):
+                record = _fresh_record()
+                before = dict(record)
+                result = parser(body, record)
+                assert result == before, (
+                    f"{parser.__name__}(body={body!r}) mutated the record; "
+                    "the defensive guard must reject non-dict bodies"
+                )
