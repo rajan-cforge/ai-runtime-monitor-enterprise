@@ -73,6 +73,13 @@ def parse_request_body(body: dict, record: dict) -> dict:
     Returns:
         Updated record dict.
     """
+    # Symmetric guard with the response-side parsers. Request bodies
+    # are almost always JSON objects, but the addon's dispatch path
+    # passes ``json.loads(raw)`` directly — which can return any JSON
+    # shape. Keep the parser robust to non-dict shapes so the type
+    # annotation reflects reality.
+    if not isinstance(body, dict):
+        return record
     record["model"] = body.get("model", "")
     record["stream"] = str(body.get("stream", False)).lower()
 
@@ -173,6 +180,13 @@ def parse_response_body(body: dict, record: dict) -> dict:
     Returns:
         Updated record dict.
     """
+    # Defensive guard: ``json.loads("null")`` returns Python ``None``;
+    # other JSON-valid-but-non-dict shapes (numbers, strings, lists)
+    # are also possible. Return the record untouched rather than
+    # crashing on body.get(...). Surfaced as a production traceback
+    # by PR #67's two-tier exception handler.
+    if not isinstance(body, dict):
+        return record
     usage = body.get("usage", {})
     record["input_tokens"] = usage.get("input_tokens", 0)
     record["output_tokens"] = usage.get("output_tokens", 0)
@@ -281,6 +295,9 @@ def parse_openai_request(body: dict, record: dict) -> dict:
 
     Works for OpenAI, Groq, Together, DeepSeek, OpenRouter (all OpenAI-compatible).
     """
+    # See parse_request_body for the defensive-guard rationale.
+    if not isinstance(body, dict):
+        return record
     record["model"] = body.get("model", "")
     record["stream"] = str(body.get("stream", False)).lower()
 
@@ -345,6 +362,9 @@ def parse_openai_request(body: dict, record: dict) -> dict:
 
 def parse_openai_response(body: dict, record: dict) -> dict:
     """Parse an OpenAI-compatible API response body and populate record fields."""
+    # See parse_response_body for the defensive-guard rationale.
+    if not isinstance(body, dict):
+        return record
     usage = body.get("usage", {})
     record["input_tokens"] = usage.get("prompt_tokens", 0)
     record["output_tokens"] = usage.get("completion_tokens", 0)
@@ -438,6 +458,9 @@ def parse_openai_sse_response(raw: str, record: dict) -> dict:
 
 def parse_google_response(body: dict, record: dict) -> dict:
     """Parse a Google Gemini API response body and populate record fields."""
+    # See parse_response_body for the defensive-guard rationale.
+    if not isinstance(body, dict):
+        return record
     # Usage metadata
     usage = body.get("usageMetadata", {})
     record["input_tokens"] = usage.get("promptTokenCount", 0)
