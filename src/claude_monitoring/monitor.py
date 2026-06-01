@@ -4758,8 +4758,9 @@ def start_monitoring(cp_url=None, cp_api_key=None):
     import atexit
 
     from claude_monitoring.lifecycle import (
+        bind_with_retry,
+        cleanup_for_shutdown,
         get_monitor_pid_file,
-        remove_pid_file,
         write_heartbeat,
         write_pid_file,
     )
@@ -4767,11 +4768,14 @@ def start_monitoring(cp_url=None, cp_api_key=None):
     write_pid_file(get_monitor_pid_file(), os.getpid())
 
     def _atexit_cleanup():
-        remove_pid_file(get_monitor_pid_file())
+        # PID + system proxy off first, then the slower pm.stop(). The
+        # signal handler unregisters this hook before its own cleanup
+        # runs to avoid a double pm.stop() on a recycled PID.
+        cleanup_for_shutdown(get_monitor_pid_file())
         pm = globals().get("_PROXY_MANAGER")
         if pm is not None:
             try:
-                pm.stop(disable_proxy=True)
+                pm.stop(disable_proxy=False)  # proxy already off above
             except Exception:
                 pass
 
@@ -4921,7 +4925,11 @@ def start_monitoring(cp_url=None, cp_api_key=None):
                 return
             super().handle_error(request, client_address)
 
-    server = ReusableHTTPServer((get_bind_address(), DASHBOARD_PORT), DashboardHandler)
+    server = bind_with_retry(
+        lambda: ReusableHTTPServer((get_bind_address(), DASHBOARD_PORT), DashboardHandler),
+        port=DASHBOARD_PORT,
+        address=get_bind_address(),
+    )
     server_thread = threading.Thread(target=server.serve_forever, daemon=True, name="Dashboard")
     server_thread.start()
     if dashboard_token:
@@ -4995,26 +5003,17 @@ def start_monitoring(cp_url=None, cp_api_key=None):
 
     def signal_handler(sig, frame):
         print("\n\n  Shutting down...")
-        # Phase 1: use ProxyManager for clean shutdown — it kills mitmdump
-        # AND disables the system proxy. Fallback to direct networksetup
-        # if no ProxyManager is registered (e.g. --start without --with-proxy).
+        # PID file + system proxy off FIRST so if launchd KillTimeout
+        # interrupts pm.stop() below, the next --start still sees clean
+        # state. See docs/design/lifecycle-reliability.md.
+        cleanup_for_shutdown(get_monitor_pid_file())
+        atexit.unregister(_atexit_cleanup)  # avoid double pm.stop on exit
         pm = globals().get("_PROXY_MANAGER")
         if pm is not None:
             try:
-                pm.stop(disable_proxy=True)
+                pm.stop(disable_proxy=False)  # proxy already off above
             except Exception:
                 pass
-        else:
-            try:
-                subprocess.run(
-                    ["networksetup", "-setsecurewebproxystate", "Wi-Fi", "off"],
-                    capture_output=True,
-                    timeout=5,
-                )
-            except Exception:
-                pass
-        # Remove PID file so --status doesn't report stale state
-        remove_pid_file(get_monitor_pid_file())
         jsonl_watcher.stop()
         proc_scanner.stop()
         net_monitor.stop()
