@@ -588,3 +588,263 @@ class TestNextStepsFooterGating:
         with redirect_stdout(buf):
             status_mod.show_status()
         assert "?token=TESTTOKEN1234567890" in buf.getvalue()
+
+
+# ─────────────────────────────────────────────────────────────
+# Honest capture matrix — live per-app detection
+#
+# Pre-fix the capture matrix printed `✅ Proxy (full capture)` for
+# Claude Desktop / ChatGPT Desktop / Cursor whenever `sys_proxy=True`,
+# regardless of whether those apps were actually routing through the
+# proxy or whether content was being decrypted. The label lied — see
+# the ground-truth verification on 2026-06-01 where all three apps
+# showed ✅ in --status while their chat messages produced zero rows.
+#
+# These tests pin the new contract: the label reflects LIVE evidence
+# (process is reachable from proxy, content rows exist for the app's
+# expected host), not a static boolean.
+# ─────────────────────────────────────────────────────────────
+
+
+class TestFindAppMainPid:
+    def test_returns_none_when_pgrep_finds_nothing(self):
+        with patch("claude_monitoring.status.subprocess.run", return_value=_mock_completed("")):
+            assert status_mod._find_app_main_pid("Claude.app/Contents/MacOS/Claude") is None
+
+    def test_returns_first_pid_from_pgrep_output(self):
+        out = "12345 /Applications/Claude.app/Contents/MacOS/Claude\n"
+        with patch("claude_monitoring.status.subprocess.run", return_value=_mock_completed(out)):
+            assert status_mod._find_app_main_pid("Claude.app/Contents/MacOS/Claude") == 12345
+
+    def test_returns_none_when_pgrep_raises(self):
+        with patch("claude_monitoring.status.subprocess.run", side_effect=OSError("no pgrep")):
+            assert status_mod._find_app_main_pid("Claude") is None
+
+    def test_returns_none_when_pgrep_output_malformed(self):
+        with patch("claude_monitoring.status.subprocess.run", return_value=_mock_completed("not-a-pid garbage\n")):
+            assert status_mod._find_app_main_pid("X") is None
+
+
+class TestPidHasProxyConnection:
+    def test_returns_false_for_none_pid(self):
+        assert status_mod._pid_has_proxy_connection(None) is False
+
+    def test_returns_true_when_lsof_shows_established_to_9080(self):
+        out = "Claude 12345 user 5u IPv4 0xa 0t0 TCP 127.0.0.1:55988->127.0.0.1:9080 (ESTABLISHED)\n"
+        with patch("claude_monitoring.status.subprocess.run", return_value=_mock_completed(out)):
+            assert status_mod._pid_has_proxy_connection(12345) is True
+
+    def test_returns_false_when_only_direct_connections(self):
+        out = "Claude 12345 user 5u IPv6 0xa 0t0 TCP [::1]:60001->[2607:6bc0::10]:443 (ESTABLISHED)\n"
+        with patch("claude_monitoring.status.subprocess.run", return_value=_mock_completed(out)):
+            assert status_mod._pid_has_proxy_connection(12345) is False
+
+    def test_returns_false_on_lsof_failure(self):
+        with patch("claude_monitoring.status.subprocess.run", side_effect=OSError("no lsof")):
+            assert status_mod._pid_has_proxy_connection(12345) is False
+
+    def test_respects_custom_proxy_port(self):
+        out = "Cursor 222 user 5u IPv4 0xa 0t0 TCP 127.0.0.1:55988->127.0.0.1:9999 (ESTABLISHED)\n"
+        with patch("claude_monitoring.status.subprocess.run", return_value=_mock_completed(out)):
+            assert status_mod._pid_has_proxy_connection(222, proxy_port=9999) is True
+            assert status_mod._pid_has_proxy_connection(222, proxy_port=9080) is False
+
+
+class TestRecentContentRowsForHost:
+    """Counts api_calls rows for a host where content was decrypted
+    (input_tokens > 0). Heuristic — shared hosts can produce false
+    positives if another client hits the same host. Documented limit."""
+
+    def test_zero_when_no_db(self, monkeypatch):
+        def boom():
+            raise OSError("db unavailable")
+
+        monkeypatch.setattr("claude_monitoring.db.get_thread_db", boom)
+        assert status_mod._recent_content_rows_for_host("api.anthropic.com") == 0
+
+    def test_counts_only_rows_with_input_tokens(self, monkeypatch, tmp_path):
+        # Spin up a real in-memory-ish DB so the SQL runs as it would in prod
+        import sqlite3 as _sq
+
+        db_path = tmp_path / "monitor.db"
+        conn = _sq.connect(str(db_path))
+        conn.execute(
+            "CREATE TABLE api_calls (id INTEGER PRIMARY KEY, timestamp TEXT, "
+            "destination_host TEXT, input_tokens INTEGER)"
+        )
+        now_iso = "2026-06-01T16:00:00+00:00"
+        rows = [
+            (now_iso, "api.anthropic.com", 100),  # populated, recent ✓
+            (now_iso, "api.anthropic.com", 0),  # envelope-only ✗
+            (now_iso, "api.openai.com", 50),  # wrong host ✗
+            ("2020-01-01T00:00:00+00:00", "api.anthropic.com", 100),  # old ✗
+        ]
+        conn.executemany(
+            "INSERT INTO api_calls (timestamp, destination_host, input_tokens) VALUES (?,?,?)",
+            rows,
+        )
+        conn.commit()
+        conn.close()
+
+        def fake_db():
+            return _sq.connect(str(db_path))
+
+        monkeypatch.setattr("claude_monitoring.db.get_thread_db", fake_db)
+        # Use a very wide window for the test so the "recent" row counts;
+        # the test row's timestamp is mocked-current.
+        assert status_mod._recent_content_rows_for_host("api.anthropic.com", minutes=60 * 24 * 365) == 1
+
+
+class TestDetectDesktopAppCapture:
+    """The orchestrator — the function whose output replaces the lying
+    static label in show_status(). Combines three signals into one of
+    four honest verdicts."""
+
+    def test_app_not_running(self, monkeypatch):
+        monkeypatch.setattr(status_mod, "_find_app_main_pid", lambda _suffix: None)
+        icon, msg = status_mod._detect_desktop_app_capture(
+            "Cursor", "Cursor.app/Contents/MacOS/Cursor", "api.cursor.sh", sys_proxy=True
+        )
+        assert icon == "·"
+        assert "not running" in msg.lower()
+
+    def test_fully_captured_has_content_rows(self, monkeypatch):
+        monkeypatch.setattr(status_mod, "_find_app_main_pid", lambda _suffix: 12345)
+        monkeypatch.setattr(status_mod, "_pid_has_proxy_connection", lambda _pid, **k: True)
+        monkeypatch.setattr(status_mod, "_recent_content_rows_for_host", lambda h, minutes=60: 14)
+        icon, msg = status_mod._detect_desktop_app_capture("Claude Desktop", "X", "api.anthropic.com", sys_proxy=True)
+        assert icon == "✅"
+        assert "14" in msg, f"label should surface row count, got: {msg}"
+
+    def test_rows_alone_do_not_grant_check_when_app_is_bypassing(self, monkeypatch):
+        """Regression test pinned by the code-reviewer agent on 2026-06-01.
+
+        The shared-host false-positive: Claude Code is producing rows on
+        ``api.anthropic.com`` while Claude Desktop IPv6-bypasses the
+        proxy. A naive ``rows > 0 → ✅`` orchestrator would label Claude
+        Desktop as captured purely from Claude Code's rows — the exact
+        bug the honest matrix exists to eliminate. The orchestrator
+        must require BOTH a live proxy connection AND rows > 0 before
+        declaring ✅.
+        """
+        monkeypatch.setattr(status_mod, "_find_app_main_pid", lambda _suffix: 12345)
+        # App is NOT routing through proxy (IPv6 bypass scenario)
+        monkeypatch.setattr(status_mod, "_pid_has_proxy_connection", lambda _pid, **k: False)
+        # But the shared host HAS rows from another client (Claude Code)
+        monkeypatch.setattr(status_mod, "_recent_content_rows_for_host", lambda h, minutes=60: 99)
+        icon, msg = status_mod._detect_desktop_app_capture("Claude Desktop", "X", "api.anthropic.com", sys_proxy=True)
+        # Must NOT be ✅ — rows are from another client, not this app
+        assert icon == "❌", f"expected ❌ for IPv6-bypass+shared-host case, got {icon} ({msg})"
+        assert "bypass" in msg.lower() or "direct" in msg.lower()
+
+    def test_tunneled_only_has_proxy_conn_but_no_content(self, monkeypatch):
+        """The chatgpt.com case — app routes through proxy but allow_hosts
+        excludes the host so nothing is decrypted."""
+        monkeypatch.setattr(status_mod, "_find_app_main_pid", lambda _suffix: 12345)
+        monkeypatch.setattr(status_mod, "_pid_has_proxy_connection", lambda _pid, **k: True)
+        monkeypatch.setattr(status_mod, "_recent_content_rows_for_host", lambda h, minutes=60: 0)
+        icon, msg = status_mod._detect_desktop_app_capture("ChatGPT Desktop", "X", "chatgpt.com", sys_proxy=True)
+        assert icon == "⚠"
+        assert "allow_hosts" in msg.lower() or "decrypted" in msg.lower()
+
+    def test_bypassing_proxy_on_but_app_routing_direct(self, monkeypatch):
+        """The Claude Desktop IPv6 / Cursor plugin-helper case — app
+        running, system proxy on, but app has no :9080 connection."""
+        monkeypatch.setattr(status_mod, "_find_app_main_pid", lambda _suffix: 12345)
+        monkeypatch.setattr(status_mod, "_pid_has_proxy_connection", lambda _pid, **k: False)
+        monkeypatch.setattr(status_mod, "_recent_content_rows_for_host", lambda h, minutes=60: 0)
+        icon, msg = status_mod._detect_desktop_app_capture("Claude Desktop", "X", "api.anthropic.com", sys_proxy=True)
+        assert icon == "❌"
+        assert "bypass" in msg.lower() or "direct" in msg.lower() or "ipv6" in msg.lower()
+
+    def test_process_only_when_system_proxy_off(self, monkeypatch):
+        monkeypatch.setattr(status_mod, "_find_app_main_pid", lambda _suffix: 12345)
+        monkeypatch.setattr(status_mod, "_pid_has_proxy_connection", lambda _pid, **k: False)
+        monkeypatch.setattr(status_mod, "_recent_content_rows_for_host", lambda h, minutes=60: 0)
+        icon, msg = status_mod._detect_desktop_app_capture("Cursor", "X", "api.cursor.sh", sys_proxy=False)
+        assert icon == "❌"
+        assert "process only" in msg.lower() or "system proxy" in msg.lower()
+
+
+class TestShowStatusHonestMatrix:
+    """End-to-end: show_status() output for the three desktop app rows
+    reflects the real capture state, not a static sys_proxy boolean."""
+
+    def _stub(self, monkeypatch, *, sys_proxy: bool):
+        monkeypatch.setattr(status_mod, "_is_mitmproxy_running", lambda: True)
+        monkeypatch.setattr(status_mod, "_is_system_proxy_configured", lambda: sys_proxy)
+        monkeypatch.setattr(status_mod, "_get_ca_trust_state", lambda: (True, True, None))
+        monkeypatch.setattr(status_mod, "_is_monitor_running", lambda: True)
+        monkeypatch.setattr(status_mod, "_is_db_encrypted", lambda: False)
+        monkeypatch.setattr(status_mod, "_check_permissions", lambda: True)
+        monkeypatch.setattr(status_mod, "_has_dashboard_token", lambda: True)
+        monkeypatch.setattr(status_mod, "_has_custom_ca", lambda: True)
+        monkeypatch.setattr(status_mod, "_check_extension_heartbeat", lambda: None)
+
+    def test_three_desktop_apps_show_distinct_states(self, monkeypatch):
+        """The verification on 2026-06-01 produced exactly this state:
+        Claude Desktop bypassing (IPv6), ChatGPT Desktop tunneled-only,
+        Cursor bypassing (plugin helpers). The honest matrix must show
+        three different labels, not three identical ✅."""
+        self._stub(monkeypatch, sys_proxy=True)
+
+        def fake_pid(suffix):
+            return {
+                "Claude.app/Contents/MacOS/Claude": 1001,
+                "ChatGPT.app/Contents/MacOS/ChatGPT": 1002,
+                "Cursor.app/Contents/MacOS/Cursor": 1003,
+            }.get(suffix)
+
+        def fake_proxy_conn(pid, **k):
+            # ChatGPT Desktop is the only one reaching the proxy
+            return pid == 1002
+
+        def fake_rows(host, minutes=60):
+            return 0  # nothing decrypted today
+
+        monkeypatch.setattr(status_mod, "_find_app_main_pid", fake_pid)
+        monkeypatch.setattr(status_mod, "_pid_has_proxy_connection", fake_proxy_conn)
+        monkeypatch.setattr(status_mod, "_recent_content_rows_for_host", fake_rows)
+
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            status_mod.show_status()
+        output = buf.getvalue()
+
+        # Extract each desktop-app row by name and assert the SPECIFIC
+        # icon per app, not just "labels are diverse." A test that only
+        # checks diversity could pass even if the wrong icon went to the
+        # wrong app — exactly the kind of regression a lying matrix
+        # would re-introduce in disguise. Strengthened per code-reviewer.
+        rows: dict[str, str] = {}
+        for line in output.splitlines():
+            stripped = line.strip()
+            for label in ("Claude Desktop", "ChatGPT Desktop", "Cursor"):
+                prefix = label + ":"
+                if stripped.startswith(prefix):
+                    # The icon is the first non-empty token after the label
+                    rest = stripped[len(prefix) :].strip()
+                    rows[label] = rest.split()[0]
+                    break
+        assert set(rows) == {"Claude Desktop", "ChatGPT Desktop", "Cursor"}, f"missing desktop-app rows: {rows}"
+        # Pin each app's verdict per the mock setup above
+        assert rows["Claude Desktop"] == "❌", f"Claude Desktop should bypass (❌), got {rows['Claude Desktop']}"
+        assert rows["ChatGPT Desktop"] == "⚠", f"ChatGPT Desktop should be tunneled (⚠), got {rows['ChatGPT Desktop']}"
+        assert rows["Cursor"] == "❌", f"Cursor should bypass (❌), got {rows['Cursor']}"
+
+    def test_fully_captured_when_content_rows_present(self, monkeypatch):
+        self._stub(monkeypatch, sys_proxy=True)
+        monkeypatch.setattr(status_mod, "_find_app_main_pid", lambda s: 1001)
+        monkeypatch.setattr(status_mod, "_pid_has_proxy_connection", lambda pid, **k: True)
+        monkeypatch.setattr(status_mod, "_recent_content_rows_for_host", lambda h, minutes=60: 14)
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            status_mod.show_status()
+        out = buf.getvalue()
+        # The Claude Desktop line should now be a ✅ with a row count
+        assert "Claude Desktop:" in out
+        for line in out.splitlines():
+            if line.strip().startswith("Claude Desktop:"):
+                assert "✅" in line, f"expected ✅, got: {line}"
+                assert "14" in line, f"expected row count in label, got: {line}"
+                break
