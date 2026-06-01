@@ -284,6 +284,152 @@ def _fmt_check(ok: bool, ok_text: str, bad_text: str) -> str:
     return f"✅ {ok_text}" if ok else f"❌ {bad_text}"
 
 
+def _find_app_main_pid(executable_path_suffix: str) -> int | None:
+    """Return the main process PID for an app whose executable path ends
+    with ``executable_path_suffix``, or ``None`` if not running.
+
+    Used by the honest capture matrix to detect whether a desktop AI app
+    is actually live before claiming any capture about it. Example:
+    ``_find_app_main_pid("Claude.app/Contents/MacOS/Claude")`` returns
+    the PID of the running Claude Desktop main process.
+
+    Best-effort: returns ``None`` on any pgrep failure, malformed output,
+    or absent process. Never raises.
+    """
+    try:
+        result = subprocess.run(
+            ["pgrep", "-fl", executable_path_suffix + "$"],
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    for line in result.stdout.splitlines():
+        parts = line.split()
+        if not parts:
+            continue
+        try:
+            return int(parts[0])
+        except ValueError:
+            return None
+    return None
+
+
+def _pid_has_proxy_connection(pid: int | None, proxy_port: int | None = None) -> bool:
+    """Return True if ``pid`` has an ESTABLISHED TCP connection to
+    ``127.0.0.1:proxy_port`` (mitmproxy).
+
+    Used to detect "app is routing through the proxy" vs "app is
+    bypassing the proxy entirely" — the discriminator that distinguishes
+    Claude Desktop's IPv6 bypass from ChatGPT Desktop's tunneled-only
+    state. Best-effort: returns False on any error or for ``pid is None``.
+    """
+    if not pid:
+        return False
+    port = proxy_port if proxy_port is not None else get_proxy_port()
+    try:
+        result = subprocess.run(
+            ["lsof", "-nP", "-p", str(pid)],
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    needle = f"127.0.0.1:{port}"
+    for line in result.stdout.splitlines():
+        if needle in line and "ESTABLISHED" in line:
+            return True
+    return False
+
+
+def _recent_content_rows_for_host(host: str, minutes: int = 60) -> int:
+    """Return the count of ``api_calls`` rows for ``host`` in the last
+    ``minutes`` minutes with ``input_tokens > 0`` — i.e., capture WITH
+    decrypted content, not envelope-only.
+
+    Heuristic, not perfect: shared hosts can produce false positives.
+    Example — Cursor and Claude Code both hit ``api.anthropic.com``; if
+    Claude Code captures rows there but Cursor's plugin helpers bypass,
+    this function still counts the Claude Code rows when asked about
+    Cursor. The honest matrix combines this with the proxy-connection
+    check to mitigate. Per-PID row tagging would close this gap
+    cleanly (v0.2.2 backlog).
+    """
+    if not host:
+        return 0
+    try:
+        from claude_monitoring.db import get_thread_db
+
+        conn = get_thread_db()
+        try:
+            row = conn.execute(
+                "SELECT COUNT(*) FROM api_calls "
+                "WHERE destination_host = ? "
+                "AND input_tokens > 0 "
+                "AND strftime('%s', timestamp) > strftime('%s', 'now', ?)",
+                (host, f"-{int(minutes)} minutes"),
+            ).fetchone()
+            return int(row[0]) if row else 0
+        finally:
+            conn.close()
+    except Exception:
+        return 0
+
+
+def _detect_desktop_app_capture(
+    app_label: str,
+    executable_suffix: str,
+    expected_host: str,
+    *,
+    sys_proxy: bool,
+) -> tuple[str, str]:
+    """Return ``(icon, message)`` for a desktop AI app's row in the
+    capture matrix, based on LIVE evidence rather than the static
+    ``sys_proxy`` boolean.
+
+    Four possible verdicts, in priority order:
+
+    1. ``"·"`` *App not running* — pgrep finds no matching process.
+    2. ``"✅"`` *Proxy verified* — content rows exist in the DB from the
+       app's expected host within the last hour.
+    3. ``"⚠"`` *Reaches proxy, no decrypted content* — app has an
+       ESTABLISHED connection to ``:9080`` but no decrypted rows. Means
+       the host is excluded from ``--allow-hosts`` (chatgpt.com case).
+    4. ``"❌"`` *Bypassing / Process only* — app running, no proxy
+       connection. Either ``sys_proxy`` is on but the app routes direct
+       (IPv6 bypass, plugin-helper bypass) or ``sys_proxy`` is off.
+
+    The verdict replaces the pre-fix static ``"✅ Proxy (full capture)"``
+    label that was decided by ``sys_proxy=True`` alone — proven false
+    by the 2026-06-01 verification when all three desktop apps showed
+    ✅ in ``--status`` while producing zero captured rows.
+    """
+    pid = _find_app_main_pid(executable_suffix)
+    if pid is None:
+        return "·", f"{app_label} not running"
+
+    # Critical: ✅ requires BOTH a live proxy connection AND recent
+    # content rows. ``api.anthropic.com`` is a shared host (Claude
+    # Code, curl, and Claude Desktop all hit it). Checking row count
+    # alone would falsely mark Claude Desktop ✅ whenever Claude Code
+    # is active in this very session — the exact false-positive bug
+    # the honest matrix exists to eliminate. Requiring the proxy
+    # connection too ties the verdict to the specific app's actual
+    # routing state.
+    has_proxy_conn = _pid_has_proxy_connection(pid)
+    rows = _recent_content_rows_for_host(expected_host, minutes=60)
+
+    if has_proxy_conn and rows > 0:
+        return "✅", f"Proxy verified — {rows} rows captured last hour"
+    if has_proxy_conn:
+        return "⚠", "Reaches proxy, no decrypted content (host may not be in allow_hosts)"
+    if sys_proxy:
+        return "❌", "System proxy on but app routing direct (IPv6 / plugin-helper bypass)"
+    return "❌", "Process only (system proxy disabled)"
+
+
 def _http_proxy_env_is_set() -> bool:
     """True if the current shell has a non-empty HTTPS_PROXY exported.
 
@@ -351,11 +497,13 @@ def show_status() -> int:
     ext = _check_extension_heartbeat()
 
     p_mark = "✅" if proxy_running else "❌"
-    sp_mark = "✅" if sys_proxy else "❌"
-    # Note: ct_mark used to gate the Chrome rows; those now gate on the
-    # extension heartbeat instead (PR #51 — proxy no longer touches
-    # browser UI sites). cert_ok is still used for the SSL inspection
-    # summary line below.
+    # Note: ``sp_mark`` (the static system-proxy boolean marker) was
+    # removed by the honest-matrix fix — the three desktop AI app rows
+    # now go through ``_detect_desktop_app_capture`` which renders a
+    # per-app verdict from live evidence. ``ct_mark`` used to gate the
+    # Chrome rows; those now gate on the extension heartbeat instead
+    # (PR #51 — proxy no longer touches browser UI sites). cert_ok is
+    # still used for the SSL inspection summary line below.
 
     # When the monitor is running, surface the token directly in the
     # Dashboard URL so the user can click straight from the terminal —
@@ -478,9 +626,23 @@ def show_status() -> int:
     print("  Capture matrix:")
     print(f"    Claude Code:      ✅ JSONL + {p_mark} Proxy")
     print("    OpenClaw:         ✅ JSONL")
-    print(f"    Claude Desktop:   {sp_mark} " + ("Proxy (full capture)" if sys_proxy else "Process only"))
-    print(f"    ChatGPT Desktop:  {sp_mark} " + ("Proxy (full capture)" if sys_proxy else "Process only"))
-    print(f"    Cursor:           {sp_mark} " + ("Proxy (full capture)" if sys_proxy else "Process only"))
+    # Honest capture matrix: each desktop AI app row reflects LIVE
+    # evidence (process is reachable from proxy, decrypted content
+    # rows exist for the app's expected host), not the static
+    # ``sys_proxy`` boolean. Pre-fix this section printed the same
+    # ``✅ Proxy (full capture)`` for all three apps whenever the user
+    # enabled system proxy, regardless of whether Claude Desktop was
+    # IPv6-bypassing, ChatGPT Desktop was tunneled-only because
+    # chatgpt.com isn't in allow_hosts, or Cursor's plugin helpers
+    # were bypassing the proxy. See docs/spec/THREAT-MODEL.md and the
+    # ground-truth verification on 2026-06-01.
+    for label, suffix, host in (
+        ("Claude Desktop", "Claude.app/Contents/MacOS/Claude", "api.anthropic.com"),
+        ("ChatGPT Desktop", "ChatGPT.app/Contents/MacOS/ChatGPT", "chatgpt.com"),
+        ("Cursor", "Cursor.app/Contents/MacOS/Cursor", "api.cursor.sh"),
+    ):
+        icon, message = _detect_desktop_app_capture(label, suffix, host, sys_proxy=sys_proxy)
+        print(f"    {label + ':':<17} {icon} {message}")
     # Browser AI sites are captured by the Chrome extension only. The
     # proxy's allow_hosts intentionally excludes them as of PR #51 — see
     # claude_monitoring.constants and docs/spec/THREAT-MODEL.md §6.1.
