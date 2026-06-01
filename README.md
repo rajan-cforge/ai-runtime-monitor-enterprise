@@ -21,9 +21,66 @@ cd vigil
 python3.12 -m venv .venv
 source .venv/bin/activate
 pip install -e .
-ai-monitor --setup                  # follow prompts; paste sudo command when shown
-ai-monitor --start --with-proxy     # daemon + proxy + dashboard at http://localhost:9081
+ai-monitor --setup                       # follow prompts; paste sudo command when shown
+ai-monitor --start --with-proxy          # daemon + proxy + dashboard at http://localhost:9081
+
+# Then enable API-traffic capture for desktop apps and CLI tools:
+export HTTPS_PROXY=http://127.0.0.1:9080
+ai-monitor --enable-system-proxy
 ```
+
+`ai-monitor --status` reprints these two commands as a footer whenever capture isn't fully configured, so you don't need to memorize them.
+
+**Restart any AI app that was already running** before you enabled the proxy — environment variables are read at process start, so a running app can't pick up `HTTPS_PROXY` retroactively:
+
+| App / tool                              | Restart needed? | Why |
+| --------------------------------------- | --------------- | --- |
+| Claude Code (`claude` CLI)              | **Yes**         | Node process; env vars sticky at fork |
+| Claude Desktop                          | **Yes**         | Electron app; same reason |
+| ChatGPT Desktop                         | **Yes**         | Electron app; same reason |
+| Cursor                                  | **Yes**         | Electron app; same reason |
+| Chrome (claude.ai, chatgpt.com, gemini) | **No**          | Extension captures the DOM directly, independent of any proxy. The content script runs whenever you visit the page and reads the rendered conversation — no network interception involved, no env vars to inherit. |
+| Ollama (local model)                    | **No**          | Captured by the process + network scanner; doesn't route through the HTTPS proxy at all |
+| `curl` / shell scripts                  | Conditional     | Yes if relying on system proxy alone; no if `HTTPS_PROXY` is already in your shell rc |
+
+### First-run capture verification — the right order of operations
+
+After `ai-monitor --start --with-proxy`, the canonical sequence to actually capture desktop apps and CLI agents end-to-end is:
+
+```bash
+# 1. Quit anything that was already running with stale environment.
+#    Cmd-Q in macOS (not just close the window — the dock icon must disappear):
+#      - Claude Desktop
+#      - ChatGPT Desktop
+#      - Cursor
+#    For active `claude` CLI sessions: type /exit, close the shell tab.
+
+# 2. Enable the macOS system proxy (one-shot setting that GUI apps inherit at launch):
+ai-monitor --enable-system-proxy
+
+# 3. Persist HTTPS_PROXY in your shell rc so EVERY new terminal exports it:
+echo 'export HTTPS_PROXY=http://127.0.0.1:9080' >> ~/.zshrc
+echo 'export HTTP_PROXY=http://127.0.0.1:9080'  >> ~/.zshrc
+#    Bash users: use ~/.bashrc instead.
+
+# 4. Open a FRESH terminal (the env is per-process; existing shells won't auto-reload).
+#    Verify: echo $HTTPS_PROXY    # should print the URL
+
+# 5. Re-launch the apps (Spotlight, Finder, or dock are fine — they read the
+#    system proxy at process startup). For CLI tools, start them from the
+#    fresh terminal so they inherit HTTPS_PROXY.
+
+# 6. Verify capture is live:
+ai-monitor --status
+#    Expect:
+#      System proxy:    ✅ Enabled
+#      Claude Desktop:  ✅ Proxy (full capture)
+#      ChatGPT Desktop: ✅ Proxy (full capture)
+#      Cursor:          ✅ Proxy (full capture)
+#      Chrome <hosts>:  ✅ Extension content    (independent of proxy state)
+```
+
+**Why this order matters.** Electron apps and Node CLIs snapshot the environment and read the macOS proxy configuration exactly once — at process start — and keep that view for their entire lifetime. Reconfiguring while they're running has no effect; only the next launch picks up the change. Chrome is the deliberate exception in the matrix above because its extension reads the rendered page DOM rather than the network, so it never depended on proxy state in the first place.
 
 On macOS Sequoia (15) and later, `--setup` will prompt you to paste a single `sudo security add-trusted-cert` command in the same terminal — that's the OS-imposed step for adding a cert to the admin trust store, the same one mitmproxy and Charles ask for. The wizard polls and auto-detects when it's applied.
 
