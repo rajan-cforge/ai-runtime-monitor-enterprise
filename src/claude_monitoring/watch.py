@@ -28,10 +28,13 @@ HOW IT WORKS:
   Writes one CSV row per API turn.
 """
 
+from __future__ import annotations
+
 import argparse
 import csv
 import hashlib
 import json
+import logging
 import os
 import re
 import subprocess
@@ -52,6 +55,8 @@ from claude_monitoring.config import (
 from claude_monitoring.constants import AI_HOSTS, CSV_COLUMNS
 from claude_monitoring.db import insert_api_call
 from claude_monitoring.utils import extract_file_paths, extract_urls, scan_sensitive
+
+logger = logging.getLogger("ai-runtime-monitor.watch")
 
 # ─────────────────────────────────────────────
 # STANDALONE PARSING FUNCTIONS (testable without mitmproxy)
@@ -481,6 +486,32 @@ SERVICE_PARSERS_REQUEST = {
     "mistral_api": parse_openai_request,
 }
 
+
+def _is_sse_response(content_type: str, raw: str) -> bool:
+    """Return True if the response body should be parsed as Server-Sent Events.
+
+    Content-Type is the canonical signal (``text/event-stream``). Body
+    sniffing for ``event:`` / ``data:`` is a defensive fallback for
+    upstream servers that omit or mis-set the header — both Anthropic
+    (event-prefix) and OpenAI (data-prefix) layouts route correctly.
+
+    Issue #65 root cause: the previous dispatch used
+    ``raw.startswith("data:")`` which matched OpenAI but missed
+    Anthropic (which leads with ``event: message_start\\n...``). Every
+    streaming /v1/messages call landed in the JSON fallback, failed
+    ``json.loads``, and was silently swallowed by ``except: pass``.
+
+    Limitation: ``str.lstrip()`` strips ASCII whitespace only, so a
+    UTF-8 BOM-prefixed SSE body (``\\ufeff...``) will not match the
+    sniff. Set ``Content-Type: text/event-stream`` on the upstream
+    for servers that emit BOMs. Neither Anthropic nor OpenAI does
+    this in practice; the spec (WHATWG EventSource) prohibits it.
+    """
+    if "text/event-stream" in content_type.lower():
+        return True
+    return raw.lstrip().startswith(("event:", "data:"))
+
+
 SERVICE_PARSERS_RESPONSE = {
     "anthropic_api": (parse_response_body, parse_sse_response),
     "openai_api": (parse_openai_response, parse_openai_sse_response),
@@ -695,20 +726,33 @@ try:
             record["request_id"] = flow.response.headers.get("x-request-id", "")
 
             # Parse response using service-specific parser — skip for browser
-            # metadata-only path (Section 5).
+            # metadata-only path (Section 5). Issue #65: the SSE dispatch now
+            # checks Content-Type first and falls back to body sniffing for
+            # both `event:` (Anthropic) and `data:` (OpenAI) prefixes — the
+            # old `startswith("data:")` gate silently dropped every Anthropic
+            # streaming response. The two-tier exception handler ends the
+            # silent-loss class of bug: expected parse errors log at WARNING,
+            # anything else logs at ERROR with a full traceback.
             service = record.get("destination_service", "")
             resp_parsers = None if is_browser_meta else SERVICE_PARSERS_RESPONSE.get(service)
             if resp_parsers:
                 try:
                     raw = flow.response.content.decode("utf-8", errors="replace")
                     json_parser, sse_parser = resp_parsers
-                    if sse_parser and raw.startswith("data:"):
+                    ctype = flow.response.headers.get("content-type", "")
+                    if sse_parser and _is_sse_response(ctype, raw):
                         record = sse_parser(raw, record)
                     elif json_parser:
                         body = json.loads(raw)
                         record = json_parser(body, record)
+                except json.JSONDecodeError as exc:
+                    # Expected when the body is malformed JSON (truncated chunk,
+                    # mid-stream buffer, etc.). UnicodeDecodeError is unreachable
+                    # because flow.response.content.decode(errors="replace") above
+                    # substitutes \ufffd rather than raising.
+                    logger.warning("response parse failed for %s (expected): %s", service, exc)
                 except Exception:
-                    pass
+                    logger.exception("response parse failed for %s (unexpected)", service)
 
             self._write_row(record)
             self._print_turn(record)

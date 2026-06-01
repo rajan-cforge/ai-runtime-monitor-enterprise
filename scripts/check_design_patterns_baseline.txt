@@ -139,14 +139,13 @@ src/claude_monitoring/vuln_scanner.py:380: empty 'except Exception: pass' (silen
 src/claude_monitoring/vuln_scanner.py:395: empty 'except Exception: pass' (silently swallowing errors)
 src/claude_monitoring/vuln_scanner.py:46: empty 'except Exception: pass' (silently swallowing errors)
 src/claude_monitoring/vuln_scanner.py:82: empty 'except Exception: pass' (silently swallowing errors)
-src/claude_monitoring/watch.py:1023: empty 'except Exception: pass' (silently swallowing errors)
-src/claude_monitoring/watch.py:1480: public function 'log_message' missing docstring
-src/claude_monitoring/watch.py:1483: public function 'do_GET' missing docstring
-src/claude_monitoring/watch.py:1991: public function 'main' missing docstring
-src/claude_monitoring/watch.py:499: public function 'get_csv_path' missing docstring
-src/claude_monitoring/watch.py:596: public function 'request' missing docstring
-src/claude_monitoring/watch.py:680: empty 'except Exception: pass' (silently swallowing errors)
-src/claude_monitoring/watch.py:685: public function 'response' missing docstring
-src/claude_monitoring/watch.py:710: empty 'except Exception: pass' (silently swallowing errors)
+src/claude_monitoring/watch.py:1067: empty 'except Exception: pass' (silently swallowing errors)
+src/claude_monitoring/watch.py:1524: public function 'log_message' missing docstring
+src/claude_monitoring/watch.py:1527: public function 'do_GET' missing docstring
+src/claude_monitoring/watch.py:2035: public function 'main' missing docstring
+src/claude_monitoring/watch.py:530: public function 'get_csv_path' missing docstring
+src/claude_monitoring/watch.py:627: public function 'request' missing docstring
+src/claude_monitoring/watch.py:711: empty 'except Exception: pass' (silently swallowing errors)
+src/claude_monitoring/watch.py:716: public function 'response' missing docstring
 src/claude_monitoring/wizard.py:350: empty 'except Exception: pass' (silently swallowing errors)
 src/claude_monitoring/wizard.py:54: public function 'is_first_run' missing docstring
