@@ -635,3 +635,219 @@ class TestLogging:
             h.flush()
         content = lifecycle.get_log_path().read_text()
         assert "daemon mode test" in content
+
+
+# ─────────────────────────────────────────────────────────────
+# Shutdown ordering — cleanup_for_shutdown (lifecycle reliability)
+# ─────────────────────────────────────────────────────────────
+
+
+class TestCleanupForShutdown:
+    """The atomic shutdown helper.
+
+    `cleanup_for_shutdown` is called as the FIRST action in every shutdown
+    path (signal handler, atexit) so the user is never left with a stuck
+    proxy or stale PID file even if launchd's KillTimeout interrupts the
+    slower mitmdump SIGTERM step. See docs/design/lifecycle-reliability.md.
+    """
+
+    def test_removes_pid_file_and_disables_proxy(self, tmp_output_dir):
+        pid_file = tmp_output_dir / "monitor.pid"
+        pid_file.write_text("12345")
+        with patch.object(lifecycle, "disable_system_proxy", return_value=True) as mock_disable:
+            lifecycle.cleanup_for_shutdown(pid_file)
+        assert not pid_file.exists()
+        mock_disable.assert_called_once()
+
+    def test_removes_pid_before_disabling_proxy(self, tmp_output_dir):
+        """The fast/unconditional PID removal must precede the proxy disable.
+
+        Pinning the order in a test (not just by code reading) so a future
+        refactor that swaps the two `with suppress()` blocks fails CI rather
+        than silently changing the invariant the design doc relies on.
+        """
+        pid_file = tmp_output_dir / "monitor.pid"
+        pid_file.write_text("12345")
+        ordering: list[str] = []
+
+        def fake_remove(path):
+            ordering.append(f"remove({path.name})")
+            path.unlink(missing_ok=True)
+
+        def fake_disable():
+            ordering.append("disable_proxy")
+            return True
+
+        with (
+            patch.object(lifecycle, "remove_pid_file", side_effect=fake_remove),
+            patch.object(lifecycle, "disable_system_proxy", side_effect=fake_disable),
+        ):
+            lifecycle.cleanup_for_shutdown(pid_file)
+        assert ordering == ["remove(monitor.pid)", "disable_proxy"]
+
+    def test_swallows_remove_pid_errors(self, tmp_output_dir):
+        pid_file = tmp_output_dir / "monitor.pid"
+        pid_file.write_text("12345")
+        with (
+            patch.object(lifecycle, "remove_pid_file", side_effect=OSError("boom")),
+            patch.object(lifecycle, "disable_system_proxy", return_value=True) as mock_disable,
+        ):
+            lifecycle.cleanup_for_shutdown(pid_file)  # must not raise
+        mock_disable.assert_called_once()
+
+    def test_swallows_disable_proxy_errors(self, tmp_output_dir):
+        pid_file = tmp_output_dir / "monitor.pid"
+        pid_file.write_text("12345")
+        with patch.object(lifecycle, "disable_system_proxy", side_effect=RuntimeError("boom")):
+            lifecycle.cleanup_for_shutdown(pid_file)  # must not raise
+        assert not pid_file.exists()
+
+    def test_idempotent_with_missing_pid_file(self, tmp_output_dir):
+        pid_file = tmp_output_dir / "nope.pid"
+        with patch.object(lifecycle, "disable_system_proxy", return_value=True) as mock_disable:
+            lifecycle.cleanup_for_shutdown(pid_file)
+            lifecycle.cleanup_for_shutdown(pid_file)
+        assert mock_disable.call_count == 2
+
+    def test_proxy_disable_runs_even_if_pid_remove_raises(self, tmp_output_dir):
+        """Critical ordering property: an exception in step 1 must not skip step 2.
+
+        If the PID file removal raises (e.g. permissions weirdness on shutdown),
+        the user's network must still be cleaned up. This is the inverse of the
+        bug that caused 20 stuck_system_proxy events in the log.
+        """
+        pid_file = tmp_output_dir / "monitor.pid"
+        pid_file.write_text("12345")
+        with (
+            patch.object(lifecycle, "remove_pid_file", side_effect=OSError("permission")),
+            patch.object(lifecycle, "disable_system_proxy", return_value=True) as mock_disable,
+        ):
+            lifecycle.cleanup_for_shutdown(pid_file)
+        mock_disable.assert_called_once()
+
+
+# ─────────────────────────────────────────────────────────────
+# Bind retry — bind_with_retry (lifecycle reliability)
+# ─────────────────────────────────────────────────────────────
+
+
+class TestBindWithRetry:
+    """Retry the dashboard bind on EADDRINUSE.
+
+    Without retry, the launchd KeepAlive restart loop hits the previous
+    instance's still-LISTEN-ing socket and dies on the first attempt
+    (~10 occurrences in the log). With bounded backoff, restart races
+    converge cleanly. See docs/design/lifecycle-reliability.md.
+    """
+
+    def test_returns_on_first_success(self):
+        sentinel = object()
+        factory = MagicMock(return_value=sentinel)
+        with patch.object(lifecycle.time, "sleep") as mock_sleep:
+            result = lifecycle.bind_with_retry(factory, port=9081)
+        assert result is sentinel
+        factory.assert_called_once()
+        mock_sleep.assert_not_called()
+
+    def test_retries_on_eaddrinuse_then_succeeds(self):
+        import errno as _errno
+
+        sentinel = object()
+        factory = MagicMock(
+            side_effect=[
+                OSError(_errno.EADDRINUSE, "Address already in use"),
+                OSError(_errno.EADDRINUSE, "Address already in use"),
+                sentinel,
+            ]
+        )
+        with (
+            patch.object(lifecycle.time, "sleep") as mock_sleep,
+            patch.object(lifecycle, "_identify_port_holder", return_value="python(12345)"),
+        ):
+            result = lifecycle.bind_with_retry(factory, port=9081)
+        assert result is sentinel
+        assert factory.call_count == 3
+        assert mock_sleep.call_count == 2  # one sleep per retry
+
+    def test_raises_after_max_attempts(self):
+        import errno as _errno
+
+        factory = MagicMock(side_effect=OSError(_errno.EADDRINUSE, "boom"))
+        with (
+            patch.object(lifecycle.time, "sleep"),
+            patch.object(lifecycle, "_identify_port_holder", return_value="unknown"),
+            pytest.raises(OSError) as excinfo,
+        ):
+            lifecycle.bind_with_retry(factory, port=9081, max_attempts=3)
+        assert excinfo.value.errno == _errno.EADDRINUSE
+        assert factory.call_count == 3
+
+    def test_does_not_retry_on_other_oserror(self):
+        import errno as _errno
+
+        factory = MagicMock(side_effect=OSError(_errno.EACCES, "denied"))
+        with (
+            patch.object(lifecycle.time, "sleep") as mock_sleep,
+            pytest.raises(OSError) as excinfo,
+        ):
+            lifecycle.bind_with_retry(factory, port=9081)
+        assert excinfo.value.errno == _errno.EACCES
+        factory.assert_called_once()
+        mock_sleep.assert_not_called()
+
+    def test_uses_configured_backoff_schedule(self):
+        """First two retry sleeps must come from BIND_RETRY_BACKOFF_SECONDS in order."""
+        import errno as _errno
+
+        sentinel = object()
+        factory = MagicMock(
+            side_effect=[
+                OSError(_errno.EADDRINUSE, ""),
+                OSError(_errno.EADDRINUSE, ""),
+                sentinel,
+            ]
+        )
+        with (
+            patch.object(lifecycle.time, "sleep") as mock_sleep,
+            patch.object(lifecycle, "_identify_port_holder", return_value="unknown"),
+        ):
+            lifecycle.bind_with_retry(factory, port=9081)
+        assert mock_sleep.call_args_list[0].args[0] == lifecycle.BIND_RETRY_BACKOFF_SECONDS[0]
+        assert mock_sleep.call_args_list[1].args[0] == lifecycle.BIND_RETRY_BACKOFF_SECONDS[1]
+
+    def test_logs_port_holder_on_retry(self, caplog):
+        import errno as _errno
+
+        sentinel = object()
+        factory = MagicMock(side_effect=[OSError(_errno.EADDRINUSE, ""), sentinel])
+        with (
+            patch.object(lifecycle.time, "sleep"),
+            patch.object(lifecycle, "_identify_port_holder", return_value="python(99999)"),
+            caplog.at_level(logging.WARNING, logger="ai-runtime-monitor"),
+        ):
+            lifecycle.bind_with_retry(factory, port=9081)
+        assert any("python(99999)" in rec.message for rec in caplog.records)
+
+
+class TestIdentifyPortHolder:
+    """The diagnostic lsof query used by bind_with_retry — never load-bearing."""
+
+    def test_returns_unknown_on_lsof_failure(self):
+        with patch("claude_monitoring.lifecycle.subprocess.run", side_effect=OSError("no lsof")):
+            assert lifecycle._identify_port_holder(9081, "127.0.0.1") == "unknown"
+
+    def test_returns_unknown_on_empty_output(self):
+        fake = MagicMock(stdout="")
+        with patch("claude_monitoring.lifecycle.subprocess.run", return_value=fake):
+            assert lifecycle._identify_port_holder(9081, "127.0.0.1") == "unknown"
+
+    def test_parses_lsof_header_and_first_row(self):
+        fake = MagicMock(
+            stdout=(
+                "COMMAND   PID USER   FD   TYPE  DEVICE SIZE/OFF NODE NAME\n"
+                "Python  12345 user   7u  IPv4 0x1234     0t0  TCP 127.0.0.1:9081 (LISTEN)\n"
+            )
+        )
+        with patch("claude_monitoring.lifecycle.subprocess.run", return_value=fake):
+            holder = lifecycle._identify_port_holder(9081, "127.0.0.1")
+        assert "Python" in holder and "12345" in holder

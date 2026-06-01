@@ -28,9 +28,12 @@ import signal
 import subprocess
 import sys
 import time
+from collections.abc import Callable
+from contextlib import suppress
 from datetime import datetime, timezone
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
+from typing import TypeVar
 
 from claude_monitoring.config import get_output_dir, get_proxy_port
 
@@ -324,6 +327,117 @@ def disable_system_proxy() -> bool:
         return True
     except Exception:
         return False
+
+
+def cleanup_for_shutdown(pid_file: Path) -> None:
+    """Atomically remove the PID file and disable the system proxy.
+
+    Run as the FIRST action in every shutdown path (signal handler and
+    atexit). Even if a slower cleanup step is interrupted by SIGKILL or
+    launchd's KillTimeout, the user is never left with a stuck system
+    proxy or a stale PID file — the two failure modes most frequently
+    observed in monitor.log (60+ combined occurrences before this fix).
+
+    Both steps are independent and idempotent: a failure in the PID
+    removal must not prevent the proxy disable. Errors are suppressed
+    because the caller is on its way out anyway.
+    """
+    with suppress(Exception):
+        remove_pid_file(pid_file)
+    with suppress(Exception):
+        disable_system_proxy()
+
+
+_T = TypeVar("_T")
+
+# Backoff schedule for dashboard bind retries (seconds). Five attempts
+# total = ~7.5s of retry coverage, calibrated against launchd's
+# ThrottleInterval=10s and the typical 1–3s window for a SIGKILL'd
+# Python process to release its socket. See
+# docs/design/lifecycle-reliability.md.
+BIND_RETRY_BACKOFF_SECONDS: tuple[float, ...] = (0.5, 1.0, 2.0, 4.0)
+
+
+def _identify_port_holder(port: int, address: str) -> str:
+    """Best-effort lsof query for who currently LISTENs on ``address:port``.
+
+    Used purely for diagnostic logging during bind retries — never
+    load-bearing. Returns ``"unknown"`` on any failure so the log line
+    stays compact and readable.
+
+    An empty ``address`` falls back to ``127.0.0.1`` so the lsof filter
+    does not collapse to ``@:port`` (which matches every interface and
+    would surface unrelated processes in the log).
+    """
+    if not address:
+        address = "127.0.0.1"
+    try:
+        result = subprocess.run(
+            ["lsof", "-n", "-i", f"@{address}:{port}", "-sTCP:LISTEN"],
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return "unknown"
+    for line in result.stdout.splitlines()[1:]:  # skip header
+        parts = line.split()
+        if len(parts) >= 2:
+            return f"{parts[0]}({parts[1]})"
+    return "unknown"
+
+
+def bind_with_retry(
+    server_factory: Callable[[], _T],
+    *,
+    port: int,
+    address: str = "127.0.0.1",
+    max_attempts: int = 5,
+    logger: logging.Logger | None = None,
+) -> _T:
+    """Invoke ``server_factory()`` and retry on EADDRINUSE with bounded backoff.
+
+    Without this, a fast restart loop (launchd KeepAlive after a crash)
+    races the previous instance's still-LISTEN-ing dashboard socket and
+    fails immediately. ``allow_reuse_address`` (SO_REUSEADDR) covers
+    TIME_WAIT but not active LISTEN — so a retry loop is the right tool.
+
+    Non-EADDRINUSE OSErrors are re-raised immediately (permission denied
+    etc. won't fix themselves with backoff). On the final attempt the
+    original OSError is propagated with full traceback.
+
+    When ``max_attempts`` exceeds the length of ``BIND_RETRY_BACKOFF_SECONDS``,
+    additional attempts clamp to the final entry (currently 4s) — calls
+    after the schedule never sleep longer than the last documented value.
+    """
+    log = logger or get_logger()
+    last_exc: OSError | None = None
+    for attempt in range(max_attempts):
+        try:
+            return server_factory()
+        except OSError as exc:
+            if exc.errno != errno.EADDRINUSE:
+                raise
+            last_exc = exc
+            if attempt == max_attempts - 1:
+                break
+            backoff = BIND_RETRY_BACKOFF_SECONDS[min(attempt, len(BIND_RETRY_BACKOFF_SECONDS) - 1)]
+            holder = _identify_port_holder(port, address)
+            log.warning(
+                "dashboard bind EADDRINUSE port=%d holder=%s attempt=%d/%d backoff=%.1fs",
+                port,
+                holder,
+                attempt + 1,
+                max_attempts,
+                backoff,
+            )
+            time.sleep(backoff)
+    # Loop only exits via `break` after a final EADDRINUSE, which always
+    # assigns last_exc. Use an explicit guard rather than `assert` so the
+    # invariant survives `python -O` (assert statements are stripped).
+    if last_exc is None:
+        raise RuntimeError("bind_with_retry exhausted attempts without recording an error")
+    raise last_exc
 
 
 def is_system_proxy_enabled_for_port(port: int | None = None) -> bool:
