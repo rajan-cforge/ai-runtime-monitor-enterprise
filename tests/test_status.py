@@ -293,7 +293,7 @@ class TestShowStatus:
         empty (PR #51 invariant) — line reads '✅ N API endpoints'."""
         monkeypatch.setattr(status_mod, "_is_mitmproxy_running", lambda: False)
         monkeypatch.setattr(status_mod, "_is_system_proxy_configured", lambda: False)
-        monkeypatch.setattr(status_mod, "_get_ca_trust_state", lambda: (True, True, "trusted"))
+        monkeypatch.setattr(status_mod, "_get_ca_trust_state", lambda: (True, True, None))
         monkeypatch.setattr(status_mod, "_is_monitor_running", lambda: False)
         monkeypatch.setattr(status_mod, "_is_db_encrypted", lambda: False)
         monkeypatch.setattr(status_mod, "_check_permissions", lambda: True)
@@ -317,7 +317,7 @@ class TestShowStatus:
         having to re-read constants.py."""
         monkeypatch.setattr(status_mod, "_is_mitmproxy_running", lambda: False)
         monkeypatch.setattr(status_mod, "_is_system_proxy_configured", lambda: False)
-        monkeypatch.setattr(status_mod, "_get_ca_trust_state", lambda: (True, True, "trusted"))
+        monkeypatch.setattr(status_mod, "_get_ca_trust_state", lambda: (True, True, None))
         monkeypatch.setattr(status_mod, "_is_monitor_running", lambda: False)
         monkeypatch.setattr(status_mod, "_is_db_encrypted", lambda: False)
         monkeypatch.setattr(status_mod, "_check_permissions", lambda: True)
@@ -464,3 +464,127 @@ class TestShowStatusJson:
         assert payload["dashboard_port"] == 9081
         assert payload["proxy_port"] == 9080
         assert "extension" in payload
+
+
+# ─────────────────────────────────────────────────────────────
+# Next-Steps footer — proxy enablement guidance + restart matrix
+# ─────────────────────────────────────────────────────────────
+
+
+class TestHttpProxyEnvIsSet:
+    def test_returns_true_when_https_proxy_set(self, monkeypatch):
+        monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:9080")
+        monkeypatch.delenv("https_proxy", raising=False)
+        assert status_mod._http_proxy_env_is_set() is True
+
+    def test_returns_true_when_lowercase_https_proxy_set(self, monkeypatch):
+        monkeypatch.delenv("HTTPS_PROXY", raising=False)
+        monkeypatch.setenv("https_proxy", "http://127.0.0.1:9080")
+        assert status_mod._http_proxy_env_is_set() is True
+
+    def test_returns_false_when_neither_set(self, monkeypatch):
+        monkeypatch.delenv("HTTPS_PROXY", raising=False)
+        monkeypatch.delenv("https_proxy", raising=False)
+        assert status_mod._http_proxy_env_is_set() is False
+
+    def test_empty_string_treated_as_unset(self, monkeypatch):
+        """An exported-but-empty HTTPS_PROXY shouldn't fool the check.
+
+        Some shells set HTTPS_PROXY="" to neutralise a previously-exported
+        value; we should treat that as "not configured" and still nag the
+        user to export the real URL.
+        """
+        monkeypatch.setenv("HTTPS_PROXY", "")
+        monkeypatch.delenv("https_proxy", raising=False)
+        assert status_mod._http_proxy_env_is_set() is False
+
+
+class TestRenderNextStepsLines:
+    """The renderer that powers both --status and the wizard ending."""
+
+    def test_lines_include_export_and_enable_commands(self):
+        lines = status_mod._render_next_steps_lines(proxy_port=9080)
+        joined = "\n".join(lines)
+        assert "export HTTPS_PROXY=http://127.0.0.1:9080" in joined
+        assert "ai-monitor --enable-system-proxy" in joined
+
+    def test_lines_include_restart_matrix(self):
+        lines = status_mod._render_next_steps_lines(proxy_port=9080)
+        joined = "\n".join(lines)
+        # The five apps from the user-specified matrix, plus Chrome
+        # exception, must all appear.
+        for app in ("Claude Code", "Claude Desktop", "ChatGPT Desktop", "Cursor", "Chrome"):
+            assert app in joined, f"{app} missing from restart matrix"
+        # Chrome row must explain the no-restart exception.
+        assert "no" in joined.lower() and "Chrome" in joined
+
+    def test_lines_respect_custom_proxy_port(self):
+        lines = status_mod._render_next_steps_lines(proxy_port=9999)
+        joined = "\n".join(lines)
+        assert "http://127.0.0.1:9999" in joined
+        assert "http://127.0.0.1:9080" not in joined
+
+
+class TestNextStepsFooterGating:
+    """The footer fires when the user's environment is INCOMPLETE.
+
+    Both conditions matter: the macOS system proxy AND HTTPS_PROXY in the
+    shell. Either one missing means desktop apps or CLI tools won't have
+    their API traffic captured, so the footer should appear and nag.
+    """
+
+    def _stub_status_pieces(self, monkeypatch, *, sys_proxy: bool):
+        # Stub everything show_status calls so we only exercise the footer.
+        monkeypatch.setattr(status_mod, "_is_mitmproxy_running", lambda: True)
+        monkeypatch.setattr(status_mod, "_is_system_proxy_configured", lambda: sys_proxy)
+        monkeypatch.setattr(status_mod, "_get_ca_trust_state", lambda: (True, True, None))
+        monkeypatch.setattr(status_mod, "_is_monitor_running", lambda: True)
+        monkeypatch.setattr(status_mod, "_is_db_encrypted", lambda: False)
+        monkeypatch.setattr(status_mod, "_check_permissions", lambda: True)
+        monkeypatch.setattr(status_mod, "_has_dashboard_token", lambda: True)
+        monkeypatch.setattr(status_mod, "_has_custom_ca", lambda: True)
+        monkeypatch.setattr(status_mod, "_check_extension_heartbeat", lambda: None)
+
+    def test_footer_absent_when_fully_configured(self, monkeypatch):
+        self._stub_status_pieces(monkeypatch, sys_proxy=True)
+        monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:9080")
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            status_mod.show_status()
+        assert "Next steps" not in buf.getvalue()
+
+    def test_footer_present_when_system_proxy_off(self, monkeypatch):
+        self._stub_status_pieces(monkeypatch, sys_proxy=False)
+        monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:9080")
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            status_mod.show_status()
+        out = buf.getvalue()
+        assert "Next steps" in out
+        assert "ai-monitor --enable-system-proxy" in out
+
+    def test_footer_present_when_https_proxy_env_unset(self, monkeypatch):
+        self._stub_status_pieces(monkeypatch, sys_proxy=True)
+        monkeypatch.delenv("HTTPS_PROXY", raising=False)
+        monkeypatch.delenv("https_proxy", raising=False)
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            status_mod.show_status()
+        out = buf.getvalue()
+        assert "Next steps" in out
+        assert "export HTTPS_PROXY=" in out
+
+    def test_dashboard_url_includes_token_when_available(self, monkeypatch):
+        """Once monitoring is running, the Dashboard line should be
+        directly clickable — i.e. include the ?token= query so the user
+        doesn't have to find it themselves in the logs."""
+        self._stub_status_pieces(monkeypatch, sys_proxy=True)
+        monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:9080")
+        monkeypatch.setattr(
+            "claude_monitoring.security.ensure_dashboard_token",
+            lambda: "TESTTOKEN1234567890",
+        )
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            status_mod.show_status()
+        assert "?token=TESTTOKEN1234567890" in buf.getvalue()

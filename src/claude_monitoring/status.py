@@ -10,7 +10,9 @@ per-source capture matrix. All checks are best-effort and fail closed
 
 from __future__ import annotations
 
+import os
 import subprocess
+from contextlib import suppress
 
 from claude_monitoring.config import get_dashboard_port, get_db_path, get_output_dir, get_proxy_port
 
@@ -282,6 +284,51 @@ def _fmt_check(ok: bool, ok_text: str, bad_text: str) -> str:
     return f"✅ {ok_text}" if ok else f"❌ {bad_text}"
 
 
+def _http_proxy_env_is_set() -> bool:
+    """True if the current shell has a non-empty HTTPS_PROXY exported.
+
+    Both `HTTPS_PROXY` and the lowercase `https_proxy` are recognised
+    (curl, requests, and most CLI HTTP libraries accept either). An
+    empty-string value is treated as unset — some shells use
+    ``HTTPS_PROXY=""`` to neutralise a previously-exported value.
+    """
+    return bool((os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy") or "").strip())
+
+
+def _render_next_steps_lines(*, proxy_port: int) -> list[str]:
+    """Build the post-setup / status-footer 'Next steps' block.
+
+    Shared between ``show_status`` and the wizard ending so the two
+    surfaces stay in sync. Returns a list of lines (no trailing newlines)
+    that the caller is responsible for printing.
+
+    The block has two parts:
+      1. The two follow-up commands needed for full capture
+         (HTTPS_PROXY export + macOS system proxy enable).
+      2. A restart matrix — which apps need restarting after the proxy
+         is enabled, with Chrome called out as the no-restart exception.
+    """
+    return [
+        "  💡 Next steps — to capture API traffic from desktop apps and CLI tools:",
+        "",
+        f"     export HTTPS_PROXY=http://127.0.0.1:{proxy_port}",
+        "     ai-monitor --enable-system-proxy",
+        "",
+        "     After enabling the proxy, restart any AI app that was already running:",
+        "",
+        "       Claude Code (claude CLI)     restart — env vars are read at process start",
+        "       Claude Desktop               restart — Electron app, same reason",
+        "       ChatGPT Desktop              restart — Electron app, same reason",
+        "       Cursor                       restart — Electron app, same reason",
+        "       Chrome (claude.ai etc.)      no restart needed — extension captures DOM directly",
+        "       Ollama                       no restart — captured by process + network scanner",
+        "",
+        "     Reason: HTTPS_PROXY is read once at process startup; running apps",
+        "     can't pick it up retroactively. Chrome is the exception because the",
+        "     extension reads the rendered page, not the network.",
+    ]
+
+
 def show_status() -> int:
     """Print a human-readable status report. Returns 0 for success."""
     from claude_monitoring.security import trust_reason_message
@@ -310,7 +357,18 @@ def show_status() -> int:
     # browser UI sites). cert_ok is still used for the SSL inspection
     # summary line below.
 
+    # When the monitor is running, surface the token directly in the
+    # Dashboard URL so the user can click straight from the terminal —
+    # previously the token only appeared in --start's startup banner,
+    # forcing users to dig through ~/claude_watch_output/.dashboard_token.
     dashboard_url = f"http://localhost:{get_dashboard_port()}"
+    if monitor_running and has_token:
+        with suppress(Exception):
+            from claude_monitoring.security import ensure_dashboard_token
+
+            tok = ensure_dashboard_token()
+            if tok:
+                dashboard_url = f"{dashboard_url}?token={tok}"
 
     print("AI Runtime Monitor — Status")
 
@@ -500,6 +558,15 @@ def show_status() -> int:
         print(f"    Host:           {ext.get('hostname', 'unknown')}")
         print(f"    Last heartbeat: {ext.get('last_seen', 'never')}")
         print(f"    Selectors:      {ext.get('status', 'unknown')}")
+
+    # Footer fires only when capture is incomplete — either the macOS
+    # system proxy is off OR the shell hasn't exported HTTPS_PROXY. When
+    # both are configured, the user already knows the drill and we stay
+    # quiet so --status reads cleanly.
+    if not (sys_proxy and _http_proxy_env_is_set()):
+        print()
+        for line in _render_next_steps_lines(proxy_port=get_proxy_port()):
+            print(line)
 
     return 0
 

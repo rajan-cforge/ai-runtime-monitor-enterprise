@@ -79,6 +79,17 @@ def verify_token(presented: str, expected: str | None = None) -> bool:
     """Constant-time token comparison."""
 ```
 
+**Token surfacing in `ai-monitor --status` output (PR #64):** when the
+monitor is running and the dashboard token file exists,
+``show_status()`` reads the token via ``ensure_dashboard_token()`` and
+prints the Dashboard URL with the ``?token=<token>`` query parameter
+attached, so the user can click straight from the terminal instead of
+finding the token in ``~/claude_watch_output/.dashboard_token``. No new
+disclosure surface — the token is already printed by the ``--start``
+banner. ``ensure_dashboard_token()`` failures are suppressed so a
+status display never crashes the CLI on a permissions-broken token
+file; in that case the URL falls back to the token-less form.
+
 ### 2.5 Sensitive data masking
 
 ```python
