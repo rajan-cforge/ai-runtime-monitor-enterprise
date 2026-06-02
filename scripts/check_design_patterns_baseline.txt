@@ -139,10 +139,10 @@ src/claude_monitoring/vuln_scanner.py:380: empty 'except Exception: pass' (silen
 src/claude_monitoring/vuln_scanner.py:395: empty 'except Exception: pass' (silently swallowing errors)
 src/claude_monitoring/vuln_scanner.py:46: empty 'except Exception: pass' (silently swallowing errors)
 src/claude_monitoring/vuln_scanner.py:82: empty 'except Exception: pass' (silently swallowing errors)
-src/claude_monitoring/watch.py:1090: empty 'except Exception: pass' (silently swallowing errors)
-src/claude_monitoring/watch.py:1547: public function 'log_message' missing docstring
-src/claude_monitoring/watch.py:1550: public function 'do_GET' missing docstring
-src/claude_monitoring/watch.py:2058: public function 'main' missing docstring
+src/claude_monitoring/watch.py:1103: empty 'except Exception: pass' (silently swallowing errors)
+src/claude_monitoring/watch.py:1560: public function 'log_message' missing docstring
+src/claude_monitoring/watch.py:1563: public function 'do_GET' missing docstring
+src/claude_monitoring/watch.py:2071: public function 'main' missing docstring
 src/claude_monitoring/watch.py:553: public function 'get_csv_path' missing docstring
 src/claude_monitoring/watch.py:650: public function 'request' missing docstring
 src/claude_monitoring/watch.py:734: empty 'except Exception: pass' (silently swallowing errors)

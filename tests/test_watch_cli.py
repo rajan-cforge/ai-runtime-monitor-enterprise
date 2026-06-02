@@ -1220,3 +1220,101 @@ class TestGeneratedCertPaths:
         content = script_path.read_text()
         assert not self._legacy_path_in(content), "claude-desktop-proxy.sh references legacy ~/.mitmproxy/ path"
         assert "ai-monitor-ca.pem" in content
+
+
+# ─────────────────────────────────────────────────────────────
+# IPv6 dual-stack listener — closes Claude Desktop IPv6 bypass
+#
+# Pre-fix mitmdump bound to 0.0.0.0:9080 only (IPv4). macOS Happy
+# Eyeballs prefers IPv6 when available, and `networksetup
+# -setsecurewebproxy` is stack-agnostic — the OS routes both v4 and v6
+# destinations through 127.0.0.1:9080. So Claude Desktop's IPv6
+# connections were arriving at mitmproxy and being REFUSED because
+# mitmproxy wasn't listening on the IPv6 stack. The bypass appeared as
+# direct IPv6 connections in lsof; the actual cause was mitmproxy's
+# listener config, not macOS's proxy routing. See Issue #70.
+#
+# Fix: add `--listen-host ::` to the mitmdump cmdline. On macOS,
+# IPV6_V6ONLY=0 is the BSD default, so a socket bound to `::` accepts
+# BOTH IPv4-mapped and native IPv6 connections natively. No second
+# listener needed. On Linux IPV6_V6ONLY=1 is the default and would
+# require a separate IPv4 listener — documented as a follow-up for
+# any future Linux port.
+# ─────────────────────────────────────────────────────────────
+
+
+class TestMitmdumpDualStackListener:
+    """Pin that the mitmdump cmdline binds both IPv4 and IPv6.
+
+    Closes the Claude Desktop IPv6 bypass (Issue #70). Architect-confirmed
+    on 2026-06-01 — the fix is at the listener layer, not at the
+    networksetup layer.
+    """
+
+    # Test fixture proxy port — referenced in assertions so any future
+    # default port change updates exactly one place rather than scattering
+    # the literal across multiple tests.
+    FIXTURE_PROXY_PORT = 9080
+
+    @classmethod
+    def _capture_execvp_cmd(cls, tmp_path, monkeypatch) -> list[str]:
+        """Drive ``run_start()`` and return the cmd argv passed to
+        ``os.execvp``. Sidesteps the actual subprocess invocation so the
+        test never spawns a real mitmdump."""
+        from unittest.mock import patch
+
+        monkeypatch.setattr("claude_monitoring.watch.get_output_dir", lambda: tmp_path)
+        monkeypatch.setattr("claude_monitoring.watch.get_session_dir", lambda: tmp_path / "sessions")
+        monkeypatch.setattr("claude_monitoring.watch.get_proxy_port", lambda: cls.FIXTURE_PROXY_PORT)
+
+        captured: dict = {}
+
+        def fake_execvp(name, cmd):
+            captured["name"] = name
+            captured["cmd"] = list(cmd)
+            # Simulate the real execvp by raising SystemExit so run_start
+            # bails as it would in production.
+            raise SystemExit(0)
+
+        with patch("claude_monitoring.watch.os.execvp", side_effect=fake_execvp):
+            from claude_monitoring.watch import run_start
+
+            try:
+                run_start()
+            except SystemExit:
+                pass
+
+        assert captured, "os.execvp was not called — run_start didn't reach the exec line"
+        return captured["cmd"]
+
+    def test_cmdline_includes_listen_host_for_dual_stack(self, tmp_path, monkeypatch):
+        """The argv must contain ``--listen-host ::`` so mitmproxy binds
+        both IPv4 and IPv6 stacks on macOS."""
+        cmd = self._capture_execvp_cmd(tmp_path, monkeypatch)
+        # Both tokens must be present and adjacent in the argv
+        assert "--listen-host" in cmd, f"--listen-host missing from cmd: {cmd}"
+        idx = cmd.index("--listen-host")
+        assert idx + 1 < len(cmd), "--listen-host has no value argument"
+        assert cmd[idx + 1] == "::", f"--listen-host should be '::' for dual-stack, got {cmd[idx + 1]!r}"
+
+    def test_cmdline_still_includes_listen_port(self, tmp_path, monkeypatch):
+        """Regression — adding --listen-host must not remove --listen-port."""
+        cmd = self._capture_execvp_cmd(tmp_path, monkeypatch)
+        assert "--listen-port" in cmd
+        idx = cmd.index("--listen-port")
+        assert cmd[idx + 1] == str(self.FIXTURE_PROXY_PORT), (
+            f"--listen-port value should match the fixture port ({self.FIXTURE_PROXY_PORT}), got {cmd[idx + 1]!r}"
+        )
+
+    def test_listen_host_precedes_listen_port(self, tmp_path, monkeypatch):
+        """``--listen-host :: --listen-port 9080`` is the canonical pair
+        order in mitmproxy invocations. Not strictly required by
+        mitmproxy but pinning the order helps cmdline readability and
+        matches the documented examples."""
+        cmd = self._capture_execvp_cmd(tmp_path, monkeypatch)
+        host_idx = cmd.index("--listen-host")
+        port_idx = cmd.index("--listen-port")
+        assert host_idx < port_idx, (
+            f"--listen-host should appear before --listen-port for readability; "
+            f"got host at {host_idx}, port at {port_idx}"
+        )
