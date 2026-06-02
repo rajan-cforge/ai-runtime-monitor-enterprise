@@ -1303,8 +1303,7 @@ class TestMitmdumpDualStackListener:
         assert "--listen-port" in cmd
         idx = cmd.index("--listen-port")
         assert cmd[idx + 1] == str(self.FIXTURE_PROXY_PORT), (
-            f"--listen-port value should match the fixture port "
-            f"({self.FIXTURE_PROXY_PORT}), got {cmd[idx + 1]!r}"
+            f"--listen-port value should match the fixture port ({self.FIXTURE_PROXY_PORT}), got {cmd[idx + 1]!r}"
         )
 
     def test_listen_host_precedes_listen_port(self, tmp_path, monkeypatch):
