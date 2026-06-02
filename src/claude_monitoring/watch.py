@@ -1039,6 +1039,19 @@ echo "   Run: claude"
 
     cmd = [
         "mitmdump",
+        # Bind both IPv4 and IPv6 stacks. macOS's ``networksetup
+        # -setsecurewebproxy`` is stack-agnostic — the OS routes both v4
+        # and v6 destinations through the configured proxy host. Pre-fix
+        # mitmproxy only bound 0.0.0.0:9080 (IPv4), so apps that resolved
+        # an AAAA record (Claude Desktop via Happy Eyeballs) had their
+        # IPv6 connections refused by mitmproxy and silently fell back to
+        # direct routing — the bypass observed in Issue #70. On macOS,
+        # ``IPV6_V6ONLY=0`` is the BSD default, so a single socket bound
+        # to ``::`` accepts BOTH IPv4-mapped and native IPv6 connections.
+        # On Linux the default is ``IPV6_V6ONLY=1`` — see
+        # ``docs/design/ipv6-proxy.md`` for the future Linux-port note.
+        "--listen-host",
+        "::",
         "--listen-port",
         str(proxy_port),
         "--ssl-insecure",
