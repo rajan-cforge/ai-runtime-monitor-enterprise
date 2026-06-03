@@ -31,14 +31,14 @@ ai-monitor --enable-system-proxy
 
 `ai-monitor --status` reprints these two commands as a footer whenever capture isn't fully configured, so you don't need to memorize them.
 
-**Restart any AI app that was already running** before you enabled the proxy — environment variables are read at process start, so a running app can't pick up `HTTPS_PROXY` retroactively:
+**Restart any AI app that was already running** before you enabled the proxy — environment variables are read at process start, so a running app can't pick up `HTTPS_PROXY` retroactively. (For desktop AI apps a restart is necessary but not sufficient: see "Honest capture matrix" for what's actually captured per surface.)
 
 | App / tool                              | Restart needed? | Why |
 | --------------------------------------- | --------------- | --- |
 | Claude Code (`claude` CLI)              | **Yes**         | Node process; env vars sticky at fork |
-| Claude Desktop                          | **Yes**         | Electron app; same reason |
-| ChatGPT Desktop                         | **Yes**         | Electron app; same reason |
-| Cursor                                  | **Yes**         | Electron app; same reason |
+| Claude Desktop                          | **Yes**         | Electron app; same reason. Note partial coverage — see capture matrix below. |
+| ChatGPT Desktop                         | **Yes**         | Electron app; same reason. Note envelope-only coverage — see capture matrix. |
+| Cursor                                  | **Yes**         | Electron app; same reason. Plugin helpers bypass the proxy at the vendor level. |
 | Chrome (claude.ai, chatgpt.com, gemini) | **No**          | Extension captures the DOM directly, independent of any proxy. The content script runs whenever you visit the page and reads the rendered conversation — no network interception involved, no env vars to inherit. |
 | Ollama (local model)                    | **No**          | Captured by the process + network scanner; doesn't route through the HTTPS proxy at all |
 | `curl` / shell scripts                  | Conditional     | Yes if relying on system proxy alone; no if `HTTPS_PROXY` is already in your shell rc |
@@ -72,12 +72,14 @@ echo 'export HTTP_PROXY=http://127.0.0.1:9080'  >> ~/.zshrc
 
 # 6. Verify capture is live:
 ai-monitor --status
-#    Expect:
+#    Expect (verdicts reflect live evidence — see "Honest capture matrix" below):
 #      System proxy:    ✅ Enabled
-#      Claude Desktop:  ✅ Proxy (full capture)
-#      ChatGPT Desktop: ✅ Proxy (full capture)
-#      Cursor:          ✅ Proxy (full capture)
+#      Claude Code:     ✅ JSONL + ✅ Proxy
+#      Claude Desktop:  ❌ System proxy on but app routing direct (IPv6 / plugin-helper bypass)
+#      ChatGPT Desktop: ⚠ Reaches proxy, no decrypted content (host may not be in allow_hosts)
+#      Cursor:          ❌ System proxy on but app routing direct (IPv6 / plugin-helper bypass)
 #      Chrome <hosts>:  ✅ Extension content    (independent of proxy state)
+#      Ollama:          ✅ Process + Network
 ```
 
 **Why this order matters.** Electron apps and Node CLIs snapshot the environment and read the macOS proxy configuration exactly once — at process start — and keep that view for their entire lifetime. Reconfiguring while they're running has no effect; only the next launch picks up the change. Chrome is the deliberate exception in the matrix above because its extension reads the rendered page DOM rather than the network, so it never depended on proxy state in the first place.
@@ -161,12 +163,29 @@ A full step-by-step verification plan with `What to do` / `What should happen` /
 
 | Layer | What it captures | How |
 |-------|------------------|-----|
-| **AI API traffic** | Every prompt, response, token count, and tool call from agents that route through the HTTPS proxy | mitmproxy addon with selective SSL inspection — only AI API hostnames (X.509 NameConstraints) |
+| **AI API traffic** | Prompts, responses, token counts, and tool calls from agents that route through the HTTPS proxy. Coverage varies by app — see "Honest capture matrix" below. | mitmproxy addon with selective SSL inspection — only AI API hostnames (X.509 NameConstraints) |
 | **CLI agent sessions** | Full Claude Code conversation transcripts including system prompts, file reads, bash commands, and tool use | JSONL transcript tailing under `~/.claude/projects/` |
 | **Browser AI** | Claude Web (claude.ai), ChatGPT (chatgpt.com), Gemini (gemini.google.com) conversations — verified end-to-end in v0.2. Perplexity, Copilot, and DeepSeek have coded support; verification in progress. | Chrome extension (content script, isolated world) + Chrome history fallback |
 | **Process / filesystem / network** | Agent process lifecycle, files read or written, outbound connections, CPU and memory | `psutil` + `watchdog` / FSEvents |
 
 The capture is selective: the proxy's `--allow-hosts` regex only intercepts AI API endpoints. Banking, email, and unrelated traffic flow through untouched.
+
+### Honest capture matrix
+
+v0.2.1 captures **comprehensively** for Claude Code CLI, browser-based AI (Chrome extension), and local models (Ollama). For desktop AI apps (Claude Desktop, ChatGPT Desktop, Cursor), v0.2.1 captures **partial** traffic due to per-app proxy honoring on macOS. The architectural fix is v0.3 (Network Extension framework) which captures all desktop AI traffic at the OS network stack level. `ai-monitor --status` reports the honest live capture state per surface.
+
+| Surface | Coverage | Mechanism | What's missing in v0.2.1 |
+|---|---|---|---|
+| Claude Code (`claude` CLI) | ✅ Full | JSONL session log + HTTPS proxy | nothing |
+| `claude.ai`, `chatgpt.com`, `gemini.google.com` in Chrome | ✅ Full | Chrome extension DOM scrape | other browsers (Firefox/Safari/Arc) not yet supported |
+| Ollama / local models | ✅ Full | process scanner + network monitor | n/a (local; no HTTPS to intercept) |
+| Claude Desktop | ⚠ Partial | HTTPS proxy via Electron's network-service helper | Main process maintains a persistent IPv6 channel to `api.anthropic.com` that bypasses the macOS IPv4 system proxy. Auxiliary connections (polling, telemetry, OAuth) reach the proxy; the main chat-completion stream does not. Workaround: open the same conversation on `claude.ai` in Chrome — the extension captures it. Closed architecturally in v0.3. Live `--status` verdict for this surface is typically `❌ System proxy on but app routing direct (IPv6 / plugin-helper bypass)` because the heuristic requires recent decrypted chat-completion rows to verify capture, and the bypassed stream produces none. |
+| ChatGPT Desktop | ⚠ Envelope only | HTTPS proxy (host + timing + byte counts) | `chatgpt.com` is intentionally excluded from selective TLS inspection (the v0.2 API-only `allow_hosts` invariant). Connection envelope captured; content not decrypted. Workaround: use `chatgpt.com` in Chrome. Closed in v0.3. Live `--status` verdict for this surface is typically `⚠ Reaches proxy, no decrypted content (host may not be in allow_hosts)`. |
+| Cursor | ⚠ Partial | HTTPS proxy (IDE-level traffic) | Plugin / extension-host subprocesses bypass system proxy at the Cursor vendor level. IDE-level API calls captured when present; helper traffic not. Closed in v0.3. Live `--status` verdict is typically `❌ System proxy on but app routing direct (IPv6 / plugin-helper bypass)` when the recent-rows heuristic doesn't see IDE traffic in the last hour. |
+
+Always-on observation runs on every surface regardless of capture state: process scanner, filesystem watcher, network connection monitoring, Chrome history scan, sensitive-data / DLP across all captured content. Run `ai-monitor --status` at any time for live per-surface verdicts (the matrix above maps the expected verdict shape; real verdicts reflect what's currently in the database).
+
+> **Why HTTPS proxy hits a ceiling on macOS desktop AI apps.** macOS's system HTTPS proxy is configured at a single IPv4 host (`networksetup -setsecurewebproxy <interface> 127.0.0.1 9080`). Electron apps split networking across child processes — the network-service helper honors that proxy for routine traffic, but the main process may maintain its own persistent connections (e.g., long-lived IPv6 channels) that bypass it. PAC (proxy auto-config) was investigated this sprint and validated for native CFNetwork apps in a controlled Swift `URLSession` test; for Electron main processes it routes a subset of traffic but cannot redirect already-established channels. Apple's Network Extension framework intercepts at the OS network stack regardless of which subprocess opened the socket — that's the v0.3 architectural direction, gated on Apple entitlement approval.
 
 ## Detecting AI coding agent supply chain risk
 
@@ -228,15 +247,16 @@ claude-watch --configure list          # Show supported agents and status
 claude-watch --unconfigure             # Remove proxy config from shell
 ```
 
-## Roadmap (NOT in v0.2)
+## Roadmap (NOT in v0.2.1)
 
 To be straight with you about what isn't shipped yet:
 
-- **Desktop app conversation capture** — Electron-based AI apps (Claude Desktop, ChatGPT Desktop) don't expose their conversations to Vigil yet; capture happens via the proxy, which sees the API calls but not the rendered UI text. Planned for v0.3.
+- **Comprehensive desktop AI app capture** — Claude Desktop's main-process IPv6 channel, ChatGPT Desktop's `chatgpt.com` traffic (currently envelope-only by design), and Cursor's plugin-helper subprocesses are not fully captured by the HTTPS-proxy architecture. The v0.3 architectural answer is Apple's Network Extension framework, which intercepts at the OS network stack regardless of which subprocess opened the socket and regardless of address family. Apple Developer Program enrollment + Network Extension entitlement approval gate v0.3 (typical Apple-clock time 2-4 weeks). Distribution model shifts to signed `.pkg` + system-extension approval.
+- **v0.2.2 dashboard polish** — fill-rate metric surfaced in the dashboard, recency indicators on session views, honest-matrix integration into the UI (graphical version of `--status`), source-labeling badges per row, and the browser-extension selector-drift diagnostic. Forward-compatible with v0.3's comprehensive capture.
 - **MCP server config scanning** — auditing Model Context Protocol server configurations is on the roadmap, not shipped.
 - **Prompt injection detection** — heuristics and ML for prompt-injection patterns. v0.3.
 - **Privileged macOS helper** — eliminates the one-time `sudo` paste during setup by shipping a notarized helper that uses `SecTrustSettingsSetTrustSettings` directly. v0.3.
-- **Linux + Windows support** — process and filesystem monitoring is partially portable today; the macOS-specific paths (system proxy, keychain) need replacements.
+- **Linux + Windows support** — process and filesystem monitoring is partially portable today; the macOS-specific paths (system proxy, keychain) need replacements. Linux NE-equivalent is eBPF or netfilter; Windows is WFP.
 
 If you need any of these for an enterprise pilot, [file an issue](https://github.com/rajan-cforge/ai-runtime-monitor-enterprise/issues) — it helps us prioritize.
 
