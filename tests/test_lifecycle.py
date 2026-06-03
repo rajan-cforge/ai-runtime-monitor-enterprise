@@ -877,10 +877,9 @@ class TestIdentifyPortHolder:
 
 @pytest.mark.skipif(
     sys.platform != "darwin",
-    reason="mitmproxy default dual-stack behaviour is OS-specific; "
-    "this test pins the macOS behaviour. Linux's IPV6_V6ONLY=1 default "
-    "would require a different invocation to achieve dual-stack and "
-    "thus a different test.",
+    reason="mitmproxy 12.x sets IPV6_V6ONLY=1 explicitly on its sockets; "
+    "on Linux this blocks dual-stack in the same way. A separate test "
+    "pinning Linux dual-stack behaviour is not yet authored.",
 )
 class TestMitmdumpDualStackOnMacOS:
     """Regression test for PR #73's failure mode. Real subprocess; ~5s."""
@@ -895,8 +894,14 @@ class TestMitmdumpDualStackOnMacOS:
             s.bind(("127.0.0.1", 0))
             return s.getsockname()[1]
 
-    def _lsof_listen_entries(self, pid: int) -> list[str]:
-        """Return ``lsof`` lines representing LISTEN entries for ``pid``."""
+    def _lsof_listen_entries(self, pid: int) -> tuple[list[str], str | None]:
+        """Return ``(LISTEN_lines, error_or_None)``.
+
+        Returning the error rather than swallowing it lets the caller
+        include lsof failures in the assertion message, so CI failures
+        are diagnosable instead of misleadingly attributed to "no IPv4
+        bind seen". Per code-reviewer (80% confidence).
+        """
         try:
             result = subprocess.run(
                 ["lsof", "-nP", "-p", str(pid)],
@@ -904,9 +909,9 @@ class TestMitmdumpDualStackOnMacOS:
                 text=True,
                 timeout=3,
             )
-        except (OSError, subprocess.SubprocessError):
-            return []
-        return [line for line in result.stdout.splitlines() if "LISTEN" in line]
+        except (OSError, subprocess.SubprocessError) as exc:
+            return [], f"lsof invocation failed: {exc!r}"
+        return [line for line in result.stdout.splitlines() if "LISTEN" in line], None
 
     def test_default_invocation_binds_both_ipv4_and_ipv6(self):
         """With mitmproxy 12.x's default behaviour (no explicit
@@ -931,9 +936,10 @@ class TestMitmdumpDualStackOnMacOS:
             # Poll up to 5s for the listeners to appear
             ipv4_seen = ipv6_seen = False
             entries: list[str] = []
+            last_lsof_error: str | None = None
             deadline = time.time() + 5
             while time.time() < deadline:
-                entries = self._lsof_listen_entries(proc.pid)
+                entries, last_lsof_error = self._lsof_listen_entries(proc.pid)
                 for line in entries:
                     if f":{port}" not in line:
                         continue
@@ -945,15 +951,19 @@ class TestMitmdumpDualStackOnMacOS:
                     break
                 time.sleep(0.2)
 
+            # Include any lsof error in the assertion message so a CI
+            # failure points at the real cause rather than implying the
+            # bind didn't happen.
+            diag = f" (lsof error: {last_lsof_error})" if last_lsof_error else ""
             assert ipv4_seen, (
                 f"mitmdump on port {port} did not bind IPv4 LISTEN — "
-                "this is the PR #73 regression shape. Lsof entries: "
-                f"{entries!r}"
+                f"this is the PR #73 regression shape.{diag} "
+                f"Lsof entries: {entries!r}"
             )
             assert ipv6_seen, (
                 f"mitmdump on port {port} did not bind IPv6 LISTEN — "
-                "any dual-stack change must keep IPv6 too. Lsof entries: "
-                f"{entries!r}"
+                f"any dual-stack change must keep IPv6 too.{diag} "
+                f"Lsof entries: {entries!r}"
             )
         finally:
             proc.terminate()
@@ -961,4 +971,12 @@ class TestMitmdumpDualStackOnMacOS:
                 proc.wait(timeout=3)
             except subprocess.TimeoutExpired:
                 proc.kill()
-                proc.wait(timeout=1)
+                # SIGKILL is near-instant on macOS, but under extreme
+                # load wait() can still raise. Swallow it — at this
+                # point the process is going down regardless, and an
+                # uncaught TimeoutExpired here would mask the real
+                # assertion failure above. Per code-reviewer (85%).
+                try:
+                    proc.wait(timeout=1)
+                except subprocess.TimeoutExpired:
+                    pass
