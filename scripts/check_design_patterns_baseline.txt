@@ -9,9 +9,9 @@ src/claude_monitoring/cleanup.py:104: public function 'count_null_hashes' missin
 src/claude_monitoring/cleanup.py:115: public function 'remove_duplicate_captures' missing docstring
 src/claude_monitoring/cleanup.py:128: public function 'remove_duplicate_visits' missing docstring
 src/claude_monitoring/cleanup.py:141: public function 'remove_empty_sessions' missing docstring
-src/claude_monitoring/db.py:362: empty 'except Exception: pass' (silently swallowing errors)
-src/claude_monitoring/db.py:429: empty 'except Exception: pass' (silently swallowing errors)
-src/claude_monitoring/db.py:73: empty 'except Exception: pass' (silently swallowing errors)
+src/claude_monitoring/db.py:369: empty 'except Exception: pass' (silently swallowing errors)
+src/claude_monitoring/db.py:436: empty 'except Exception: pass' (silently swallowing errors)
+src/claude_monitoring/db.py:74: empty 'except Exception: pass' (silently swallowing errors)
 src/claude_monitoring/lifecycle.py:1015: empty 'except Exception: pass' (silently swallowing errors)
 src/claude_monitoring/lifecycle.py:102: public function 'flush' missing docstring
 src/claude_monitoring/lifecycle.py:1057: empty 'except Exception: pass' (silently swallowing errors)
