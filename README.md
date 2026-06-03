@@ -84,7 +84,7 @@ ai-monitor --status
 
 **Why this order matters.** Electron apps and Node CLIs snapshot the environment and read the macOS proxy configuration exactly once — at process start — and keep that view for their entire lifetime. Reconfiguring while they're running has no effect; only the next launch picks up the change. Chrome is the deliberate exception in the matrix above because its extension reads the rendered page DOM rather than the network, so it never depended on proxy state in the first place.
 
-On macOS Sequoia (15) and later, `--setup` will prompt you to paste a single `sudo security add-trusted-cert` command in the same terminal — that's the OS-imposed step for adding a cert to the admin trust store, the same one mitmproxy and Charles ask for. The wizard polls and auto-detects when it's applied.
+On macOS Sequoia (15) and later, `--setup` will prompt you to paste a single `sudo security add-trusted-cert` command in a **separate terminal tab or window** while the wizard waits. The wizard is holding stdin on the "Waiting for trust..." prompt, so it can't accept the sudo command in the same shell — open a new tab (Cmd-T) or window, paste the command there, and the wizard's 2-second poll will pick up the trust automatically. The sudo step is the OS-imposed path for adding a cert to the admin trust store, the same one mitmproxy and Charles ask for.
 
 > Every new terminal where you want to run `ai-monitor` needs `cd vigil && source .venv/bin/activate` first. A published-package install path (PyPI / pipx) is planned for v0.3 alongside the privileged macOS helper.
 
@@ -122,7 +122,9 @@ On macOS Sequoia (15) and later, expect output like this:
   Waiting for trust... (press Enter to check now, Ctrl-C to skip; up to 120s)
 ```
 
-Paste the sudo command in the **same terminal** the wizard is running in (don't open a new window), enter your macOS password, and within 2-4 seconds the wizard will continue:
+**Open a new terminal tab** (Cmd-T) or window, paste the sudo command shown by the wizard, and enter your macOS password there. The wizard tab is blocked at the "Waiting for trust..." prompt and cannot accept the sudo command in its own shell — this is expected. The wizard polls every 2 seconds and continues automatically once trust applies (within 2-4 seconds of you pasting):
+
+> **Why the popup that appeared first wasn't enough.** On macOS Sequoia 15+, the wizard tries an osascript "with administrator privileges" prompt first (the GUI password dialog you saw). That prompt's root subprocess lacks GUI session ownership, so `SecTrustSettingsSetTrustSettings` returns `errSecInteractionNotAllowed` and trust isn't applied even though `security add-trusted-cert` exits 0. The wizard detects this and falls back to the sudo-in-your-own-terminal path, which your shell's sudo has the GUI session ownership to complete. Apple-DTS-confirmed; tracked in the v0.3 roadmap (notarized privileged helper). On macOS 14 and earlier, the osascript prompt usually works on its own and the sudo fallback isn't needed.
 
 ```
   ✅ Certificate trusted. Continuing setup.
