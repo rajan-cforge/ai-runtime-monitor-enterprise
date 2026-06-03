@@ -7,6 +7,9 @@
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
 :root {
   --bg: #0d1117; --surface: #161b22; --surface2: #21262d;
@@ -235,6 +238,378 @@ body { background:var(--bg); color:var(--text); font-family:var(--font-sans); fo
 .traffic-detail-grid .td-value { color:var(--text); }
 .traffic-detail-grid .sensitive-flag { color:var(--red); font-weight:600; }
 .traffic-load-more { text-align:center; padding:16px; }
+
+/* ==========================================================================
+   v0.2.2 design system — vigil.css (pasted by P0.1 of v0.2.2 sprint)
+
+   Namespaced --v-* / .v-* to coexist with existing rules. Individual tabs
+   migrate from existing classes to .v-* equivalents section-by-section
+   across Phase 6 PRs (P6.1 through P6.11). Until those PRs land, both
+   design systems coexist in this file with zero collision.
+
+   Source of truth:        ~/Documents/vigil-notes/vigil-redesign/handoff/vigil.css
+   Component spec:         ~/Documents/vigil-notes/vigil-redesign/handoff/vigil-v022-component-spec.md
+   Implementation directive: ~/Documents/vigil-notes/v022-implementation-directive-v1-LOCKED.md §8.1
+   ========================================================================== */
+/* ==========================================================================
+   VIGIL — Design System  (v0.2.2 paste — pasted by P0.1; was v0.2.1 in source handoff)
+   Runtime monitor for AI coding agents
+   --------------------------------------------------------------------------
+   Zero-build. This block coexists with existing CSS above it via `--v-*` /
+   `.v-*` namespacing; section-by-section migration of existing rules to the
+   `.v-*` equivalents happens across Phase 6 PRs (P6.1 through P6.11).
+
+   Tone reference: Linear / Sentry — restrained, calm, honest. Status is
+   carried by a small set of semantic colors; everything else is graphite.
+   ========================================================================== */
+
+/* ----- 1. Fonts ------------------------------------------------------------
+   Geist + Geist Mono. Loaded in <head> above via Google Fonts CDN; falls back
+   gracefully to system sans / mono if offline (dashboard is local). */
+
+:root {
+  /* ---- 2. Neutral ramp — cool graphite (low chroma, slightly blue) ---- */
+  --v-bg:          #0c0e11;   /* app background                        */
+  --v-surface:     #14171b;   /* cards, panels, table bodies           */
+  --v-surface-2:   #1a1e23;   /* raised: expanded rows, inputs, wells  */
+  --v-surface-3:   #21262c;   /* hover / active row                    */
+  --v-border:      #23282e;   /* default hairline divider              */
+  --v-border-2:    #2f353c;   /* stronger border, focus ring base      */
+
+  --v-text:        #e6e9ed;   /* primary text                          */
+  --v-text-2:      #99a1aa;   /* secondary / labels                    */
+  --v-text-3:      #687079;   /* faint / captions / disabled           */
+
+  /* ---- 3. Brand accent — calm indigo. Used sparingly: wordmark,
+            active nav, primary action only. Never for status. ---- */
+  --v-accent:      #6b8afd;
+  --v-accent-hover:#5577f5;
+  --v-accent-bg:   rgba(107,138,253,.13);
+
+  /* ---- 4. Semantic status — matched lightness/chroma, hue-shifted ---- */
+  --v-safe:        #3fb27a;   /* safe / clear / not affected           */
+  --v-safe-bg:     rgba(63,178,122,.13);
+  --v-safe-border: rgba(63,178,122,.30);
+
+  --v-attention:   #d9a23f;   /* needs review / unverified             */
+  --v-attention-bg:rgba(217,162,63,.13);
+  --v-attention-border: rgba(217,162,63,.30);
+
+  --v-risk:        #e25563;   /* at risk / affected / malicious        */
+  --v-risk-bg:     rgba(226,85,99,.13);
+  --v-risk-border: rgba(226,85,99,.32);
+
+  --v-info:        #5b93f0;   /* informational / links                 */
+  --v-info-bg:     rgba(91,147,240,.13);
+
+  /* ---- 5. Severity scale — 4 steps; LOW is deliberately quiet ---- */
+  --v-critical:    #e34d56;
+  --v-critical-bg: rgba(227,77,86,.13);
+  --v-high:        #e08a42;
+  --v-high-bg:     rgba(224,138,66,.13);
+  --v-medium:      #d6b13f;
+  --v-medium-bg:   rgba(214,177,63,.13);
+  --v-low:         #6a727b;   /* neutral graphite — barely there       */
+  --v-low-bg:      rgba(106,114,123,.12);
+
+  /* ---- 6. Capability tiers — a PROPERTY, not an alarm.
+            Graphite pills with a colored dot. Never red. ---- */
+  --v-cap-high:    #a78bff;   /* high capability  (violet dot)         */
+  --v-cap-elevated:#5b93f0;   /* elevated         (blue dot)           */
+  --v-cap-standard:#6a727b;   /* standard         (gray dot)           */
+
+  /* ---- 7. Type scale ---- */
+  --v-font: 'Geist', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --v-mono: 'Geist Mono', ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, monospace;
+
+  --v-fs-2xs: 11px;   /* uppercase micro-labels (tracked)   */
+  --v-fs-xs:  12px;   /* captions, secondary meta           */
+  --v-fs-sm:  13px;   /* default UI / body                  */
+  --v-fs-base:14px;   /* emphasized body                    */
+  --v-fs-md:  15px;   /* section headers                    */
+  --v-fs-lg:  18px;   /* page / panel titles                */
+  --v-fs-xl:  22px;   /* rare                               */
+  --v-fs-metric: 27px;/* metric numbers                     */
+
+  --v-lh-tight: 1.3;
+  --v-lh:       1.5;
+
+  /* ---- 8. Spacing (4-based) ---- */
+  --v-1: 4px;  --v-2: 8px;  --v-3: 12px; --v-4: 16px;
+  --v-5: 20px; --v-6: 24px; --v-8: 32px; --v-10: 40px; --v-12: 48px;
+
+  /* ---- 9. Radius ---- */
+  --v-r-sm: 5px; --v-r: 7px; --v-r-md: 9px; --v-r-lg: 12px; --v-r-full: 999px;
+
+  /* ---- 10. Elevation — faint. Borders do most of the work. ---- */
+  --v-shadow-sm: 0 1px 2px rgba(0,0,0,.35);
+  --v-shadow:    0 4px 14px rgba(0,0,0,.40);
+  --v-shadow-lg: 0 12px 36px rgba(0,0,0,.55);
+
+  --v-dur: 140ms;
+  --v-ease: cubic-bezier(.2,.6,.3,1);
+}
+
+/* ==========================================================================
+   BASE
+   ========================================================================== */
+.v-root, .v-root * { box-sizing: border-box; }
+.v-root {
+  background: var(--v-bg);
+  color: var(--v-text);
+  font-family: var(--v-font);
+  font-size: var(--v-fs-sm);
+  line-height: var(--v-lh);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+.v-root a { color: var(--v-info); text-decoration: none; }
+.v-root a:hover { text-decoration: underline; }
+.v-mono { font-family: var(--v-mono); font-variant-ligatures: none; }
+
+/* Type roles */
+.v-page-title { font-size: var(--v-fs-lg); font-weight: 600; letter-spacing:-.01em; }
+.v-section-title { font-size: var(--v-fs-md); font-weight: 600; letter-spacing:-.005em; }
+.v-label { font-size: var(--v-fs-2xs); font-weight: 600; text-transform: uppercase;
+           letter-spacing: .07em; color: var(--v-text-3); }
+.v-muted { color: var(--v-text-2); }
+.v-faint { color: var(--v-text-3); }
+.v-num { font-variant-numeric: tabular-nums; }
+
+/* ==========================================================================
+   BUTTONS
+   ========================================================================== */
+.v-btn {
+  display: inline-flex; align-items: center; gap: var(--v-2);
+  font-family: inherit; font-size: var(--v-fs-sm); font-weight: 500;
+  line-height: 1; padding: 7px 12px; border-radius: var(--v-r);
+  border: 1px solid var(--v-border-2); background: var(--v-surface-2);
+  color: var(--v-text); cursor: pointer; white-space: nowrap;
+  transition: background var(--v-dur) var(--v-ease), border-color var(--v-dur) var(--v-ease);
+}
+.v-btn:hover { background: var(--v-surface-3); border-color: var(--v-border-2); }
+.v-btn:focus-visible { outline: 2px solid var(--v-accent); outline-offset: 1px; }
+.v-btn--primary { background: var(--v-accent); border-color: var(--v-accent); color: #0b0d12; font-weight: 600; }
+.v-btn--primary:hover { background: var(--v-accent-hover); border-color: var(--v-accent-hover); }
+.v-btn--ghost { background: transparent; border-color: transparent; color: var(--v-text-2); padding: 6px 8px; }
+.v-btn--ghost:hover { background: var(--v-surface-2); color: var(--v-text); }
+.v-btn--sm { padding: 5px 9px; font-size: var(--v-fs-xs); }
+.v-btn[disabled] { opacity: .45; pointer-events: none; }
+
+/* ==========================================================================
+   CARD / PANEL
+   ========================================================================== */
+.v-card {
+  background: var(--v-surface); border: 1px solid var(--v-border);
+  border-radius: var(--v-r-md); padding: var(--v-5);
+}
+.v-card--pad-sm { padding: var(--v-4); }
+.v-card__head { display:flex; align-items:center; justify-content:space-between;
+                gap: var(--v-3); margin-bottom: var(--v-4); }
+
+/* ==========================================================================
+   METRIC TILE  (slim summary strip)
+   ========================================================================== */
+.v-metric {
+  background: var(--v-surface); border: 1px solid var(--v-border);
+  border-radius: var(--v-r-md); padding: var(--v-4) var(--v-5);
+  display: flex; flex-direction: column; gap: 6px;
+}
+.v-metric__label { font-size: var(--v-fs-2xs); font-weight: 600; text-transform: uppercase;
+                   letter-spacing: .07em; color: var(--v-text-3); }
+.v-metric__value { font-size: var(--v-fs-metric); font-weight: 600; line-height: 1;
+                   letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+.v-metric__sub { font-size: var(--v-fs-xs); color: var(--v-text-2); }
+.v-metric--alert .v-metric__value { color: var(--v-risk); }
+.v-metric--alert.is-clear .v-metric__value { color: var(--v-safe); }
+
+/* ==========================================================================
+   BADGES / PILLS
+   ========================================================================== */
+.v-badge {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: var(--v-fs-2xs); font-weight: 600; letter-spacing: .04em;
+  text-transform: uppercase; padding: 3px 7px; border-radius: var(--v-r-sm);
+  line-height: 1; border: 1px solid transparent; white-space: nowrap;
+}
+.v-badge--safe      { color: var(--v-safe);      background: var(--v-safe-bg);      border-color: var(--v-safe-border); }
+.v-badge--attention { color: var(--v-attention); background: var(--v-attention-bg); border-color: var(--v-attention-border); }
+.v-badge--risk      { color: var(--v-risk);      background: var(--v-risk-bg);      border-color: var(--v-risk-border); }
+.v-badge--info      { color: var(--v-info);      background: var(--v-info-bg); }
+.v-badge--neutral   { color: var(--v-text-2);    background: var(--v-surface-3); border-color: var(--v-border); }
+
+/* Severity badge — left-icon dot scales the alarm */
+.v-sev { display:inline-flex; align-items:center; gap:5px; font-size:var(--v-fs-2xs);
+         font-weight:700; letter-spacing:.05em; text-transform:uppercase;
+         padding:3px 8px 3px 6px; border-radius:var(--v-r-sm); line-height:1; }
+.v-sev::before { content:""; width:6px; height:6px; border-radius:2px; background: currentColor; }
+.v-sev--critical { color: var(--v-critical); background: var(--v-critical-bg); }
+.v-sev--high     { color: var(--v-high);     background: var(--v-high-bg); }
+.v-sev--medium   { color: var(--v-medium);   background: var(--v-medium-bg); }
+.v-sev--low      { color: var(--v-low);      background: var(--v-low-bg); }
+
+/* Capability pill — graphite, dot encodes tier. NEVER red. */
+.v-cap { display:inline-flex; align-items:center; gap:6px; font-size:var(--v-fs-2xs);
+         font-weight:600; letter-spacing:.04em; text-transform:uppercase;
+         padding:3px 8px; border-radius:var(--v-r-full); line-height:1;
+         color: var(--v-text-2); background: var(--v-surface-3);
+         border:1px solid var(--v-border); cursor: default; }
+.v-cap__dot { width:6px; height:6px; border-radius:var(--v-r-full); flex:none; }
+.v-cap--high     .v-cap__dot { background: var(--v-cap-high); }
+.v-cap--elevated .v-cap__dot { background: var(--v-cap-elevated); }
+.v-cap--standard .v-cap__dot { background: var(--v-cap-standard); }
+
+/* Status dot (live / idle) */
+.v-dot { width:7px; height:7px; border-radius:var(--v-r-full); display:inline-block; flex:none; }
+.v-dot--live { background: var(--v-safe); box-shadow: 0 0 0 3px var(--v-safe-bg); }
+.v-dot--idle { background: var(--v-text-3); }
+.v-dot--risk { background: var(--v-risk); box-shadow: 0 0 0 3px var(--v-risk-bg); }
+
+/* ==========================================================================
+   VERDICT  — the one-glance answer for a package / item
+   ========================================================================== */
+.v-verdict { display:inline-flex; align-items:center; gap: var(--v-2);
+             font-size: var(--v-fs-sm); font-weight: 600; }
+.v-verdict__icon { width:18px; height:18px; border-radius:var(--v-r-full);
+                   display:grid; place-items:center; flex:none; font-size:11px; font-weight:700; }
+.v-verdict--safe      { color: var(--v-safe); }
+.v-verdict--safe      .v-verdict__icon { background: var(--v-safe-bg);      color: var(--v-safe); }
+.v-verdict--attention { color: var(--v-attention); }
+.v-verdict--attention .v-verdict__icon { background: var(--v-attention-bg); color: var(--v-attention); }
+.v-verdict--risk      { color: var(--v-risk); }
+.v-verdict--risk      .v-verdict__icon { background: var(--v-risk-bg);      color: var(--v-risk); }
+
+/* Verdict banner (inside expanded views) */
+.v-banner { display:flex; align-items:flex-start; gap: var(--v-3);
+            padding: var(--v-3) var(--v-4); border-radius: var(--v-r);
+            border:1px solid var(--v-border); background: var(--v-surface-2); }
+.v-banner--safe      { background: var(--v-safe-bg);      border-color: var(--v-safe-border); }
+.v-banner--attention { background: var(--v-attention-bg); border-color: var(--v-attention-border); }
+.v-banner--risk      { background: var(--v-risk-bg);      border-color: var(--v-risk-border); }
+
+/* ==========================================================================
+   TABLES
+   ========================================================================== */
+.v-table { width:100%; border-collapse: collapse; font-size: var(--v-fs-sm); }
+.v-table th { text-align:left; font-size:var(--v-fs-2xs); font-weight:600;
+              text-transform:uppercase; letter-spacing:.06em; color:var(--v-text-3);
+              padding: var(--v-2) var(--v-3); border-bottom:1px solid var(--v-border); }
+.v-table td { padding: var(--v-2) var(--v-3); border-bottom:1px solid var(--v-border);
+              color: var(--v-text); vertical-align: middle; }
+.v-table tr:last-child td { border-bottom: none; }
+.v-table--zebra tbody tr:hover { background: var(--v-surface-2); }
+
+/* ==========================================================================
+   EXPANDABLE ROW  (Supply Chain / API Traffic)
+   ========================================================================== */
+.v-row { border:1px solid var(--v-border); border-radius: var(--v-r-md);
+         background: var(--v-surface); margin-bottom: var(--v-2); overflow:hidden;
+         transition: border-color var(--v-dur) var(--v-ease); }
+.v-row:hover { border-color: var(--v-border-2); }
+.v-row.is-open { border-color: var(--v-border-2); }
+.v-row__summary { display:grid; align-items:center; gap: var(--v-4);
+                  padding: var(--v-3) var(--v-4); cursor:pointer; }
+.v-row__detail { display:none; padding: 0 var(--v-4) var(--v-4);
+                 border-top:1px solid var(--v-border); background: var(--v-surface-2); }
+.v-row.is-open .v-row__detail { display:block; }
+.v-row__chevron { color: var(--v-text-3); transition: transform var(--v-dur) var(--v-ease); }
+.v-row.is-open .v-row__chevron { transform: rotate(90deg); }
+/* left status rail */
+.v-row--risk      { box-shadow: inset 3px 0 0 var(--v-risk); }
+.v-row--attention { box-shadow: inset 3px 0 0 var(--v-attention); }
+.v-row--safe      { box-shadow: inset 3px 0 0 transparent; }
+
+/* Definition grid (registry intelligence, provenance) */
+.v-dl { display:grid; grid-template-columns: 140px 1fr; gap: 6px var(--v-4); font-size: var(--v-fs-sm); }
+.v-dl dt { color: var(--v-text-3); }
+.v-dl dd { color: var(--v-text); margin:0; }
+
+/* ==========================================================================
+   CODE BLOCK
+   ========================================================================== */
+.v-code { font-family: var(--v-mono); font-size: var(--v-fs-xs); line-height: 1.6;
+          background: #0a0c0f; border:1px solid var(--v-border); border-radius: var(--v-r);
+          padding: var(--v-3); color: var(--v-text-2); overflow-x:auto; white-space:pre; }
+.v-code mark { background: var(--v-attention-bg); color: var(--v-attention);
+               border-radius:3px; padding:0 2px; }
+
+/* ==========================================================================
+   TAB NAV
+   ========================================================================== */
+.v-tabs { display:flex; gap: 2px; border-bottom:1px solid var(--v-border); }
+.v-tab { appearance:none; background:none; border:none; cursor:pointer;
+         font-family:inherit; font-size: var(--v-fs-sm); font-weight:500;
+         color: var(--v-text-2); padding: var(--v-3) var(--v-3); position:relative;
+         display:inline-flex; align-items:center; gap: 7px; }
+.v-tab:hover { color: var(--v-text); }
+.v-tab.is-active { color: var(--v-text); }
+.v-tab.is-active::after { content:""; position:absolute; left: var(--v-3); right: var(--v-3);
+         bottom:-1px; height:2px; background: var(--v-accent); border-radius:2px; }
+.v-tab__count { font-size:var(--v-fs-2xs); font-weight:600; padding:1px 6px;
+         border-radius: var(--v-r-full); background: var(--v-surface-3); color: var(--v-text-2); }
+.v-tab__count--risk { background: var(--v-risk-bg); color: var(--v-risk); }
+.v-tab--muted { color: var(--v-text-3); margin-left:auto; }
+
+/* ==========================================================================
+   SEGMENTED CONTROL  (TP/FP, live/historical)
+   ========================================================================== */
+.v-seg { display:inline-flex; background: var(--v-surface-2); border:1px solid var(--v-border);
+         border-radius: var(--v-r); padding:2px; gap:2px; }
+.v-seg button { appearance:none; border:none; background:none; cursor:pointer;
+         font-family:inherit; font-size:var(--v-fs-xs); font-weight:500; color: var(--v-text-2);
+         padding:5px 10px; border-radius:5px; display:inline-flex; align-items:center; gap:5px; }
+.v-seg button:hover { color: var(--v-text); }
+.v-seg button.is-on { background: var(--v-surface-3); color: var(--v-text); }
+.v-seg button.is-on--tp { background: var(--v-risk-bg); color: var(--v-risk); }
+.v-seg button.is-on--fp { background: var(--v-safe-bg); color: var(--v-safe); }
+
+/* ==========================================================================
+   FILTER CHIPS
+   ========================================================================== */
+.v-chip { appearance:none; cursor:pointer; font-family:inherit; font-size:var(--v-fs-xs);
+          font-weight:500; padding:5px 11px; border-radius: var(--v-r-full);
+          border:1px solid var(--v-border); background: var(--v-surface-2); color: var(--v-text-2); }
+.v-chip:hover { border-color: var(--v-border-2); color: var(--v-text); }
+.v-chip.is-active { background: var(--v-surface-3); color: var(--v-text); border-color: var(--v-border-2); }
+.v-chip__n { color: var(--v-text-3); font-variant-numeric: tabular-nums; }
+.v-chip.is-active .v-chip__n { color: var(--v-text-2); }
+
+/* ==========================================================================
+   INPUT
+   ========================================================================== */
+.v-input { font-family:inherit; font-size:var(--v-fs-sm); color:var(--v-text);
+           background: var(--v-surface-2); border:1px solid var(--v-border);
+           border-radius: var(--v-r); padding: 7px 11px; }
+.v-input::placeholder { color: var(--v-text-3); }
+.v-input:focus { outline:none; border-color: var(--v-accent); }
+
+/* ==========================================================================
+   TOOLTIP  (capability explainer etc.)
+   ========================================================================== */
+.v-tip { position:relative; }
+.v-tip__pop { position:absolute; bottom: calc(100% + 8px); left:50%; transform: translateX(-50%);
+              width: 250px; background:#1c2126; border:1px solid var(--v-border-2);
+              border-radius: var(--v-r); padding: var(--v-3); font-size: var(--v-fs-xs);
+              line-height:1.5; color: var(--v-text-2); box-shadow: var(--v-shadow);
+              opacity:0; pointer-events:none; transition: opacity var(--v-dur) var(--v-ease); z-index: 50;
+              text-transform: none; letter-spacing: normal; font-weight: 400; }
+.v-tip:hover .v-tip__pop, .v-tip:focus-within .v-tip__pop { opacity:1; }
+
+/* ==========================================================================
+   MINI BAR  (supply-chain composition, severity distribution)
+   ========================================================================== */
+.v-bar { display:flex; height:8px; border-radius:var(--v-r-full); overflow:hidden; background: var(--v-surface-3); }
+.v-bar span { display:block; height:100%; }
+
+/* ==========================================================================
+   UTILITIES
+   ========================================================================== */
+.v-stack { display:flex; flex-direction:column; }
+.v-row-flex { display:flex; align-items:center; }
+.v-gap-1{gap:var(--v-1)} .v-gap-2{gap:var(--v-2)} .v-gap-3{gap:var(--v-3)} .v-gap-4{gap:var(--v-4)}
+.v-grow { flex:1; } .v-wrap { flex-wrap:wrap; }
+.v-divider { height:1px; background: var(--v-border); border:none; margin: var(--v-4) 0; }
+
 </style>
 </head>
 <body>
