@@ -17,6 +17,7 @@ import socket
 import sqlite3
 
 from claude_monitoring.config import get_db_path, get_output_dir
+from claude_monitoring.persistence import migrations as _persistence_migrations
 
 try:
     import sqlcipher3 as _sqlcipher  # type: ignore[import-not-found]
@@ -74,6 +75,12 @@ def init_db(db_path=None):
         pass
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
+
+    # v0.2.2 P0.0: versioned-migration framework runs first. In-process
+    # startup pattern — check_daemon=False because the daemon is migrating
+    # its own schema before opening for business. See docs/spec/MIGRATIONS.md.
+    _persistence_migrations.apply_migrations(conn)
+
     c = conn.cursor()
 
     c.execute("""CREATE TABLE IF NOT EXISTS events (
