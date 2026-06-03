@@ -12,6 +12,8 @@ from __future__ import annotations
 import logging
 import os
 import signal
+import subprocess
+import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -851,3 +853,112 @@ class TestIdentifyPortHolder:
         with patch("claude_monitoring.lifecycle.subprocess.run", return_value=fake):
             holder = lifecycle._identify_port_holder(9081, "127.0.0.1")
         assert "Python" in holder and "12345" in holder
+
+
+# ─────────────────────────────────────────────────────────────
+# Empirical regression test — pins PR #73's failure shape
+#
+# PR #73 added ``--listen-host ::`` to the mitmdump cmdline,
+# assuming the macOS BSD default IPV6_V6ONLY=0 would make a
+# single ``::`` socket accept both stacks. mitmproxy 12.x (the
+# installed version) explicitly sets IPV6_V6ONLY=1, so the
+# result was a single IPv6-only socket and IPv4 connections
+# were refused — including from macOS system proxy which is
+# always configured at an IPv4 host. PR #74 reverted it.
+#
+# This test runs a real mitmdump subprocess on a random high
+# port and asserts via ``lsof`` that BOTH IPv4 and IPv6 LISTEN
+# entries exist. Any future change that ever collapses to
+# single-stack fails immediately at CI time instead of in
+# production. The test that *should* have existed before
+# PR #73 — its absence is what let the regression through.
+# ─────────────────────────────────────────────────────────────
+
+
+@pytest.mark.skipif(
+    sys.platform != "darwin",
+    reason="mitmproxy default dual-stack behaviour is OS-specific; "
+    "this test pins the macOS behaviour. Linux's IPV6_V6ONLY=1 default "
+    "would require a different invocation to achieve dual-stack and "
+    "thus a different test.",
+)
+class TestMitmdumpDualStackOnMacOS:
+    """Regression test for PR #73's failure mode. Real subprocess; ~5s."""
+
+    @staticmethod
+    def _pick_free_high_port() -> int:
+        """Bind to port 0 to let the OS pick an unused port, close,
+        return the number."""
+        import socket as _socket
+
+        with _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM) as s:
+            s.bind(("127.0.0.1", 0))
+            return s.getsockname()[1]
+
+    def _lsof_listen_entries(self, pid: int) -> list[str]:
+        """Return ``lsof`` lines representing LISTEN entries for ``pid``."""
+        try:
+            result = subprocess.run(
+                ["lsof", "-nP", "-p", str(pid)],
+                capture_output=True,
+                text=True,
+                timeout=3,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return []
+        return [line for line in result.stdout.splitlines() if "LISTEN" in line]
+
+    def test_default_invocation_binds_both_ipv4_and_ipv6(self):
+        """With mitmproxy 12.x's default behaviour (no explicit
+        ``--listen-host``), both IPv4 and IPv6 LISTEN entries must be
+        present on the chosen port. The PR #73 regression failed this
+        because ``--listen-host ::`` collapsed to a single IPv6-only
+        listener.
+        """
+        import shutil
+        import time
+
+        if shutil.which("mitmdump") is None:
+            pytest.skip("mitmdump not installed in this environment")
+
+        port = self._pick_free_high_port()
+        proc = subprocess.Popen(
+            ["mitmdump", "--listen-port", str(port), "--quiet"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        try:
+            # Poll up to 5s for the listeners to appear
+            ipv4_seen = ipv6_seen = False
+            entries: list[str] = []
+            deadline = time.time() + 5
+            while time.time() < deadline:
+                entries = self._lsof_listen_entries(proc.pid)
+                for line in entries:
+                    if f":{port}" not in line:
+                        continue
+                    if "IPv4" in line:
+                        ipv4_seen = True
+                    if "IPv6" in line:
+                        ipv6_seen = True
+                if ipv4_seen and ipv6_seen:
+                    break
+                time.sleep(0.2)
+
+            assert ipv4_seen, (
+                f"mitmdump on port {port} did not bind IPv4 LISTEN — "
+                "this is the PR #73 regression shape. Lsof entries: "
+                f"{entries!r}"
+            )
+            assert ipv6_seen, (
+                f"mitmdump on port {port} did not bind IPv6 LISTEN — "
+                "any dual-stack change must keep IPv6 too. Lsof entries: "
+                f"{entries!r}"
+            )
+        finally:
+            proc.terminate()
+            try:
+                proc.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait(timeout=1)
