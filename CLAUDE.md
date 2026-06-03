@@ -47,6 +47,7 @@ Before writing any non-trivial code:
 6. If touching the API, update `docs/spec/openapi.yaml` AND `docs/spec/API-CONTRACTS.md`
 7. If adding a new dependency, document the rationale in `docs/spec/dependency-rationale.md`
 8. If the change is non-trivial, write a design doc at `docs/design/<feature>.md` before implementing
+9. **Empirical verification before merge for any external-tool flag or invocation change.** For any architectural claim about how a tool, library, or OS actually behaves, empirical verification is mandatory BEFORE implementation begins. The verification is a short test (`lsof`, `curl`, `ps`, `strace`, `dtrace`, file existence, or equivalent) that runs the actual behaviour on the actual installed version and observes the result. If the architect agent cannot design such a test, the architect must explicitly state this limitation and propose an alternative verification path. This discipline applies to: socket behaviour, kernel calls, library config options, CLI flag semantics, process lifecycle behaviour, file system semantics, network stack behaviour, anything where the installed version's behaviour may differ from documentation or prior versions. Precedent: PR #73 shipped on a HIGH-confidence architect claim about macOS `IPV6_V6ONLY=0` that was correct for raw Python sockets but false for mitmproxy 12.x's listening socket — breaking IPv4 capture in production. 30 seconds of `lsof | curl` would have caught it. See Issue #75 and `~/Documents/vigil-notes/v021-sprint-status-2026-06-02.md` for the full failure analysis.
 
 ## Hot paths
 
