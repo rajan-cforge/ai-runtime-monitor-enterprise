@@ -2,7 +2,7 @@
 
 **Status:** v1.0 — introduced in v0.2.2 P0.0 (`feat/v022-p0.0-schema-meta`)
 **Authoritative implementation:** `src/claude_monitoring/persistence/migrations.py`
-**Contract ratification:** `~/Documents/vigil-notes/architect-pass-P0.0.md`
+**Contract ratification:** `~/Documents/vigil-notes/v022/phase-0/p0.0/architect-pass.md`
 
 This document is the user-facing contract for the v0.2.2 schema migration
 framework. The architect-pass document (linked above) is the locked contract
@@ -255,5 +255,5 @@ preservation.
 
 - Implementation directive: `~/Documents/vigil-notes/v022-implementation-directive-v1-LOCKED.md` §7.6
 - Feature spec: `~/Documents/vigil-notes/v022-attack-surface-feature-spec-v1-LOCKED.md` §9.1
-- Architect-pass ratification: `~/Documents/vigil-notes/architect-pass-P0.0.md`
+- Architect-pass ratification: `~/Documents/vigil-notes/v022/phase-0/p0.0/architect-pass.md`
 - Phase A investigation: `~/Documents/vigil-notes/v022-p0.0-phase-a-investigation.md`

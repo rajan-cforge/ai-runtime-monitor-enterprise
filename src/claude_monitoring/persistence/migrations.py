@@ -3,7 +3,7 @@
 P0.0 introduces the framework with an empty :data:`MIGRATIONS` registry.
 P0.2 will register the first real migration (the six attack-surface tables).
 
-Locked contract (per ``~/Documents/vigil-notes/architect-pass-P0.0.md``):
+Locked contract (per ``~/Documents/vigil-notes/v022/phase-0/p0.0/architect-pass.md``):
 
 1. :class:`Migration` is an immutable ``@dataclass(frozen=True)`` of
    ``(version, description, up_sql)``. Construction-time validation rejects
