@@ -73,10 +73,19 @@ class Migration:
     version: str        # unique, e.g. "0.2.2.001"
     description: str    # human-readable summary
     up_sql: str         # statements separated by ';'
+    down_sql: str = ""  # rollback statements (P0.2+); default empty = apply-only
 ```
 
 Construction-time validation rejects empty `version`, empty `description`,
-empty `up_sql`. `frozen=True` makes instances immutable.
+empty `up_sql`. `down_sql` is optional with default `""`; an empty
+`down_sql` is a deliberate "apply-only" migration. `frozen=True` makes
+instances immutable.
+
+The `down_sql` field was added in v0.2.2 P0.2 per the P0.0 architect-pass
+§8 escape hatch ("if P0.2's architect-pass identifies the need, the field
+can be added as an optional `down_sql: str = ''`"). Backwards-compatible
+extension: every existing call site that omitted `down_sql` continues to
+work; only `rollback_migration` requires non-empty `down_sql`.
 
 ### `MIGRATIONS`
 
@@ -117,6 +126,26 @@ applying any not already in `schema_meta`.
 Applies a single migration in a `BEGIN IMMEDIATE TRANSACTION`. On any
 error, rolls back and raises `MigrationError`. Idempotent: if
 `migration.version` is already in `schema_meta`, this is a no-op.
+
+### `rollback_migration(conn, migration)`
+
+The inverse of `apply_migration`. Executes `migration.down_sql` in a
+`BEGIN IMMEDIATE TRANSACTION`, then removes the `schema_meta` audit row.
+Same atomicity guarantees: on any error, ROLLBACK is issued and the
+`schema_meta` row is preserved so the caller knows the migration is
+still "applied" and can retry after fixing the down_sql.
+
+- **Empty `down_sql`** → raises `MigrationError("…has empty down_sql;
+  rollback unsupported.")`. Apply-only migrations are flagged at
+  construction by omitting `down_sql`, and `rollback_migration` enforces
+  the contract at call time rather than silently no-op'ing.
+- **Migration not in `schema_meta`** → no-op (parallel to
+  `apply_migration`'s idempotency on already-applied).
+- **Successful rollback** → schema state returned to the pre-migration
+  shape; audit row deleted; migration becomes re-appliable.
+
+Exercised by the `migration-rollback-test` CI gate (directive §11.2) and
+by the round-trip test pattern in `tests/test_p0_2_attack_surface_migration.py::TestP02RoundTripRollback`.
 
 ### `MigrationError` vs `DaemonActiveError`
 

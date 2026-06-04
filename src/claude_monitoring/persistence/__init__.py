@@ -25,6 +25,7 @@ from claude_monitoring.persistence.migrations import (
     MigrationError,
     apply_migration,
     apply_migrations,
+    rollback_migration,
 )
 
 __all__ = [
@@ -35,4 +36,5 @@ __all__ = [
     "MigrationError",
     "apply_migration",
     "apply_migrations",
+    "rollback_migration",
 ]
