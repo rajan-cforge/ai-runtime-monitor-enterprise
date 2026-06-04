@@ -26,6 +26,31 @@ jobs:
       # the gate fails only on new violations not in the baseline.
       - name: Design pattern checks
         run: python scripts/check_design_patterns.py
+      # v0.2.2 CI-infra PR — wire the three quality-gate scripts that
+      # already exist on disk but were not invoked by any workflow.
+      # Surfaced by the v0.2.2 reconstruction-validation audit
+      # (~/Documents/vigil-notes/v022/v022-reconstruction-validation-2026-06-04.md).
+      # File-size and function-size are hard gates; functional-coverage
+      # is a "nudge" today (exit 0 with WARN) and may tighten later.
+      - name: File-size ceiling
+        run: python scripts/check_file_size.py
+      - name: Function-size ceiling
+        run: python scripts/check_function_size.py
+      # `|| true` makes the nudge intent durable in the workflow: the script
+      # currently exits 0 with WARN, but if a future script edit flips the
+      # exit code to 1 on missing coverage, this step would silently start
+      # blocking all merges. Requiring an explicit workflow PR to remove
+      # the `|| true` makes the nudge→gate transition reviewable.
+      - name: Functional coverage nudge
+        run: python scripts/check_functional_coverage.py || true
+      # v0.2.2 directive §11.2 gate #4 — privacy-no-telemetry-check.
+      # Per Rajan's 2026-06-04 gate-ownership ruling, this gate moves
+      # earlier than P5.1 so it is live BEFORE P4.1 ships the first
+      # outbound HTTP (the OSV.dev CVE client). Narrowly scoped to
+      # src/claude_monitoring/attack_surface/ — the rest of the
+      # codebase has its own outbound-HTTP audit history.
+      - name: Privacy gate — no telemetry in attack-surface code
+        run: python scripts/check_privacy_no_telemetry.py
 
   test:
     runs-on: ${{ matrix.os }}
