@@ -410,3 +410,117 @@ class TestPidCoordination:
         assert not canonical_mock.exists(), (
             "framework should have consulted DEFAULT_PID_FILE_PATH and cleaned the stale file"
         )
+
+
+# ---------------------------------------------------------------------------
+# Group 6 — P0.2 contract extension: Migration.down_sql + rollback_migration
+# ---------------------------------------------------------------------------
+#
+# Per P0.0 architect-pass §8 + P0.2 architect-pass §3 deviation 4:
+#   - Migration gets a new optional field `down_sql: str = ""` (default empty).
+#   - New public helper `rollback_migration(conn, migration)` executes down_sql
+#     in a BEGIN IMMEDIATE TRANSACTION and removes the schema_meta row.
+#   - Behaviour parallels apply_migration: atomic, wraps errors as
+#     MigrationError, idempotent (no-op if the migration was not applied).
+
+
+class TestMigrationDownSqlExtension:
+    def test_down_sql_defaults_to_empty(self) -> None:
+        """Existing Migration callers without down_sql still construct cleanly."""
+        m = mig.Migration(
+            version="ext-test-1",
+            description="d",
+            up_sql="CREATE TABLE ext_t (id INTEGER);",
+        )
+        assert m.down_sql == ""
+
+    def test_down_sql_accepts_non_empty(self) -> None:
+        m = mig.Migration(
+            version="ext-test-2",
+            description="d",
+            up_sql="CREATE TABLE ext_t (id INTEGER);",
+            down_sql="DROP TABLE IF EXISTS ext_t;",
+        )
+        assert m.down_sql == "DROP TABLE IF EXISTS ext_t;"
+
+    def test_migration_remains_frozen_with_down_sql(self) -> None:
+        m = mig.Migration(
+            version="ext-test-3",
+            description="d",
+            up_sql="CREATE TABLE ext_t (id INTEGER);",
+            down_sql="DROP TABLE IF EXISTS ext_t;",
+        )
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            m.down_sql = "different"  # type: ignore[misc]
+
+
+class TestRollbackMigration:
+    def test_rollback_drops_table_and_removes_schema_meta_row(self, empty_db: sqlite3.Connection) -> None:
+        m = mig.Migration(
+            version="rb-test-1",
+            description="apply-then-rollback round trip",
+            up_sql="CREATE TABLE rb_t (id INTEGER);",
+            down_sql="DROP TABLE IF EXISTS rb_t;",
+        )
+        mig.apply_migration(empty_db, m)
+        # Sanity: table + schema_meta row present
+        assert empty_db.execute("SELECT 1 FROM sqlite_master WHERE name='rb_t'").fetchone()
+        assert empty_db.execute("SELECT 1 FROM schema_meta WHERE version='rb-test-1'").fetchone()
+
+        mig.rollback_migration(empty_db, m)
+
+        assert not empty_db.execute("SELECT 1 FROM sqlite_master WHERE name='rb_t'").fetchone(), (
+            "rollback should drop the table"
+        )
+        assert not empty_db.execute("SELECT 1 FROM schema_meta WHERE version='rb-test-1'").fetchone(), (
+            "rollback should remove the schema_meta audit row"
+        )
+
+    def test_rollback_noop_when_migration_not_applied(self, empty_db: sqlite3.Connection) -> None:
+        """Calling rollback against a migration that was never applied is a
+        no-op (parallel to apply_migration's idempotency on already-applied)."""
+        m = mig.Migration(
+            version="rb-test-2",
+            description="never-applied",
+            up_sql="CREATE TABLE rb_never (id INTEGER);",
+            down_sql="DROP TABLE IF EXISTS rb_never;",
+        )
+        # No prior apply. Rollback should NOT raise.
+        mig.rollback_migration(empty_db, m)
+
+    def test_rollback_raises_if_down_sql_empty(self, empty_db: sqlite3.Connection) -> None:
+        """A migration with empty down_sql is intentionally rollback-unsupported.
+        Calling rollback_migration against it raises MigrationError so the
+        caller is told explicitly rather than silently no-op'ing."""
+        m = mig.Migration(
+            version="rb-test-3",
+            description="apply-only migration",
+            up_sql="CREATE TABLE rb_apply_only (id INTEGER);",
+            # down_sql intentionally absent (default empty)
+        )
+        mig.apply_migration(empty_db, m)
+        with pytest.raises(mig.MigrationError, match="down_sql"):
+            mig.rollback_migration(empty_db, m)
+
+    def test_rollback_atomic_on_failure(self, empty_db: sqlite3.Connection) -> None:
+        """If down_sql has invalid SQL, the rollback raises MigrationError and
+        the schema_meta row is preserved (rollback didn't half-complete)."""
+        m = mig.Migration(
+            version="rb-test-4",
+            description="rollback that breaks mid-way",
+            up_sql="CREATE TABLE rb_break (id INTEGER);",
+            down_sql=("DROP TABLE IF EXISTS rb_break; RAISE_NOT_VALID_SQL_HERE;"),
+        )
+        mig.apply_migration(empty_db, m)
+
+        with pytest.raises(mig.MigrationError):
+            mig.rollback_migration(empty_db, m)
+
+        # The atomicity contract: schema_meta row stays because rollback didn't
+        # complete. The table state itself depends on SQLite's BEGIN IMMEDIATE
+        # rollback semantics — the test only asserts the audit row is
+        # preserved so the caller knows the migration is still "applied" and
+        # can retry the rollback after fixing the down_sql.
+        assert empty_db.execute("SELECT 1 FROM schema_meta WHERE version='rb-test-4'").fetchone(), (
+            "failed rollback must preserve schema_meta row"
+        )

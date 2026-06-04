@@ -110,7 +110,10 @@ class Migration:
 
     Construction-time validation catches bad migration definitions at import
     time rather than at apply time — empty version/description/up_sql all
-    raise :class:`ValueError`.
+    raise :class:`ValueError`. ``down_sql`` is optional (default empty); an
+    empty ``down_sql`` is a deliberate "apply-only" migration, and any call
+    to :func:`rollback_migration` against it raises :class:`MigrationError`
+    rather than silently no-op'ing.
 
     Attributes:
         version: Unique version identifier (e.g., ``"0.2.2.001"``). Must be
@@ -128,11 +131,18 @@ class Migration:
             statement raises :class:`ValueError` (wrapped as
             :class:`MigrationError`) at apply time. Must be non-empty after
             strip.
+        down_sql: SQL statements that reverse ``up_sql``. Same chunking and
+            termination rules as ``up_sql``. Default ``""`` means
+            "apply-only — rollback unsupported." When non-empty, exercised by
+            :func:`rollback_migration` and by the ``migration-rollback-test``
+            CI gate (directive §11.2). Added to the contract in v0.2.2 P0.2
+            per the architect-pass §8 escape hatch in P0.0.
     """
 
     version: str
     description: str
     up_sql: str
+    down_sql: str = ""
 
     def __post_init__(self) -> None:
         if not self.version or not self.version.strip():
@@ -141,6 +151,8 @@ class Migration:
             raise ValueError("Migration.description must be a non-empty string")
         if not self.up_sql or not self.up_sql.strip():
             raise ValueError("Migration.up_sql must be a non-empty string")
+        # down_sql intentionally permits empty; rollback_migration enforces
+        # the apply-only contract by raising at rollback time.
 
 
 # ---------------------------------------------------------------------------
@@ -148,18 +160,161 @@ class Migration:
 # ---------------------------------------------------------------------------
 
 
-MIGRATIONS: list[Migration] = []
-"""Ordered registry of migrations.
+_P0_2_ATTACK_SURFACE_UP_SQL = """\
+CREATE TABLE assets (
+    id TEXT PRIMARY KEY,
+    type TEXT NOT NULL,
+    parent_asset_id TEXT,
+    name TEXT NOT NULL,
+    version TEXT,
+    install_path TEXT,
+    source TEXT,
+    first_seen TIMESTAMP NOT NULL,
+    last_seen TIMESTAMP NOT NULL,
+    last_scanned TIMESTAMP NOT NULL,
+    current_state TEXT NOT NULL,
+    ontology_tags TEXT,
+    risk_score INTEGER,
+    risk_band TEXT,
+    risk_factors TEXT,
+    is_vigil_component INTEGER DEFAULT 0,
+    FOREIGN KEY (parent_asset_id) REFERENCES assets(id)
+);
 
-P0.0 ships an empty registry — the framework lands without any actual
-migrations. P0.2 will register the first real migration (the six
-attack-surface tables from spec §9.1) by appending to this list.
+CREATE INDEX idx_assets_type ON assets(type);
+CREATE INDEX idx_assets_parent ON assets(parent_asset_id);
+CREATE INDEX idx_assets_risk_band ON assets(risk_band);
+CREATE INDEX idx_assets_last_seen ON assets(last_seen);
+
+CREATE TABLE asset_cves (
+    asset_id TEXT NOT NULL,
+    cve_id TEXT NOT NULL,
+    severity REAL,
+    published TIMESTAMP,
+    description TEXT,
+    cve_references TEXT,
+    discovered_at TIMESTAMP NOT NULL,
+    PRIMARY KEY (asset_id, cve_id),
+    FOREIGN KEY (asset_id) REFERENCES assets(id)
+);
+
+CREATE INDEX idx_cves_severity ON asset_cves(severity);
+CREATE INDEX idx_cves_discovered ON asset_cves(discovered_at);
+
+CREATE TABLE asset_history (
+    asset_id TEXT NOT NULL,
+    scan_timestamp TIMESTAMP NOT NULL,
+    state_snapshot TEXT NOT NULL,
+    changes_from_previous TEXT,
+    PRIMARY KEY (asset_id, scan_timestamp),
+    FOREIGN KEY (asset_id) REFERENCES assets(id)
+);
+
+CREATE INDEX idx_history_asset ON asset_history(asset_id);
+
+CREATE TABLE cve_cache (
+    package_ecosystem TEXT NOT NULL,
+    package_name TEXT NOT NULL,
+    cve_id TEXT NOT NULL,
+    severity REAL,
+    affected_versions TEXT,
+    published TIMESTAMP,
+    description TEXT,
+    cve_references TEXT,
+    fetched_at TIMESTAMP NOT NULL,
+    PRIMARY KEY (package_ecosystem, package_name, cve_id)
+);
+
+CREATE INDEX idx_cve_cache_ecosystem ON cve_cache(package_ecosystem, package_name);
+CREATE INDEX idx_cve_cache_fetched ON cve_cache(fetched_at);
+
+CREATE TABLE discovery_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    started_at TIMESTAMP NOT NULL,
+    completed_at TIMESTAMP,
+    trigger TEXT,
+    assets_discovered INTEGER,
+    new_assets INTEGER,
+    removed_assets INTEGER,
+    new_cves INTEGER,
+    errors TEXT
+);
+
+CREATE INDEX idx_runs_started ON discovery_runs(started_at);
+
+CREATE TABLE permission_grants (
+    integration TEXT NOT NULL,
+    granted_at TIMESTAMP NOT NULL,
+    granted_scope TEXT,
+    PRIMARY KEY (integration)
+);
+"""
+"""Up-SQL for v0.2.2.001 — six attack-surface tables + ten indexes.
+
+Spec §9.1 of v022-attack-surface-feature-spec-v1-LOCKED.md with six
+architect-pass-ratified deviations:
+
+1. ``cve_references`` (renamed from spec's ``references``, a SQLite
+   reserved keyword that fails to parse) in both ``asset_cves`` and
+   ``cve_cache``. Test: ``test_*_uses_cve_references_not_references``.
+2. ``TIMESTAMP`` column type preserved per spec; populated via
+   ``time.time()`` (Unix epoch float) for consistency with ``schema_meta``.
+3. ``FOREIGN KEY`` clauses are present per spec but enforcement requires
+   ``PRAGMA foreign_keys = ON`` which is OFF by default in db.py — clauses
+   are documentation-only in P0.2; enabling PRAGMA is deferred to a
+   dedicated PR with a sweep of the legacy 20 tables for orphan rows.
+4. (Framework contract change, not a schema deviation.) ``Migration``
+   dataclass extended with optional ``down_sql: str = ""`` to support
+   the rollback gate.
+5. ``assets.current_state TEXT NOT NULL`` (tightened from spec's
+   nullable) — matches the Asset dataclass contract in directive §7.1.
+6. Single ``Migration`` record covers all six tables + ten indexes;
+   per-migration transactionality per P0.0 contract point 11.
+
+See ``~/Documents/vigil-notes/architect-pass-P0.2.md`` for ratification.
+"""
+
+
+_P0_2_ATTACK_SURFACE_DOWN_SQL = """\
+DROP TABLE IF EXISTS permission_grants;
+DROP TABLE IF EXISTS discovery_runs;
+DROP TABLE IF EXISTS cve_cache;
+DROP TABLE IF EXISTS asset_history;
+DROP TABLE IF EXISTS asset_cves;
+DROP TABLE IF EXISTS assets;
+"""
+"""Down-SQL for v0.2.2.001.
+
+Drops the six attack-surface tables in reverse dependency order so the FK
+declarations don't refuse the drop. SQLite drops dependent indexes
+automatically as part of ``DROP TABLE``, so no explicit ``DROP INDEX``
+statements are needed. Exercised by the round-trip rollback test and the
+``migration-rollback-test`` CI gate (directive §11.2).
+"""
+
+
+MIGRATIONS: list[Migration] = [
+    Migration(
+        version="0.2.2.001",
+        description=(
+            "Add attack-surface tables (assets, asset_cves, asset_history, "
+            "cve_cache, discovery_runs, permission_grants) per spec §9.1 + "
+            "P0.2 architect-pass deviations"
+        ),
+        up_sql=_P0_2_ATTACK_SURFACE_UP_SQL,
+        down_sql=_P0_2_ATTACK_SURFACE_DOWN_SQL,
+    ),
+]
+"""Ordered registry of migrations.
 
 Contract: list order IS application order. The
 ``test_migrations_registry_versions_monotonic`` CI test asserts version
 strings sort monotonically across the list, so merge conflicts (two PRs
 each appending an out-of-order version) surface at PR time, not at
 runtime.
+
+P0.0 introduced the framework with an empty registry; P0.2 lands the
+first real migration here. Subsequent migrations append to this list.
 """
 
 
@@ -374,6 +529,78 @@ def apply_migration(conn: sqlite3.Connection, migration: Migration) -> None:
         except sqlite3.Error:
             pass
         raise MigrationError(f"Migration {migration.version!r} failed: {exc}") from exc
+
+
+def rollback_migration(conn: sqlite3.Connection, migration: Migration) -> None:
+    """Roll back a single migration via its ``down_sql``.
+
+    Runs in a ``BEGIN IMMEDIATE TRANSACTION`` with the same atomicity
+    guarantees as :func:`apply_migration`: on any error, ROLLBACK is issued
+    and a :class:`MigrationError` is raised. The ``schema_meta`` audit row
+    is preserved on failure so the caller knows the migration is still
+    "applied" and can retry after fixing the down_sql.
+
+    Idempotency: if the migration is not currently recorded in
+    ``schema_meta`` (never applied OR already rolled back), this is a
+    no-op. Mirrors :func:`apply_migration`'s already-applied skip.
+
+    Side effect on the no-op path: ``schema_meta`` is ensured (created
+    if absent) BEFORE the existence check so the SELECT can run against a
+    well-formed table. Calling ``rollback_migration`` against a never-
+    touched DB therefore creates ``schema_meta`` even though the rollback
+    itself is a no-op. Matches the side effect of :func:`apply_migration`.
+
+    Failure-mode note: the ``DELETE FROM schema_meta`` is the *last* DML
+    in the transaction. If any down_sql statement fails, ROLLBACK reverts
+    both the DDL changes already executed AND the (not-yet-executed) row
+    deletion — i.e., the audit row is preserved by SQLite's transaction
+    semantics, not by a separate save step.
+
+    Args:
+        conn: SQLite connection. Same preconditions as :func:`apply_migration`
+            (writable; no open transaction).
+        migration: The :class:`Migration` to roll back.
+
+    Raises:
+        MigrationError: If ``migration.down_sql`` is empty (apply-only
+            migration; rollback unsupported), or if the down_sql execution
+            fails for any reason. Original exception attached via
+            ``__cause__``.
+    """
+    if not migration.down_sql or not migration.down_sql.strip():
+        raise MigrationError(
+            f"Migration {migration.version!r} has empty down_sql; "
+            "rollback unsupported. Migrations may be flagged apply-only by "
+            "omitting down_sql at construction time."
+        )
+
+    _ensure_schema_meta(conn)
+
+    try:
+        conn.execute("BEGIN IMMEDIATE TRANSACTION")
+
+        # Idempotency check inside the transaction (parallel to apply_migration).
+        existing = conn.execute(
+            "SELECT 1 FROM schema_meta WHERE version = ?",
+            (migration.version,),
+        ).fetchone()
+        if not existing:
+            conn.execute("ROLLBACK")
+            return  # not applied — nothing to roll back
+
+        for statement in _split_sql_statements(migration.down_sql):
+            conn.execute(statement)
+        conn.execute(
+            "DELETE FROM schema_meta WHERE version = ?",
+            (migration.version,),
+        )
+        conn.execute("COMMIT")
+    except Exception as exc:
+        try:
+            conn.execute("ROLLBACK")
+        except sqlite3.Error:
+            pass
+        raise MigrationError(f"Rollback of migration {migration.version!r} failed: {exc}") from exc
 
 
 def apply_migrations(
