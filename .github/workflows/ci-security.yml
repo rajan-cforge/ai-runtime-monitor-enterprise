@@ -23,6 +23,12 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      # Upgrade pip itself first — runner ships pip 26.1.1 which has
+      # PYSEC-2026-196 (console_scripts path-sanitization issue);
+      # pip 26.1.2 is the fix. Pre-existing upstream CVE, unrelated
+      # to this PR's substance, but blocks branch-protection merge
+      # gating until upgraded.
+      - run: python -m pip install --upgrade "pip>=26.1.2"
       - run: pip install -e ".[dev]"
       # `--skip-editable` keeps pip-audit from trying to look up the
       # local in-tree package (ai-runtime-monitor) on PyPI, which fails

@@ -43,6 +43,15 @@ jobs:
       # the `|| true` makes the nudge→gate transition reviewable.
       - name: Functional coverage nudge
         run: python scripts/check_functional_coverage.py || true
+      # v0.2.2 directive §11.2 gate #1 — discovery-security-model-compliance.
+      # Per P1.2 architect-pass §5 + Rajan's 2026-06-05 source-classification
+      # ruling: scope is src/claude_monitoring/attack_surface/ only; zero-
+      # tolerance for FAIL patterns (yaml.load both alias forms, forbidden
+      # subprocess shell-kwarg, os shell-out builtins); WARN heuristics for
+      # path-validation gaps (open/read_text without validate_path). Owned
+      # by P1.2; consumed by every P1.4+ concrete source.
+      - name: Discovery security-model compliance
+        run: python scripts/check_discovery_security_model.py
       # v0.2.2 directive §11.2 gate #4 — privacy-no-telemetry-check.
       # Per Rajan's 2026-06-04 gate-ownership ruling, this gate moves
       # earlier than P5.1 so it is live BEFORE P4.1 ships the first

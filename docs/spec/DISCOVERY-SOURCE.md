@@ -323,3 +323,81 @@ straight subclass, not a breaking change.
 - `src/claude_monitoring/attack_surface/discovery/timeout.py` —
   thread-safe `_with_timeout` helper
 - `tests/test_p1_1_discovery_source.py` — 16-test contract suite
+
+## 10. Per-item isolation (LOCKED 2026-06-05)
+
+`discover()` MUST wrap per-item work in `try/except` and skip the bad
+item, never let a helper exception bubble to `run_with_safety`. One
+malformed file MUST NOT zero out a source's other findings.
+
+This is the cross-cutting contract that every P1.4+ source enforces.
+Without it, a single malformed config among 50 valid ones would crash
+`discover()`, which `run_with_safety` would catch — converting the
+whole source to a zero result. The audit log would record SUCCESS
+(via `last_run_outcome()`) but the user loses 49 legitimate assets.
+
+**Required pattern:**
+
+```python
+def discover(self) -> list[Asset]:
+    assets = []
+    for item in self._enumerate():
+        try:
+            assets.extend(self._process_item(item))
+        except Exception as exc:
+            logger.warning("source: skipping %s: %s", item, exc)
+            continue
+    return assets
+```
+
+P1.4 concrete sources MUST have at least one test asserting "one bad
+input among many leaves the good assets intact." Pin pattern:
+
+```python
+def test_one_bad_file_does_not_zero_out_good_findings(tmp_path):
+    # Drop 3 files: 1 valid, 1 malformed, 1 valid
+    ...
+    result = MySource(root=tmp_path).discover()
+    assert len(result) == 2  # the 2 valid, not 0
+```
+
+## 11. `last_run_outcome()` — additive contract extension (LOCKED 2026-06-05)
+
+Ratified per Rajan 2026-06-05 Decision 2 — additive extension to the
+P1.1 ABC. P1.2 lands the helpers + this extension via the §8
+escape-hatch pattern (additive change to a locked contract; P0.0
+precedent).
+
+**Method:** `DiscoverySource.last_run_outcome() -> LastRunOutcome`
+
+Read AFTER `run_with_safety` returns. The orchestrator (P1.3) uses
+this to distinguish a clean zero-asset result from a crashed source;
+P1.5's audit log persists the value as the `errors.failure_kind` field.
+
+**Enum: `LastRunOutcome`** (string values, lowercase, used as audit
+JSON keys per P1.5 §3.3 sketch):
+
+- `UNCALLED = "uncalled"` — initial state; no `run_with_safety` call
+  has completed yet for this instance
+- `SUCCESS = "success"` — `discover()` returned cleanly. Empty list +
+  SUCCESS = "no assets on this machine," a valid result
+- `TIMEOUT = "timeout"` — `discover()` exceeded `DEFAULT_TIMEOUT_SEC`
+- `ERROR = "error"` — `discover()` raised an uncaught `Exception`
+- `CAPPED = "capped"` — `discover()` returned more than
+  `MAX_ASSETS_PER_SOURCE`; the list was truncated. Audit visibility.
+
+**Contract guarantees:**
+
+1. `run_with_safety`'s **return type is unchanged** — still `list[Asset]`.
+   The universal empty-list signal stays intact for simple callers; the
+   outcome is a SEPARATE side channel for callers that want the
+   distinction.
+2. The outcome is set by `run_with_safety` AFTER the call resolves.
+   Reading from the same thread or any thread that observes
+   `run_with_safety`'s completion is safe — the future-resolution
+   barrier inside `_with_timeout` establishes ordering.
+3. `BaseException` propagation does NOT set the outcome (intentional —
+   `BaseException`-only subclasses like `KeyboardInterrupt` aren't
+   swallowed; outcome stays whatever it was prior).
+
+Pinned by 12 tests in `tests/test_p1_2_last_run_outcome.py`.
