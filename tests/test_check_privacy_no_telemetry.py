@@ -14,6 +14,7 @@ perspective: if CI invokes the script, the tests cover what CI sees.
 
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -22,6 +23,23 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "check_privacy_no_telemetry.py"
+
+
+def _assert_gate_flagged_hostname(result: subprocess.CompletedProcess[str], expected: str) -> None:
+    """Assert the gate's stderr names ``expected`` in the structured hostname position.
+
+    Extracts the hostname from the gate's canonical error format
+    (``... targets hostname 'X' which is not in ALLOWED_HOSTNAMES ...``)
+    via regex and compares the captured group to ``expected``. Stricter
+    than a bare substring check (catches gate-message-format drift) and
+    avoids the CodeQL ``py/incomplete-url-substring-sanitization``
+    false positive that fires on ``HOSTNAME in stderr`` patterns.
+    """
+    match = re.search(r"hostname '([^']+)'", result.stderr)
+    assert match is not None, f"gate stderr did not contain a flagged hostname: {result.stderr!r}"
+    assert match.group(1) == expected, (
+        f"gate flagged {match.group(1)!r}, expected {expected!r}; full stderr={result.stderr!r}"
+    )
 
 
 def _run_script_with_synthetic_surface(
@@ -110,7 +128,7 @@ class TestPrivacyGateBlockedHostnames:
             },
         )
         assert result.returncode == 1
-        assert "evil.example.com" in result.stderr
+        _assert_gate_flagged_hostname(result, "evil.example.com")
         assert "ALLOWED_HOSTNAMES" in result.stderr
 
     def test_fails_on_get_to_disallowed_host(self, tmp_path: Path) -> None:
@@ -124,7 +142,7 @@ class TestPrivacyGateBlockedHostnames:
             },
         )
         assert result.returncode == 1
-        assert "analytics.evil.com" in result.stderr
+        _assert_gate_flagged_hostname(result, "analytics.evil.com")
 
     def test_fails_on_urllib_urlopen_to_disallowed_host(self, tmp_path: Path) -> None:
         """urllib.request.urlopen is the stdlib equivalent and must also be policed."""
@@ -139,7 +157,7 @@ class TestPrivacyGateBlockedHostnames:
             },
         )
         assert result.returncode == 1
-        assert "collector.example.com" in result.stderr
+        _assert_gate_flagged_hostname(result, "collector.example.com")
 
 
 class TestPrivacyGateRuntimeURLs:
@@ -188,7 +206,7 @@ class TestPrivacyGateAliasImports:
             },
         )
         assert result.returncode == 1, f"alias-import bypass not caught: {result.stdout!r}"
-        assert "evil.example.com" in result.stderr
+        _assert_gate_flagged_hostname(result, "evil.example.com")
 
     def test_fails_on_from_requests_import_as_alias(self, tmp_path: Path) -> None:
         """``from requests import post as p; p(...)`` must also resolve."""
@@ -201,7 +219,7 @@ class TestPrivacyGateAliasImports:
             },
         )
         assert result.returncode == 1
-        assert "evil.example.com" in result.stderr
+        _assert_gate_flagged_hostname(result, "evil.example.com")
 
     def test_fails_on_import_requests_as(self, tmp_path: Path) -> None:
         """``import requests as rq; rq.post(...)`` must resolve."""
@@ -214,7 +232,7 @@ class TestPrivacyGateAliasImports:
             },
         )
         assert result.returncode == 1
-        assert "evil.example.com" in result.stderr
+        _assert_gate_flagged_hostname(result, "evil.example.com")
 
     def test_fails_on_urllib_request_alias(self, tmp_path: Path) -> None:
         """``import urllib.request as ur; ur.urlopen(...)`` must resolve."""
@@ -227,7 +245,7 @@ class TestPrivacyGateAliasImports:
             },
         )
         assert result.returncode == 1
-        assert "evil.example.com" in result.stderr
+        _assert_gate_flagged_hostname(result, "evil.example.com")
 
     def test_passes_on_alias_with_allowlisted_host(self, tmp_path: Path) -> None:
         """Aliasing is fine when the destination is allowlisted —
@@ -313,4 +331,4 @@ class TestPrivacyGateMethodCoverage:
             },
         )
         assert result.returncode == 1, f"{method} should be policed"
-        assert "leak.example.net" in result.stderr
+        _assert_gate_flagged_hostname(result, "leak.example.net")
