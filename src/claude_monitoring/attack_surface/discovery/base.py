@@ -28,6 +28,7 @@ enforced caps (timeout, max-assets) are universal and live in the wrapper.
 
 from __future__ import annotations
 
+import enum
 import logging
 from abc import ABC, abstractmethod
 
@@ -35,6 +36,41 @@ from claude_monitoring.attack_surface.asset import Asset
 from claude_monitoring.attack_surface.discovery.timeout import _with_timeout
 
 logger = logging.getLogger("ai-runtime-monitor.attack_surface.discovery.base")
+
+
+class LastRunOutcome(enum.Enum):
+    """The outcome of a source's most recent ``run_with_safety`` invocation.
+
+    Additive contract extension landed in P1.2 per Rajan's 2026-06-05
+    ratification (Decision 2). The orchestrator (P1.3) reads this AFTER
+    ``run_with_safety`` returns to distinguish a clean zero-asset result
+    from a crashed source — without this, the audit log cannot tell those
+    two apart, and every source-failure case looks like ``"this source
+    has no assets on this machine."``
+
+    The enum is read-only after ``run_with_safety`` returns; ordering is
+    established by the future-resolution barrier, so reads from worker
+    threads are safe.
+    """
+
+    UNCALLED = "uncalled"
+    """No call to ``run_with_safety`` has completed yet for this instance."""
+
+    SUCCESS = "success"
+    """``discover()`` returned cleanly. The returned list may be empty;
+    empty + SUCCESS = "no assets on this machine," which is a valid
+    result, not a failure."""
+
+    TIMEOUT = "timeout"
+    """``discover()`` exceeded ``DEFAULT_TIMEOUT_SEC``."""
+
+    ERROR = "error"
+    """``discover()`` raised an uncaught :class:`Exception` subclass."""
+
+    CAPPED = "capped"
+    """``discover()`` returned more assets than ``MAX_ASSETS_PER_SOURCE``;
+    the list was truncated. Subclass concerns: truncation may hide assets;
+    the orchestrator's audit row records this for visibility."""
 
 
 class DiscoverySource(ABC):
@@ -76,6 +112,33 @@ class DiscoverySource(ABC):
     """Advisory cap on directory-traversal depth. Per-source
     implementations MUST self-enforce; the base class does not police
     filesystem walks."""
+
+    _last_run_outcome: LastRunOutcome = LastRunOutcome.UNCALLED
+    """**Class-level default** for the `last_run_outcome()` extension
+    (Decision 2 ratification 2026-06-05).
+
+    Defined here as a class attribute — NOT set in ``__init__`` — so
+    that subclasses which override ``__init__`` without calling
+    ``super().__init__()`` still get the UNCALLED default via normal
+    attribute lookup. ``run_with_safety`` writes to ``self._last_run_outcome``,
+    which creates an instance attribute that shadows the class default
+    per standard Python semantics. The base class deliberately does NOT
+    define ``__init__`` — adding one would create the very footgun
+    this design avoids.
+    """
+
+    def last_run_outcome(self) -> LastRunOutcome:
+        """Return the outcome of the most recent ``run_with_safety`` call.
+
+        Additive method per Rajan's 2026-06-05 ratification (Decision 2).
+        Read after ``run_with_safety`` returns to distinguish a clean
+        zero from a crash. ``UNCALLED`` before any call completes.
+
+        Thread-safety: safe to read from any thread that observes the
+        completion of ``run_with_safety()``; ordering is established by
+        the future-resolution barrier inside :func:`_with_timeout`.
+        """
+        return self._last_run_outcome
 
     @abstractmethod
     def name(self) -> str:
@@ -144,6 +207,7 @@ class DiscoverySource(ABC):
                 self.name(),
                 self.DEFAULT_TIMEOUT_SEC,
             )
+            self._last_run_outcome = LastRunOutcome.TIMEOUT
             return []
         except Exception as exc:
             # Universal failure signal: sources never propagate to the
@@ -155,5 +219,10 @@ class DiscoverySource(ABC):
                 type(exc).__name__,
                 exc,
             )
+            self._last_run_outcome = LastRunOutcome.ERROR
             return []
+        if len(result) > self.MAX_ASSETS_PER_SOURCE:
+            self._last_run_outcome = LastRunOutcome.CAPPED
+        else:
+            self._last_run_outcome = LastRunOutcome.SUCCESS
         return result[: self.MAX_ASSETS_PER_SOURCE]
