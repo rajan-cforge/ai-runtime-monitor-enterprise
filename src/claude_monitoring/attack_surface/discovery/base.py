@@ -113,11 +113,19 @@ class DiscoverySource(ABC):
     implementations MUST self-enforce; the base class does not police
     filesystem walks."""
 
-    def __init__(self) -> None:
-        # Instance state for the last_run_outcome() extension (P1.2,
-        # Decision 2 ratification). Set inside run_with_safety after
-        # the discover() call resolves; read by the orchestrator post-call.
-        self._last_run_outcome: LastRunOutcome = LastRunOutcome.UNCALLED
+    _last_run_outcome: LastRunOutcome = LastRunOutcome.UNCALLED
+    """**Class-level default** for the `last_run_outcome()` extension
+    (Decision 2 ratification 2026-06-05).
+
+    Defined here as a class attribute — NOT set in ``__init__`` — so
+    that subclasses which override ``__init__`` without calling
+    ``super().__init__()`` still get the UNCALLED default via normal
+    attribute lookup. ``run_with_safety`` writes to ``self._last_run_outcome``,
+    which creates an instance attribute that shadows the class default
+    per standard Python semantics. The base class deliberately does NOT
+    define ``__init__`` — adding one would create the very footgun
+    this design avoids.
+    """
 
     def last_run_outcome(self) -> LastRunOutcome:
         """Return the outcome of the most recent ``run_with_safety`` call.

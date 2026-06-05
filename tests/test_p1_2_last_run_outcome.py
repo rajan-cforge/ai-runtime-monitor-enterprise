@@ -193,6 +193,62 @@ class TestLastRunOutcomeStateMachine:
         assert src.last_run_outcome() == LastRunOutcome.SUCCESS
 
 
+class TestLastRunOutcomeFootgunResistance:
+    """Per Rajan's 2026-06-05 base.py review: a subclass that overrides
+    __init__ WITHOUT calling super().__init__() must STILL return
+    UNCALLED from last_run_outcome(), not raise AttributeError.
+
+    The fix is to keep `_last_run_outcome` as a class-level default
+    attribute, NOT an instance attribute set by DiscoverySource.__init__.
+    Then run_with_safety creates an instance attribute that shadows the
+    class default; subclasses that skip super().__init__() still get the
+    UNCALLED class default via attribute lookup.
+    """
+
+    def test_subclass_skipping_super_init_still_returns_uncalled(self) -> None:
+        """The footgun: a subclass overrides __init__ without calling
+        super().__init__(). `last_run_outcome()` must STILL return UNCALLED."""
+
+        class BadlyInitialised(DiscoverySource):
+            def __init__(self) -> None:
+                # Intentionally NO super().__init__() — the footgun pattern
+                self.subclass_local = 1
+
+            def name(self) -> str:
+                return "x"
+
+            def requires_auth(self) -> bool:
+                return False
+
+            def discover(self) -> list[Asset]:
+                return []
+
+        instance = BadlyInitialised()
+        # Must NOT raise AttributeError
+        assert instance.last_run_outcome() == LastRunOutcome.UNCALLED
+
+    def test_subclass_skipping_super_init_still_updates_outcome_on_run(self) -> None:
+        """And the outcome MUST still update after `run_with_safety` — i.e.,
+        the class-attribute default doesn't break the assignment path."""
+
+        class BadlyInitialised(DiscoverySource):
+            def __init__(self) -> None:
+                self.subclass_local = 1
+
+            def name(self) -> str:
+                return "x"
+
+            def requires_auth(self) -> bool:
+                return False
+
+            def discover(self) -> list[Asset]:
+                return [_make_asset("a")]
+
+        instance = BadlyInitialised()
+        instance.run_with_safety()
+        assert instance.last_run_outcome() == LastRunOutcome.SUCCESS
+
+
 class TestLastRunOutcomeContract:
     def test_run_with_safety_return_type_unchanged(self) -> None:
         """Decision 2 ratification: `run_with_safety` STILL returns
