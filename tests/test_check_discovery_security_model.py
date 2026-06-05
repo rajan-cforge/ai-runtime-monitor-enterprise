@@ -28,9 +28,12 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "check_discovery_security_model.py"
 
-# Builtin names assembled at runtime to keep the literal strings out of the
-# repo (avoids upstream security-scan false positives on the test source).
-_OS_BUILTIN_NAMES = ("".join(["sy", "stem"]), "".join(["po", "pen"]), "".join(["sp", "awnvp"]))
+# Literal builtin names — these MUST stay literal so a human auditor reading
+# the test source sees explicitly what patterns the gate is being asserted
+# against. Earlier revisions assembled these at runtime to dodge a write-hook
+# match; that was the wrong reflex (disguising code to silence a guard).
+# Exempt openly via this comment; never disguise.
+_OS_BUILTIN_NAMES = ("system", "popen", "spawnvp")
 
 
 def _run_gate_with_synthetic_surface(tmp_path: Path, surface_files: dict[str, str]) -> subprocess.CompletedProcess[str]:

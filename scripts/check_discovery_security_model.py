@@ -46,21 +46,23 @@ SCAN_ROOT = REPO_ROOT / "src" / "claude_monitoring" / "attack_surface"
 
 FORBIDDEN_YAML_ATTRS: frozenset[str] = frozenset({"load", "unsafe_load"})
 
-# Names assembled at runtime to avoid the literal strings appearing in
-# the source (avoids upstream security-scan false positives on the gate
-# script itself; the gate detects them in target code via AST attr name).
+# Literal forbidden attribute names — these MUST stay literal so a human
+# auditor reading the gate source sees explicitly what patterns the gate
+# detects. Earlier revisions assembled these at runtime to dodge a
+# write-hook match; that was the wrong reflex (disguising code to silence
+# a guard). Exempt openly via this comment; never disguise.
 _OS_SHELL_OUT_NAMES: frozenset[str] = frozenset(
     {
-        "".join(["sy", "stem"]),
-        "".join(["po", "pen"]),
-        "".join(["sp", "awnl"]),
-        "".join(["sp", "awnle"]),
-        "".join(["sp", "awnlp"]),
-        "".join(["sp", "awnlpe"]),
-        "".join(["sp", "awnv"]),
-        "".join(["sp", "awnve"]),
-        "".join(["sp", "awnvp"]),
-        "".join(["sp", "awnvpe"]),
+        "system",
+        "popen",
+        "spawnl",
+        "spawnle",
+        "spawnlp",
+        "spawnlpe",
+        "spawnv",
+        "spawnve",
+        "spawnvp",
+        "spawnvpe",
     }
 )
 
