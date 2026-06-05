@@ -286,6 +286,57 @@ The proxy's `allow_hosts` is restricted to **API endpoints only** (`constants.AI
 - *Mitigation:* The legitimate extension is published only via the Chrome Web Store with code review. Apache 2.0 licensed source on GitHub for verification.
 - *Residual risk:* Compromised CWS account or malicious update. Standard extension threat model.
 
+## 7.5. Boundary B7: Vigil Discovery ↔ Filesystem/Subprocess Input (added v0.2.2 — PARTIALLY mitigated)
+
+Added 2026-06-05 with the v0.2.2 P1.2 PR. The discovery feature reads
+attacker-controllable bytes from the local filesystem — MCP config files,
+skill manifests, `package.json` files — and promotes them into
+Vigil-trusted `Asset` records persisted to the `assets` table. The
+crossing point: raw bytes read by a `DiscoverySource.discover()`
+implementation become Vigil-controlled Python data structures.
+
+**Status: PARTIALLY mitigated, NOT closed.** Display-time HTML
+escaping (the Elevation row below) is deferred to Phase 7. Until that
+lands, B7 remains in the partial-mitigation state.
+
+**STRIDE for B7:**
+
+- **Spoofing** — *Vector:* Attacker replaces a config file (e.g., a
+  malicious skill swaps `claude_desktop_config.json` before a scan).
+  *Mitigation:* `validate_path` rejects symlink escape + `..`
+  traversal; B2 chmod-600 protects the resulting `assets` DB. Status:
+  mitigated.
+
+- **Tampering** — *Vector:* A malicious package ships `package.json`
+  with path-traversal strings in `name` or `version`. *Mitigation:*
+  `validate_path` rejects traversal; `safe_yaml_load` rejects unsafe
+  constructors (`!!python/object/apply:`) AND billion-laughs alias
+  bombs (anchor cap 10 / alias cap 15, data-derived). Status:
+  mitigated.
+
+- **Information disclosure** — *Vector:* Discovery captures token
+  values into `Asset.current_state` and persists them via
+  `json.dumps`. *Mitigation:* `redact_secrets_in_env` is heuristic
+  (8 value patterns + 5 name-suffix patterns), env-scoped,
+  source-invoked. **Residuals possible** when the token shape is
+  novel or when the source author forgets to call the redactor.
+  **chmod-600 on `monitor.db` is the at-rest backstop**, NOT
+  redaction completeness. Status: **partially mitigated**.
+
+- **DoS** — *Vector:* Crafted YAML with billion-laughs alias expansion
+  detonates at `json.dumps` (per the 2026-06-05 empirical detonation
+  profile: `safe_load` is bounded; `json.dumps` unfolds shared refs).
+  *Mitigation:* `safe_yaml_load` rejects > 10 anchors or > 15 aliases
+  BEFORE `yaml.safe_load` runs. `validate_path` enforces the 10 MiB
+  file-size cap. `safe_subprocess` enforces wall-clock timeouts.
+  Status: mitigated.
+
+- **Elevation** — *Vector:* A crafted skill manifest injects HTML
+  content that reaches the dashboard via `Asset.current_state` without
+  escaping, causing XSS in the operator's browser. *Mitigation:*
+  Spec §4.7.5 requires HTML-escaping at display time — **deferred to
+  Phase 7 (UI shell)**. **Status: deferred. B7 is NOT closed.**
+
 ## 8. Boundary B6: Agent Identity (planned v0.3)
 
 The boundary between "an AI agent claims to be Claude Code" and "the system confirms this is the legitimate Claude Code binary, signed by Anthropic, in its expected location."

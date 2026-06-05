@@ -90,15 +90,23 @@ and verification plan.
 
 ## Criticality classification
 
-Every PR description must include a criticality level:
+Every PR description must include a criticality level. **Criticality is the
+stricter of two axes: security sensitivity and architectural blast radius.**
+A PR is C4 if it is C4 on either axis — neither axis is subordinated.
 
 - **C0** — docs-only, no code paths affected
 - **C1** — tests or scripts, no production behavior
 - **C2** — feature addition, no security implication
 - **C3** — feature with security implication or hot-path touch
-- **C4** — auth, secrets, crypto, trust boundary
+- **C4** — auth, secrets, crypto, or trust boundary, OR a change to how Vigil
+  fundamentally operates
 
 C3 and C4 PRs require human diff review even if all agents pass.
+
+Note for v0.2.2 sprint PRs: the implementation directive
+(`~/Documents/vigil-notes/v022-implementation-directive-v1-LOCKED.md` §5)
+defers to this scale rather than redefining it. If a PR is C4 on either
+axis under the union, classify and treat it as C4.
 
 ## Where things live
 
