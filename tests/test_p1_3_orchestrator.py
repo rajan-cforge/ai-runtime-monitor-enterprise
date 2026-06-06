@@ -495,6 +495,89 @@ class TestPersistenceUpsert:
 # ---------------------------------------------------------------------------
 
 
+class TestTelemetrySeededWithAllRegisteredSources:
+    """#155 fix (Rajan 2026-06-05): every registered source appears in
+    `per_source` even if its future never resolved (cancelled by the
+    wall-clock budget) — seeded UNCALLED up front, updated in place."""
+
+    def test_telemetry_size_matches_registered_source_count(self, tmp_path: Path) -> None:
+        """3 registered sources → exactly 3 PerSourceTelemetry entries,
+        in source-registration order, regardless of completion order."""
+        s1 = _HappySource(src_name="s1")
+        s2 = _CleanZeroSource()  # name = "clean-zero"
+        s3 = _HappySource(src_name="s3")
+        lock = ScanLock(lock_path=tmp_path / ".lock")
+        o = DiscoveryOrchestrator(sources=[s1, s2, s3], lock=lock)
+        result = o.scan(trigger="on_demand")
+        assert len(result.per_source) == 3
+        # Order preserved by source-registration order
+        assert [t.name for t in result.per_source] == ["s1", "clean-zero", "s3"]
+
+    def test_straggler_source_appears_as_timeout_not_missing(self, tmp_path: Path) -> None:
+        """When wall-clock budget fires with stragglers still running,
+        the straggler appears in telemetry as TIMEOUT (NOT silently absent)."""
+
+        class _SlowSource(DiscoverySource):
+            DEFAULT_TIMEOUT_SEC = 10.0  # well above orchestrator budget
+
+            def __init__(self, name: str) -> None:
+                self._n = name
+
+            def name(self) -> str:
+                return self._n
+
+            def requires_auth(self) -> bool:
+                return False
+
+            def discover(self) -> list[Asset]:
+                time.sleep(2.0)
+                return []
+
+        lock = ScanLock(lock_path=tmp_path / ".lock")
+        o = DiscoveryOrchestrator(
+            sources=[_SlowSource("slow-1"), _SlowSource("slow-2")],
+            lock=lock,
+        )
+        o.MAX_TOTAL_SCAN_SEC = 0.2  # type: ignore[misc]
+        result = o.scan(trigger="on_demand")
+        # Both sources MUST appear, both marked TIMEOUT
+        assert len(result.per_source) == 2
+        outcomes = {t.name: t.last_run_outcome for t in result.per_source}
+        assert outcomes == {"slow-1": LastRunOutcome.TIMEOUT, "slow-2": LastRunOutcome.TIMEOUT}
+
+
+class TestPersistAssetsAtomicTransaction:
+    """#156 fix (Rajan 2026-06-05): `_persist_assets` wraps its UPSERT
+    loop in `with self.conn:` so a mid-loop failure ROLLS BACK in-flight
+    inserts rather than leaving the connection mid-transaction for the
+    caller to clean up."""
+
+    def test_mid_loop_failure_rolls_back_prior_inserts(self, tmp_path: Path) -> None:
+        """If the 2nd asset's UPSERT raises mid-loop, the 1st asset's
+        UPSERT (which succeeded) is rolled back atomically."""
+        from claude_monitoring.persistence.migrations import apply_migrations
+
+        db_path = tmp_path / "atomic.db"
+        conn = sqlite3.connect(str(db_path))
+        apply_migrations(conn)
+
+        a_good = _make_asset("good-1", "happy")
+        a_bad = _make_asset("bad-2", "happy")
+        # Corrupt a_bad's source to trigger the drift-1 ValueError mid-loop
+        object.__setattr__(a_bad, "source", "")
+
+        source = _HappySource(assets=[a_good, a_bad], src_name="happy")
+        lock = ScanLock(lock_path=tmp_path / ".lock")
+        o = DiscoveryOrchestrator(sources=[source], lock=lock, persistence_connection=conn)
+
+        with pytest.raises(ValueError, match="source"):
+            o.scan(trigger="on_demand")
+
+        # a_good's UPSERT was rolled back — assets table is empty
+        rows = list(conn.execute("SELECT COUNT(*) FROM assets"))
+        assert rows[0][0] == 0, "transaction did not roll back — a_good leaked into assets table"
+
+
 class TestAuditIntegration:
     """Post-P1.5 integration — the orchestrator's audit calls now write
     real `discovery_runs` rows (Option β stubs filled in P1.5).
@@ -538,6 +621,12 @@ class TestAuditIntegration:
 
             def commit(self):
                 return self.real.commit()
+
+            def __enter__(self):
+                return self.real.__enter__()
+
+            def __exit__(self, exc_type, exc, tb):
+                return self.real.__exit__(exc_type, exc, tb)
 
         bad_conn = _BadOnUpsert(conn)  # type: ignore[arg-type]
         o = DiscoveryOrchestrator(
