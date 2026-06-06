@@ -350,6 +350,52 @@ class TestStubPhraseAbsent:
 # ---------------------------------------------------------------------------
 
 
+class TestDefensiveBranches:
+    """Cover defensive branches in audit.py that the happy-path tests don't
+    naturally exercise — keeps the 100% line coverage from the P1.3 stub
+    state intact through P1.5 (coverage-ratchet guard)."""
+
+    def test_record_run_crashed_with_zero_run_id_is_noop(self, tmp_path: Path, caplog) -> None:
+        """run_id<=0 (P1.3's stub-return-0 fallback) → WARNING + return; no SQL."""
+        conn = _conn(tmp_path)
+        with caplog.at_level("WARNING", logger="ai-runtime-monitor.attack_surface.orchestrator.audit"):
+            audit.record_run_crashed(conn, 0, exception_type="X", exception_message="m")
+        # No row was inserted/updated
+        assert list(conn.execute("SELECT COUNT(*) FROM discovery_runs"))[0][0] == 0
+        assert any("run_id=0" in r.message or "no row" in r.message for r in caplog.records)
+
+    def test_finalize_handles_corrupt_errors_json(self, tmp_path: Path) -> None:
+        """A row with malformed JSON in `errors` is still finalized cleanly
+        (json.JSONDecodeError → empty existing dict, then status=crashed set)."""
+        conn = _conn(tmp_path)
+        now = time.time()
+        conn.execute(
+            "INSERT INTO discovery_runs (started_at, trigger, errors) VALUES (?, ?, ?)",
+            (now - 700, "on_demand", "not valid json {{{"),
+        )
+        conn.commit()
+        n = audit.finalize_crashed_runs(conn, older_than_sec=600)
+        assert n == 1
+        row = next(iter(conn.execute("SELECT errors FROM discovery_runs LIMIT 1")))
+        errors = json.loads(row[0])
+        assert errors["status"] == "crashed"
+
+    def test_telemetry_to_dict_falls_back_to_str_for_non_enum_outcome(self) -> None:
+        """`_telemetry_to_dict` defensively str()-coerces if last_run_outcome
+        is somehow not a LastRunOutcome — covers the else branch."""
+        from claude_monitoring.attack_surface.orchestrator.audit import _telemetry_to_dict
+
+        # Synthetic "telemetry-like" object with a non-enum outcome string
+        class _FakeTelem:
+            name = "fake"
+            asset_count = 0
+            elapsed_sec = 0.0
+            last_run_outcome = "some-string-not-enum"
+
+        result = _telemetry_to_dict(_FakeTelem())
+        assert result["outcome"] == "some-string-not-enum"
+
+
 class TestDataClassificationDoc:
     def test_data_classification_doc_has_discovery_runs_internal_entry(self) -> None:
         from pathlib import Path as P
