@@ -38,6 +38,7 @@ from pathlib import Path
 from claude_monitoring.attack_surface.asset import Asset
 from claude_monitoring.attack_surface.discovery.base import DiscoverySource
 from claude_monitoring.attack_surface.discovery.helpers import (
+    redact_secrets_in_args,
     redact_secrets_in_env,
     validate_path,
 )
@@ -148,22 +149,40 @@ class McpServersSource(DiscoverySource):
         command = entry.get("command")
         if not isinstance(command, str) or not command.strip():
             raise ValueError(f"server entry {server_name!r} missing string `command`")
-        args = entry.get("args") if isinstance(entry.get("args"), list) else []
+        args_raw = entry.get("args") if isinstance(entry.get("args"), list) else []
         env_raw = entry.get("env") if isinstance(entry.get("env"), dict) else None
-        # Secret-path: redact_secrets_in_env BEFORE storing.
+        # Secret-path: redact BOTH env AND args BEFORE storing.
+        # MCP configs commonly pass tokens as CLI args too (e.g.,
+        # `args: ["--token", "ghp_..."]` or `args: ["--api-key=sk-..."]`).
+        # Skipping arg-redaction would leak the same secret class through
+        # a different field — a real hole even with env-redaction correct.
+        args_filtered = [a for a in args_raw if isinstance(a, str)]
+        args_redacted = redact_secrets_in_args(args_filtered)
         env_redacted = redact_secrets_in_env(env_raw) if env_raw is not None else None
         current_state: dict = {
             "scope": scope,
             "config_path": str(config),
             "command": command,
-            "args": [a for a in args if isinstance(a, str)],
+            "args": args_redacted,
         }
         if env_redacted is not None:
             current_state["env"] = env_redacted
-        # id is a stable digest of (config_path, scope, server_name) — Asset
-        # spec drift 2 requires id stability across daemon restarts so the
-        # UPSERT path preserves first_seen. Python's built-in hash() is
-        # PYTHONHASHSEED-randomized per process; sha256 is deterministic.
+        # id is a stable digest of (config_path, scope, server_name).
+        #
+        # **Documented deviation from Asset.id formula:** the Asset
+        # dataclass docstring (`asset.py:66-68`) says "stable hash of
+        # (type, install_path, name)". This source intentionally adds
+        # `scope` to the tuple so a `global` and a per-project server
+        # with the same name do not collide. install_path is the
+        # config file path; the per-project distinction is per-config
+        # but lives inside the file, so without `scope` two
+        # genuinely-distinct servers would hash to the same id and the
+        # second insert would silently UPSERT the first.
+        #
+        # sha256 (not built-in hash()) because PYTHONHASHSEED is
+        # process-randomized; sha256 is deterministic across daemon
+        # restarts, preserving the UPSERT first_seen contract
+        # (Asset spec drift 2).
         key = f"{config}|{scope}|{server_name}".encode()
         asset_id = f"mcp-server-{hashlib.sha256(key).hexdigest()[:16]}"
         return Asset(

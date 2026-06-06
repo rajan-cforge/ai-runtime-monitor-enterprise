@@ -336,3 +336,59 @@ def redact_secrets_in_env(env: dict) -> dict:
         else:
             redacted[str_key] = str_val
     return redacted
+
+
+# ---------------------------------------------------------------------------
+# redact_secrets_in_args
+# ---------------------------------------------------------------------------
+
+
+def redact_secrets_in_args(args: list[str]) -> list[str]:
+    """Return a new list with token-shaped CLI args replaced by sentinels.
+
+    MCP server configs commonly pass tokens as command-line arguments
+    rather than as ``env`` map entries (e.g., ``"args": ["--token",
+    "ghp_..."]`` or ``"args": ["--api-key=sk-ant-..."]``). Storing args
+    verbatim in ``Asset.current_state`` would leak secrets the same way
+    a missed env-redaction would — same control class, different field.
+
+    Two redaction shapes:
+
+    - **Standalone token**: the arg IS a token (e.g., ``"ghp_xyz..."``)
+      → replaced wholesale with ``REDACTED_VAL_SHAPE``. The 8
+      ``TOKEN_VALUE_PATTERNS`` are anchored, so a `re.match` against
+      the arg fires only on the standalone form.
+
+    - **Embedded ``--flag=token`` token**: the arg has the form
+      ``"--name=value"`` and ``value`` matches a token pattern → the
+      prefix ``"--name="`` is preserved (so the flag name is still
+      visible in the audit trail) and the RHS is replaced.
+
+    Args:
+        args: List of CLI argv strings. Non-str elements are coerced
+            via ``str()``.
+
+    Returns:
+        New list; original ``args`` is not mutated.
+
+    Raises:
+        TypeError: If ``args`` is not a list.
+    """
+    if not isinstance(args, list):
+        raise TypeError(f"redact_secrets_in_args: expected list, got {type(args).__name__}")
+    out: list[str] = []
+    for raw in args:
+        s = str(raw)
+        # Standalone: anchored token pattern matches the whole arg.
+        if any(p.match(s) for p in TOKEN_VALUE_PATTERNS):
+            out.append(REDACTED_VAL_SHAPE)
+            continue
+        # Embedded: --flag=value where value is a token. The env-style
+        # anchored patterns would miss this without the explicit split.
+        if "=" in s:
+            prefix, value = s.split("=", 1)
+            if any(p.match(value) for p in TOKEN_VALUE_PATTERNS):
+                out.append(f"{prefix}={REDACTED_VAL_SHAPE}")
+                continue
+        out.append(s)
+    return out

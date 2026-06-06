@@ -23,6 +23,35 @@ shipped covers CLI tools (``claude --version``, ``cursor --version``).
 This source covers the ``.app`` bundle install — the two are
 complementary and produce distinct ``Asset.id`` values (different
 install_paths).
+
+**Documented residual (Rajan 2026-06-06 PR #87 review):** the
+``validate_path(check_size=True, max_size_mb=10)`` call below
+defends against a literally-huge plist, but NOT against an XML
+entity-expansion bomb — small input that expands on parse, the
+same class as YAML billion-laughs. ``plistlib`` uses ``expat``
+and is NOT hardened against internal-entity expansion by default.
+Because the orchestrator's per-source timeout cannot kill the
+worker thread (Python limitation, documented in
+`orchestrator.py`), a leaked expansion would keep allocating
+memory after the orchestrator stops waiting — the failure mode
+is daemon OOM, not just a slow scan.
+
+**Why this is a documented residual rather than a blocker:** the
+trusted-bundle threat model. This source reads Info.plist ONLY
+from a fixed list of four named, reputable app bundles. An
+attacker who can place a malicious app under ``/Applications``
+already has more than a plist-DoS — they have arbitrary code
+execution at user-install time. The surface is genuinely smaller
+than the user-installable SKILL.md path (which is why
+``safe_yaml_load`` caps are central there and this is peripheral).
+
+**Follow-up hardening (filed separately):** disable DTD /
+internal-entity-subset processing on the XML plist parse. The
+legitimate Apple DOCTYPE is an external PUBLIC identifier that
+``expat`` does not fetch by default; the danger is an
+internal-entity subset. A focused fix using a custom XML parser
+configuration (rather than `plistlib.load`'s default) closes the
+residual without breaking the binary-plist path.
 """
 
 from __future__ import annotations

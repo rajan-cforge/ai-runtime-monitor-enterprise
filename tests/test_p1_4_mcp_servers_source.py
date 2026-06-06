@@ -186,6 +186,104 @@ class TestMcpServersSourceSecretRedaction:
         assert not redact_mock.called
 
 
+class TestMcpServersSourceArgsRedaction:
+    """Args-redaction contract (Rajan's 2026-06-06 review catch).
+
+    MCP configs pass tokens as CLI args too; storing args verbatim
+    would leak the same secret class as a missed env-redaction. The
+    source MUST run args through `redact_secrets_in_args` BEFORE
+    storing in `Asset.current_state["args"]`.
+    """
+
+    def test_standalone_token_arg_is_redacted(self, tmp_path: Path) -> None:
+        """`args: ["--token", "ghp_..."]` → the bare token is replaced."""
+        config = _claude_desktop_config(
+            tmp_path,
+            {
+                "mcpServers": {
+                    "gh-mcp": {
+                        "command": "gh-mcp",
+                        "args": ["--token", "ghp_abcdefghijklmnopqrstuvwxyz1234567890ABCD"],
+                    }
+                }
+            },
+        )
+        src = McpServersSource(config_paths=[config])
+        result = src.run_with_safety()
+        stored_args = result[0].current_state.get("args", [])
+        # Flag name preserved; token replaced
+        assert "--token" in stored_args
+        assert not any("ghp_" in a for a in stored_args), f"token leak in args: {stored_args}"
+        assert any("REDACTED" in a for a in stored_args)
+
+    def test_embedded_flag_equals_token_is_redacted(self, tmp_path: Path) -> None:
+        """`args: ["--api-key=sk-ant-..."]` → prefix preserved, RHS redacted.
+
+        This is the form anchored env-value patterns would MISS without
+        the explicit `=` split in `redact_secrets_in_args`.
+        """
+        config = _claude_desktop_config(
+            tmp_path,
+            {
+                "mcpServers": {
+                    "ant-mcp": {
+                        "command": "ant-mcp",
+                        "args": ["--api-key=sk-ant-secrettokenvalueXXXXXXXXXXXXXXXXX"],
+                    }
+                }
+            },
+        )
+        src = McpServersSource(config_paths=[config])
+        result = src.run_with_safety()
+        stored_args = result[0].current_state.get("args", [])
+        # The full original arg must NOT survive
+        assert "sk-ant-secrettokenvalueXXXXXXXXXXXXXXXXX" not in str(stored_args)
+        # The flag prefix should still be visible for audit
+        assert any(a.startswith("--api-key=") for a in stored_args)
+        # And the value should be a sentinel
+        assert any("REDACTED" in a for a in stored_args)
+
+    def test_mixed_args_only_secrets_redacted(self, tmp_path: Path) -> None:
+        """Plain args survive untouched; only token-shaped args are redacted."""
+        config = _claude_desktop_config(
+            tmp_path,
+            {
+                "mcpServers": {
+                    "mixed": {
+                        "command": "x",
+                        "args": [
+                            "--verbose",
+                            "--config",
+                            "/etc/mcp.conf",
+                            "AKIAIOSFODNN7EXAMPLE",  # AWS access key — standalone token
+                            "--debug",
+                        ],
+                    }
+                }
+            },
+        )
+        src = McpServersSource(config_paths=[config])
+        result = src.run_with_safety()
+        stored_args = result[0].current_state.get("args", [])
+        assert "--verbose" in stored_args
+        assert "--config" in stored_args
+        assert "/etc/mcp.conf" in stored_args
+        assert "--debug" in stored_args
+        assert "AKIAIOSFODNN7EXAMPLE" not in stored_args, "AWS key leaked"
+        # Exactly one redaction sentinel landed
+        assert sum(1 for a in stored_args if "REDACTED" in a) == 1
+
+    def test_no_secret_no_redaction(self, tmp_path: Path) -> None:
+        """Args with no token-shaped values pass through unchanged."""
+        config = _claude_desktop_config(
+            tmp_path,
+            {"mcpServers": {"plain": {"command": "x", "args": ["--port", "8080"]}}},
+        )
+        src = McpServersSource(config_paths=[config])
+        result = src.run_with_safety()
+        assert result[0].current_state.get("args") == ["--port", "8080"]
+
+
 class TestMcpServersSourceEmptyAndMissing:
     def test_empty_paths_list_yields_empty_assets(self) -> None:
         src = McpServersSource(config_paths=[])
@@ -378,19 +476,27 @@ class TestMcpServersSourceEmpirical:
         if not any(p.is_file() for p in src.config_paths):
             pytest.skip("no MCP config files present on this machine")
         result = src.run_with_safety()
+        # Patterns that should NEVER appear unredacted in current_state.
+        token_substrings = ("ghp_", "gho_", "ghu_", "ghs_", "sk-ant-", "xoxb-", "xoxp-", "xoxs-")
         for asset in result:
             env = asset.current_state.get("env") or {}
             for k, v in env.items():
-                # If the key looks token-shaped, the value MUST be a
-                # redaction sentinel; never the literal secret.
                 upper_k = k.upper()
                 if any(
                     suffix in upper_k for suffix in ("_TOKEN", "_KEY", "_SECRET", "_PASSWORD")
                 ) or upper_k.startswith("AUTH_"):
                     # H1: tightened — if redaction is bypassed, v could be
-                    # a non-string (e.g., int PORT). Assert isinstance first
-                    # so the AssertionError carries the real failure context
-                    # rather than a TypeError masking a leak.
+                    # a non-string. Assert isinstance first so the
+                    # AssertionError carries the real failure context.
                     assert isinstance(v, str) and "REDACTED" in v, (
                         f"secret leak or redact bypass: {asset.name} {k}={v!r}"
                     )
+            # Args leak check (2026-06-06 Rajan review catch). No raw token
+            # prefix may appear in any stored arg.
+            args = asset.current_state.get("args") or []
+            for a in args:
+                if not isinstance(a, str):
+                    continue
+                for prefix in token_substrings:
+                    if prefix in a and "REDACTED" not in a:
+                        raise AssertionError(f"secret leak in args: {asset.name} arg={a!r} matched {prefix!r}")
