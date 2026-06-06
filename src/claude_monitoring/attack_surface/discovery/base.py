@@ -38,7 +38,7 @@ from claude_monitoring.attack_surface.discovery.timeout import _with_timeout
 logger = logging.getLogger("ai-runtime-monitor.attack_surface.discovery.base")
 
 
-class LastRunOutcome(enum.Enum):
+class LastRunOutcome(str, enum.Enum):
     """The outcome of a source's most recent ``run_with_safety`` invocation.
 
     Additive contract extension landed in P1.2 per Rajan's 2026-06-05
@@ -51,6 +51,17 @@ class LastRunOutcome(enum.Enum):
     The enum is read-only after ``run_with_safety`` returns; ordering is
     established by the future-resolution barrier, so reads from worker
     threads are safe.
+
+    **str-mixin (P1.3 §8 amendment 2026-06-05).** Inherits from ``str`` so
+    ``json.dumps(outcome)`` serializes directly to the lowercase value
+    string. P1.5's audit row stores ``outcome.value`` with no mapping
+    layer. Matches the ``protocols/scanner.py::Severity`` precedent for
+    Python 3.10 compatibility (``enum.StrEnum`` is 3.11+).
+
+    **Read discipline (always-applies):** read the stored form as
+    ``outcome.value``, NEVER ``str(member)``. Plain ``str``-mixin enums
+    return the enum repr from ``str()`` on Python 3.10/3.11; only 3.12+
+    returns the value. ``outcome.value`` is version-independent.
     """
 
     UNCALLED = "uncalled"
