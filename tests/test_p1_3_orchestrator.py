@@ -567,15 +567,19 @@ class TestSourceRegistry:
         """No module-level mutable state — factory returns a NEW list.
         Mutating one return value MUST NOT affect a subsequent call."""
         a = default_sources()
+        original_len = len(a)
         a.append("contaminant")  # type: ignore[arg-type]
         b = default_sources()
-        assert b == []
+        assert len(b) == original_len
+        assert "contaminant" not in b
 
-    def test_default_sources_empty_at_p1_3_merge_time(self) -> None:
-        """P1.4 adds sources. At P1.3 merge time, the factory returns
-        an empty list — the orchestrator's empty-registry path is the
-        valid behavior."""
-        assert default_sources() == []
+    def test_default_sources_registers_p1_4_minimal_sources(self) -> None:
+        """P1.4-minimal adds Ollama models + AI tool versions. Empty at
+        P1.3 merge time; 2 sources after P1.4-minimal merge."""
+        sources = default_sources()
+        names = {s.name() for s in sources}
+        assert "ollama-models" in names
+        assert "ai-tool-versions" in names
 
 
 # ---------------------------------------------------------------------------

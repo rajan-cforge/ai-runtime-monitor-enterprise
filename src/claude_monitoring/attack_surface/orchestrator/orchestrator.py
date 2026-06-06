@@ -388,11 +388,24 @@ def default_sources() -> list[DiscoverySource]:
     the CLAUDE.md forbidden pattern + lets tests mutate without leaking
     state between runs).
 
-    Empty at P1.3 merge — sources are added by P1.4 (Ollama, AI tool
-    versions) and Phase 3 (MEDIUM-tier sources). The orchestrator's
-    empty-registry path is exercised by test 15.
+    **P1.4-minimal registered sources** (pure C2 enumeration):
+
+    - :class:`OllamaModelsSource` — ``ollama list`` text-row parse
+    - :class:`AIToolVersionsSource` — CLI ``--version`` probes for known
+      AI tools (Info.plist and npm package.json strategies deferred to
+      the later C3 batch)
+
+    C3 sources (MCP servers, Claude Code skills, OpenClaw skills, AI
+    apps Info.plist) will be added in a later batch.
     """
-    return []
+    from claude_monitoring.attack_surface.discovery.sources.ai_tool_versions import (
+        AIToolVersionsSource,
+    )
+    from claude_monitoring.attack_surface.discovery.sources.ollama_models import (
+        OllamaModelsSource,
+    )
+
+    return [OllamaModelsSource(), AIToolVersionsSource()]
 
 
 __all__ = [
