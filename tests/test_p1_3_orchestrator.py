@@ -495,62 +495,64 @@ class TestPersistenceUpsert:
 # ---------------------------------------------------------------------------
 
 
-class TestAuditStubObservability:
-    """Observable stubs MUST emit a DEBUG log with the literal phrase
-    `"P1.5 stub — no DB write yet"` so a forgotten P1.5 cannot leave
-    audit silently dead. Substring match (per Rajan's ratification
-    on the P1.5 test list)."""
+class TestAuditIntegration:
+    """Post-P1.5 integration — the orchestrator's audit calls now write
+    real `discovery_runs` rows (Option β stubs filled in P1.5).
 
-    def test_record_run_started_stub_emits_debug_line(self, tmp_path: Path, caplog) -> None:
+    The transitional "stub DEBUG phrase emitted" tests were retired
+    when P1.5 landed; `tests/test_p1_5_discovery_runs_audit.py` now
+    pins the write path directly + the `TestStubPhraseAbsent` group
+    pins that the stub phrase is GONE from production code paths."""
+
+    def test_orchestrator_scan_writes_discovery_runs_row(self, tmp_path: Path) -> None:
+        """Happy-path scan with a real connection writes one row with
+        completed_at populated."""
         conn = _setup_assets_db(tmp_path)
-        with caplog.at_level("DEBUG", logger="ai-runtime-monitor.attack_surface.orchestrator.audit"):
-            o = DiscoveryOrchestrator(
-                sources=[_HappySource()],
-                lock=ScanLock(lock_path=tmp_path / ".lock"),
-                persistence_connection=conn,
-            )
-            o.scan(trigger="on_demand")
-        assert any("record_run_started" in r.message and "P1.5 stub" in r.message for r in caplog.records)
+        o = DiscoveryOrchestrator(
+            sources=[_HappySource()],
+            lock=ScanLock(lock_path=tmp_path / ".lock"),
+            persistence_connection=conn,
+        )
+        o.scan(trigger="on_demand")
+        rows = list(conn.execute("SELECT trigger, completed_at, assets_discovered FROM discovery_runs"))
+        assert len(rows) == 1
+        assert rows[0][0] == "on_demand"
+        assert rows[0][1] is not None
+        assert rows[0][2] == 2  # _HappySource emits 2 assets
 
-    def test_record_run_finished_stub_emits_debug_line(self, tmp_path: Path, caplog) -> None:
+    def test_orchestrator_scan_on_failure_marks_run_crashed(self, tmp_path: Path) -> None:
+        """Orchestrator-internal failure → row updated with crashed status."""
         conn = _setup_assets_db(tmp_path)
-        with caplog.at_level("DEBUG", logger="ai-runtime-monitor.attack_surface.orchestrator.audit"):
-            o = DiscoveryOrchestrator(
-                sources=[_HappySource()],
-                lock=ScanLock(lock_path=tmp_path / ".lock"),
-                persistence_connection=conn,
-            )
-            o.scan(trigger="on_demand")
-        assert any("record_run_finished" in r.message and "P1.5 stub" in r.message for r in caplog.records)
 
-    def test_record_run_crashed_stub_emits_debug_line_on_failure(self, tmp_path: Path, caplog) -> None:
-        class _BadConn:
-            def execute(self, *args, **kw):
-                raise sqlite3.DatabaseError("bad")
+        # Inject a persistence-time failure by passing a wrapper that blows up
+        class _BadOnUpsert:
+            def __init__(self, real):
+                self.real = real
+                self.upsert_count = 0
+
+            def execute(self, *args, **kwargs):
+                # Allow audit INSERTs but fail on the assets UPSERT
+                if args and "INSERT INTO assets" in args[0]:
+                    raise sqlite3.DatabaseError("upsert failure")
+                return self.real.execute(*args, **kwargs)
 
             def commit(self):
-                pass
+                return self.real.commit()
 
-        with caplog.at_level("DEBUG", logger="ai-runtime-monitor.attack_surface.orchestrator.audit"):
-            o = DiscoveryOrchestrator(
-                sources=[_HappySource()],
-                lock=ScanLock(lock_path=tmp_path / ".lock"),
-                persistence_connection=_BadConn(),  # type: ignore[arg-type]
-            )
-            with pytest.raises(sqlite3.DatabaseError):
-                o.scan(trigger="on_demand")
-        assert any("record_run_crashed" in r.message and "P1.5 stub" in r.message for r in caplog.records)
+        bad_conn = _BadOnUpsert(conn)  # type: ignore[arg-type]
+        o = DiscoveryOrchestrator(
+            sources=[_HappySource()],
+            lock=ScanLock(lock_path=tmp_path / ".lock"),
+            persistence_connection=bad_conn,  # type: ignore[arg-type]
+        )
+        with pytest.raises(sqlite3.DatabaseError):
+            o.scan(trigger="on_demand")
+        # discovery_runs row has status=crashed in the errors JSON
+        import json as _json
 
-    def test_finalize_crashed_runs_stub_returns_zero_emits_debug_line(self, tmp_path: Path, caplog) -> None:
-        """`audit.finalize_crashed_runs` directly — the daemon-startup hook
-        that P1.5 fills. Currently a no-op."""
-        from claude_monitoring.attack_surface.orchestrator import audit
-
-        conn = _setup_assets_db(tmp_path)
-        with caplog.at_level("DEBUG", logger="ai-runtime-monitor.attack_surface.orchestrator.audit"):
-            n = audit.finalize_crashed_runs(conn)
-        assert n == 0
-        assert any("finalize_crashed_runs" in r.message and "P1.5 stub" in r.message for r in caplog.records)
+        rows = list(conn.execute("SELECT errors FROM discovery_runs"))
+        assert len(rows) == 1
+        assert _json.loads(rows[0][0])["status"] == "crashed"
 
 
 # ---------------------------------------------------------------------------
