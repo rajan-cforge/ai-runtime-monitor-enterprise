@@ -203,6 +203,14 @@ class DiscoveryOrchestrator:
         raises ``TimeoutError`` and we stop waiting; in-flight worker
         threads keep running until their ``discover()`` returns. Their
         telemetry is marked ``LastRunOutcome.TIMEOUT``.
+
+        **Seed telemetry up front** (follow-up #155 per Rajan 2026-06-05):
+        every registered source is seeded with ``LastRunOutcome.UNCALLED``
+        BEFORE submitting to the pool. As sources resolve, entries are
+        updated in place. A source whose future is cancelled (wall-clock
+        budget fires before it runs) or whose telemetry write is otherwise
+        skipped STILL appears in the result as UNCALLED — the audit can
+        never silently lose a source.
         """
         if not self.sources:
             return [], ()
@@ -210,7 +218,18 @@ class DiscoveryOrchestrator:
         worker_count = min(self.MAX_WORKER_CAP, len(self.sources))
         deadline = time.time() + self.MAX_TOTAL_SCAN_SEC
         assets: list[Asset] = []
-        telemetry: list[PerSourceTelemetry] = []
+
+        # Seed telemetry by source name with UNCALLED up front (#155 fix).
+        # Sources are then UPDATED in place by their resolved outcome.
+        telemetry_by_name: dict[str, PerSourceTelemetry] = {
+            src.name(): PerSourceTelemetry(
+                name=src.name(),
+                asset_count=0,
+                elapsed_sec=0.0,
+                last_run_outcome=LastRunOutcome.UNCALLED,
+            )
+            for src in self.sources
+        }
 
         # Manual lifecycle (NOT the context-manager form) — the
         # context-manager's __exit__ calls shutdown(wait=True), which
@@ -234,62 +253,59 @@ class DiscoveryOrchestrator:
                         self._log_source_result(src, outcome, len(src_assets))
                     else:
                         self._log_source_result(src, outcome, 0)
-                    telemetry.append(
-                        PerSourceTelemetry(
-                            name=src.name(),
-                            asset_count=len(src_assets),
-                            elapsed_sec=elapsed,
-                            last_run_outcome=outcome,
-                        )
+                    telemetry_by_name[src.name()] = PerSourceTelemetry(
+                        name=src.name(),
+                        asset_count=len(src_assets),
+                        elapsed_sec=elapsed,
+                        last_run_outcome=outcome,
                     )
             except concurrent.futures.TimeoutError:
                 # Wall-clock budget exceeded. Mark every unfinished
                 # source TIMEOUT; abandon their futures (mark-not-cancel).
-                self._collect_stragglers(future_to_source, telemetry)
+                self._collect_stragglers(future_to_source, telemetry_by_name)
         finally:
             # Don't wait — leaked workers run to completion on their own;
             # the orchestrator returns control to the caller now.
             pool.shutdown(wait=False, cancel_futures=True)
 
-        return assets, tuple(telemetry)
+        # Preserve source-registration order in the returned tuple.
+        ordered = tuple(telemetry_by_name[src.name()] for src in self.sources)
+        return assets, ordered
 
     def _collect_stragglers(
         self,
         future_to_source: dict[concurrent.futures.Future, tuple[DiscoverySource, float]],
-        telemetry: list[PerSourceTelemetry],
+        telemetry_by_name: dict[str, PerSourceTelemetry],
         skip_future: concurrent.futures.Future | None = None,
     ) -> None:
         """Mark unfinished sources TIMEOUT when the orchestrator wall-clock
         ceiling fires. **Mark-not-cancel:** the in-flight thread keeps
-        running; the orchestrator simply stops waiting."""
-        recorded_names = {t.name for t in telemetry}
+        running; the orchestrator simply stops waiting.
+
+        Updates ``telemetry_by_name`` in place (per #155 seeded-up-front
+        pattern) so the source still appears in the result even though
+        its worker never reported back.
+        """
         for future, (src, started) in future_to_source.items():
             if future is skip_future:
                 continue
             if future.done():
                 continue
-            if src.name() in recorded_names:
+            # Only override UNCALLED — if the entry was already populated
+            # by a resolved future, leave it alone.
+            existing = telemetry_by_name.get(src.name())
+            if existing is not None and existing.last_run_outcome != LastRunOutcome.UNCALLED:
                 continue
-            telemetry.append(self._telemetry_for(src, started, asset_count=0, force_outcome=LastRunOutcome.TIMEOUT))
+            telemetry_by_name[src.name()] = PerSourceTelemetry(
+                name=src.name(),
+                asset_count=0,
+                elapsed_sec=time.time() - started,
+                last_run_outcome=LastRunOutcome.TIMEOUT,
+            )
             logger.warning(
                 "orchestrator wall-clock ceiling exceeded; source %s marked TIMEOUT (worker thread leaked, will run to completion)",
                 src.name(),
             )
-
-    def _telemetry_for(
-        self,
-        src: DiscoverySource,
-        started: float,
-        *,
-        asset_count: int,
-        force_outcome: LastRunOutcome,
-    ) -> PerSourceTelemetry:
-        return PerSourceTelemetry(
-            name=src.name(),
-            asset_count=asset_count,
-            elapsed_sec=time.time() - started,
-            last_run_outcome=force_outcome,
-        )
 
     def _log_source_result(self, src: DiscoverySource, outcome: LastRunOutcome, count: int) -> None:
         if outcome == LastRunOutcome.SUCCESS and count == 0:
@@ -351,28 +367,34 @@ ON CONFLICT(id) DO UPDATE SET
         if self.conn is None:
             return
 
-        for asset in assets:
-            if not asset.source or not asset.source.strip():
-                raise ValueError(f"asset {asset.id!r}: source must be non-empty for persistence (drift 1)")
-            current_state_json = _json.dumps(asset.current_state)
-            self.conn.execute(
-                self._UPSERT_SQL,
-                (
-                    asset.id,
-                    asset.type,
-                    asset.parent_asset_id,
-                    asset.name,
-                    asset.version,
-                    asset.install_path,
-                    asset.source,
-                    scan_time,
-                    scan_time,
-                    scan_time,
-                    current_state_json,
-                    int(asset.is_vigil_component),
-                ),
-            )
-        self.conn.commit()
+        # Atomic commit/rollback per #156 (Rajan 2026-06-05): wrap the
+        # UPSERT loop in `with self.conn:` so a mid-loop failure rolls
+        # back the in-flight transaction rather than leaving the
+        # connection in a mid-transaction state for the caller to clean
+        # up. sqlite3.Connection as a context manager commits on
+        # __exit__ on success, rolls back on exception.
+        with self.conn:
+            for asset in assets:
+                if not asset.source or not asset.source.strip():
+                    raise ValueError(f"asset {asset.id!r}: source must be non-empty for persistence (drift 1)")
+                current_state_json = _json.dumps(asset.current_state)
+                self.conn.execute(
+                    self._UPSERT_SQL,
+                    (
+                        asset.id,
+                        asset.type,
+                        asset.parent_asset_id,
+                        asset.name,
+                        asset.version,
+                        asset.install_path,
+                        asset.source,
+                        scan_time,
+                        scan_time,
+                        scan_time,
+                        current_state_json,
+                        int(asset.is_vigil_component),
+                    ),
+                )
 
 
 # ---------------------------------------------------------------------------

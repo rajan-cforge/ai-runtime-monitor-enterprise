@@ -116,7 +116,7 @@ Added 2026-06-05 with the v0.2.2 P1.2 PR. The discovery feature
 | Raw config bytes read off disk (pre-redaction window) | **Critical** | May contain API tokens, OAuth secrets, env vars with passwords. Held in memory only during parse + redact; downclassifies after `redact_secrets_in_env` completes. |
 | Parsed `Asset.current_state` payload (post-redaction) | **Internal** | Process names, file paths, version numbers, redacted env-var maps. Token-shaped values replaced with `[REDACTED — token-shaped variable name]` / `[REDACTED — token-shaped value]` sentinels. **Relies on DB chmod-600 as the backstop for redaction residuals, NOT on redaction being exhaustive** (heuristic 8 value patterns + 5 name suffixes; novel token shapes may escape). |
 | `assets` table rows | **Internal** | `current_state` is JSON-serialized via `json.dumps` into the `current_state` TEXT column. Same Internal tier; chmod-600 inherited from `monitor.db`. |
-| `discovery_runs` table rows | **Internal** | One row per scan invocation. Records trigger, sources, asset counts, per-source failure_kind via JSON. No raw config bytes; no token values. |
+| `discovery_runs` table rows | **Internal** | One row per scan invocation. Records trigger, sources, asset counts, per-source `outcome` (LastRunOutcome.value: `success` / `timeout` / `error` / `capped` / `uncalled`) via the `errors` JSON column. No raw config bytes; no token values. |
 
 The redaction layer is heuristic, env-scoped, source-invoked; residuals
 are possible. The chmod-600 DB is the at-rest backstop, not redaction
