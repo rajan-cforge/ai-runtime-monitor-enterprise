@@ -90,6 +90,14 @@ class RiskScoreResult:
       compute time (Q3). NOT the live module constant — an independent
       copy so mutating the result does not affect future scoring or
       persisted historical results.
+    - ``applied_rules``: additive contract extension landed in P2.4
+      (precedent: P1.5 ``last_run_outcome``). Empty when no rules
+      pipeline ran. When the rules engine runs, each entry is
+      ``{id, modifier_applied, explanation, framework_ref}`` — what
+      P7.9's breakdown popover renders under "Applied rules:" per
+      spec §6.4. Both matched and suppressed-by-max-wins rules
+      appear here; ``final_score`` reflects only the winning
+      modifier.
     """
 
     final_score: int
@@ -97,6 +105,7 @@ class RiskScoreResult:
     factors: RiskFactors
     contributions: dict[str, float] = field(default_factory=dict)
     weights: dict[str, float] = field(default_factory=dict)
+    applied_rules: list[dict] = field(default_factory=list)
 
 
 def _compute_permission_breadth(ontology_tags: frozenset[OntologyCategory]) -> float:
