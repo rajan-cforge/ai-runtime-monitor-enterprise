@@ -1,0 +1,9 @@
+# config/risk-rules.yaml — curated risk rules for Vigil v0.2.2.
+#
+# Spec §6.2 schema. P2.4 ships an empty rule set; P2.5 ships the curated
+# ≥ 8 rules with NIST CSF + MITRE ATT&CK citations.
+#
+# The exfil-capable rule (unknown_capability + secrets_access) is
+# NEEDS-RAJAN per CONTRACT §7 and lands in P2.5 only after Rajan
+# rules on weighting (Phase A §7).
+[]
