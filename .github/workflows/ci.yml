@@ -60,6 +60,18 @@ jobs:
       # codebase has its own outbound-HTTP audit history.
       - name: Privacy gate — no telemetry in attack-surface code
         run: python scripts/check_privacy_no_telemetry.py
+      # v0.2.2 directive §11.2 gate #5 — ontology-mapping-completeness.
+      # Structural Q5 ratification (2026-06-06): every registered
+      # DiscoverySource has a corresponding entry in
+      # ontology.mapping._REGISTRY. An empty-result mapper is allowed
+      # (Q1: zero-tag asset → INFO band is valid); the gate enforces
+      # existence, not functional output. Drift is already caught via
+      # tests/test_p2_0_completeness_gate.py invoking _gate.main()
+      # inside pytest, but a dedicated workflow step surfaces the
+      # failure as "ontology-mapping-completeness FAILED" rather
+      # than "test failed" — clean attribution for the next reader.
+      - name: Ontology mapping completeness
+        run: python scripts/check_ontology_mapping_completeness.py
 
   test:
     runs-on: ${{ matrix.os }}
