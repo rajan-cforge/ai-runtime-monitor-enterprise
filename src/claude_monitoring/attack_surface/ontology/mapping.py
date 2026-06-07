@@ -92,8 +92,23 @@ def map_openclaw_skill(asset: Asset) -> frozenset[OntologyCategory]:
 
 
 # ---------------------------------------------------------------------------
-# MCP simple keyword map (P2.1 layers the scored multi-signal version)
+# MCP — simple keyword map + P2.1 scored config-only multi-signal layer
 # ---------------------------------------------------------------------------
+#
+# Ratification trail (Rajan 2026-06-07): P2.1 implements the directive
+# §7.3.2 algorithm SHAPE — weighted signals + cumulative threshold — over
+# the LOCAL CONFIG fields the P1.4 source captured (command, args, env),
+# NOT the wire-published `tools[]` array the directive's original example
+# consumed. The fragility §7.3.2 was meant to solve (naming-convention
+# drift across MCP server packages) is only fully solved when wire
+# introspection lands. That work is deferred to v0.3 issue #89, which
+# carries the egress-and-execution design decision (spawning discovered
+# possibly-hostile servers as subprocesses) on its own.
+#
+# Honest framing: this is a marginal upgrade over the simple map. The
+# accumulator + threshold scaffold pays off downstream — P2.3's risk
+# scoring + P2.4's rules engine compose over scored tags. The actual
+# robustness §7.3.2 promised arrives with introspection in v0.3.
 
 
 _SECRETS_KEY_SUFFIXES: tuple[str, ...] = ("_TOKEN", "_KEY", "_SECRET", "_PASSWORD")
@@ -176,6 +191,178 @@ def map_mcp_server_simple(asset: Asset) -> frozenset[OntologyCategory]:
 
 
 # ---------------------------------------------------------------------------
+# P2.1 scored config-only multi-signal map
+# ---------------------------------------------------------------------------
+
+
+MCP_SCORED_THRESHOLD: float = 0.5
+"""Inclusion threshold for the scored map (directive §7.3.2 magic number).
+
+Surfaced as a module constant for two reasons:
+
+1. Tunable in one place if empirical data later justifies adjustment.
+2. Visible to operators reading the score breakdown — the threshold
+   is part of the contract, not buried in a function literal.
+"""
+
+
+_HIGH_CONFIDENCE_WEIGHT: float = 0.7
+"""Score contributed by an exact official-package keyword match. Matches
+the directive §7.3.2 `name` signal weight — the strongest signal in the
+original wire-input formulation."""
+
+
+_LOW_CONFIDENCE_WEIGHT: float = 0.4
+"""Score contributed by a loose substring keyword (vendor fork, internal
+naming variant). Two loose hits in the same category accumulate to 0.8
+> :data:`MCP_SCORED_THRESHOLD`, the property that distinguishes the
+scored map from the binary simple map."""
+
+
+_NAME_CHARS: frozenset[str] = frozenset("abcdefghijklmnopqrstuvwxyz0123456789_-")
+"""Characters that constitute a package-name token. A keyword match is
+only counted when both sides of the match are NOT in this set (i.e., the
+match sits at a word boundary). Prevents substring-anywhere traps like
+``server-shell-utilities`` falsely matching the ``server-shell`` keyword
+(architect-pass H2, 2026-06-07)."""
+
+
+def _keyword_at_boundary(blob: str, keyword: str) -> bool:
+    """True iff ``keyword`` appears in ``blob`` at a word boundary on both
+    sides (preceded and followed by either string-start/end OR a character
+    outside :data:`_NAME_CHARS`).
+
+    Real false-positive cases this catches (from architect-pass empirical
+    probes):
+
+    - ``server-shell-utilities`` — ``server-shell`` keyword would not match
+      because the trailing ``-`` is a name char.
+    - ``proxy-server-fetch-tests`` — ``server-fetch`` keyword would not
+      match because the preceding ``-`` is a name char.
+    - ``server-github-clone-mirror`` — same shape.
+
+    True-positive cases still match:
+
+    - ``/usr/local/bin/server-filesystem`` (preceded by ``/``, trailed by
+      string-end).
+    - ``npx @modelcontextprotocol/server-filesystem /tmp`` (preceded by
+      ``/``, trailed by `` ``).
+    """
+    idx = 0
+    klen = len(keyword)
+    while True:
+        pos = blob.find(keyword, idx)
+        if pos == -1:
+            return False
+        left_ok = pos == 0 or blob[pos - 1] not in _NAME_CHARS
+        end_pos = pos + klen
+        right_ok = end_pos == len(blob) or blob[end_pos] not in _NAME_CHARS
+        if left_ok and right_ok:
+            return True
+        idx = pos + 1
+
+
+_MCP_SCORED_KEYWORDS: dict[OntologyCategory, dict[str, float]] = {
+    OntologyCategory.FILE_SYSTEM_READ: {
+        # High confidence — exact official package names
+        "@modelcontextprotocol/server-filesystem": _HIGH_CONFIDENCE_WEIGHT,
+        "server-filesystem": _HIGH_CONFIDENCE_WEIGHT,
+        # Low confidence — loose substring patterns
+        "mcp-fs": _LOW_CONFIDENCE_WEIGHT,
+        "filesystem": _LOW_CONFIDENCE_WEIGHT,
+    },
+    OntologyCategory.FILE_SYSTEM_WRITE: {
+        "@modelcontextprotocol/server-filesystem": _HIGH_CONFIDENCE_WEIGHT,
+        "server-filesystem": _HIGH_CONFIDENCE_WEIGHT,
+        "mcp-fs": _LOW_CONFIDENCE_WEIGHT,
+        "filesystem": _LOW_CONFIDENCE_WEIGHT,
+    },
+    OntologyCategory.SHELL_EXECUTE: {
+        "server-shell": _HIGH_CONFIDENCE_WEIGHT,
+        "server-bash": _HIGH_CONFIDENCE_WEIGHT,
+        "shell-mcp": _LOW_CONFIDENCE_WEIGHT,
+        "bash-mcp": _LOW_CONFIDENCE_WEIGHT,
+    },
+    OntologyCategory.NETWORK_UNRESTRICTED: {
+        "@modelcontextprotocol/server-fetch": _HIGH_CONFIDENCE_WEIGHT,
+        "@modelcontextprotocol/server-github": _HIGH_CONFIDENCE_WEIGHT,
+        "@modelcontextprotocol/server-puppeteer": _HIGH_CONFIDENCE_WEIGHT,
+        "@modelcontextprotocol/server-brave-search": _HIGH_CONFIDENCE_WEIGHT,
+        "server-fetch": _HIGH_CONFIDENCE_WEIGHT,
+        "server-github": _HIGH_CONFIDENCE_WEIGHT,
+        "server-puppeteer": _HIGH_CONFIDENCE_WEIGHT,
+        "server-brave-search": _HIGH_CONFIDENCE_WEIGHT,
+        "http-mcp": _LOW_CONFIDENCE_WEIGHT,
+    },
+}
+"""Weighted keyword map. Each (category, keyword) pair contributes its
+weight to the category's score when the keyword appears in lowercased
+``command + args``. Per-category scores accumulate; tags clearing
+:data:`MCP_SCORED_THRESHOLD` are emitted.
+
+Mis-tuning here under-tags assets (silently lower risk score), so the
+keyword list stays conservative — false negatives are preferable to
+false positives that erode operator trust in the score. The high
+weight (0.7) is reserved for exact official Anthropic catalog package
+names; the low weight (0.4) for community fork patterns.
+"""
+
+
+def map_mcp_server_scored(asset: Asset) -> frozenset[OntologyCategory]:
+    """Scored multi-signal MCP map — config-only (P2.1, Rajan 2026-06-07).
+
+    Implements the directive §7.3.2 algorithm SHAPE (weighted signals,
+    cumulative threshold) over the local config fields the P1.4 source
+    captured (command, args, env). Does NOT read wire-published
+    ``tools[]`` definitions — that requires spawning discovered servers
+    as subprocesses, an egress-and-execution decision deferred to v0.3
+    issue #89.
+
+    Signal sources (config-only adaptation):
+
+    1. **Baseline** (universal): every MCP server gets
+       ``inter_tool_communication``. Identical to :func:`map_mcp_server_simple`.
+    2. **Secrets**: env key matching the token-suffix vocabulary or
+       containing ``AUTH_`` → ``secrets_access``. Identical to simple.
+    3. **Scored command/args**: keywords accumulate weighted scores per
+       category; categories clearing :data:`MCP_SCORED_THRESHOLD` are
+       emitted. Strict upgrade over the simple binary substring path —
+       a server with multiple loose indicators correctly clears the
+       bar; a single weak signal correctly does not.
+
+    Returns the union of all triggered tags.
+    """
+    tags: set[OntologyCategory] = {OntologyCategory.INTER_TOOL_COMMUNICATION}
+
+    # env → secrets_access (identical to simple map; same vocabulary)
+    env = asset.current_state.get("env") or {}
+    if isinstance(env, dict):
+        for key in env:
+            upper_key = str(key).upper()
+            if _AUTH_SUBSTRING in upper_key or any(upper_key.endswith(s) for s in _SECRETS_KEY_SUFFIXES):
+                tags.add(OntologyCategory.SECRETS_ACCESS)
+                break
+
+    # Build the searchable blob
+    command = asset.current_state.get("command") or ""
+    args = asset.current_state.get("args") or []
+    args_str = " ".join(str(a) for a in args) if isinstance(args, list) else ""
+    cmd_blob = f"{command} {args_str}".lower()
+
+    # Accumulate weighted scores per category. Keyword matches use a
+    # word-boundary check (`_keyword_at_boundary`) to prevent substring
+    # traps like `server-shell-utilities` matching `server-shell`.
+    for category, weighted in _MCP_SCORED_KEYWORDS.items():
+        score = sum(weight for kw, weight in weighted.items() if _keyword_at_boundary(cmd_blob, kw))
+        # Strict greater per directive §7.3.2 "only include tags with
+        # cumulative score >0.5". Exactly 0.5 does NOT emit.
+        if score > MCP_SCORED_THRESHOLD:
+            tags.add(category)
+
+    return frozenset(tags)
+
+
+# ---------------------------------------------------------------------------
 # Registry + dispatcher
 # ---------------------------------------------------------------------------
 
@@ -186,10 +373,15 @@ _REGISTRY: dict[str, Callable[[Asset], frozenset[OntologyCategory]]] = {
     "ai-apps-info-plist": map_ai_app_info_plist,
     "claude-code-skills": map_claude_code_skill,
     "openclaw-skills": map_openclaw_skill,
-    "mcp-servers": map_mcp_server_simple,
+    "mcp-servers": map_mcp_server_scored,
 }
 """Per-source mapping registry. Adding a new source REQUIRES adding
-an entry here — the structural completeness CI gate enforces this."""
+an entry here — the structural completeness CI gate enforces this.
+
+The ``mcp-servers`` entry routes to the P2.1 scored mapper. The simple
+keyword map (:func:`map_mcp_server_simple`) is retained as the floor
+the scored layer composes over and is still publicly exported for
+direct callers + tests; the dispatcher uses the scored version."""
 
 
 REGISTERED_SOURCES: frozenset[str] = frozenset(_REGISTRY)
@@ -215,12 +407,14 @@ def map_asset(asset: Asset) -> frozenset[OntologyCategory]:
 
 
 __all__ = [
+    "MCP_SCORED_THRESHOLD",
     "REGISTERED_SOURCES",
     "get_mapper",
     "map_ai_app_info_plist",
     "map_ai_tool_version",
     "map_asset",
     "map_claude_code_skill",
+    "map_mcp_server_scored",
     "map_mcp_server_simple",
     "map_ollama_model",
     "map_openclaw_skill",
