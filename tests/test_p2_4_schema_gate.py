@@ -8,7 +8,10 @@ Validates:
 5. `modifier` is an int in [-10, +30].
 6. `pattern` has ≥1 predicate.
 7. `framework_ref` has ≥1 known framework entry.
-8. Unknown predicate keys WARN (forward-compat) but do not fail.
+8. **Q-A (Rajan 2026-06-07):** every predicate in `pattern` must be in
+   `LIVE_PREDICATES`. Forward-compat predicates (cve_severity,
+   integration_sensitivity, package_in_malicious_list) FAIL the gate
+   with a message naming the wiring PR. Unknown predicates also FAIL.
 """
 
 from __future__ import annotations
@@ -188,27 +191,106 @@ class TestSchemaGatePatternStructure:
         assert _run_gate(path).returncode == 1
 
 
-class TestSchemaGateForwardCompat:
-    def test_unknown_predicate_warns_but_passes(self, tmp_path: Path) -> None:
-        """Forward-compat: P2.5 / Phase-3 may add predicates the v0.2.2
-        runtime doesn't know yet. Don't reject the YAML; runtime no-ops."""
+class TestSchemaGatePredicateGating:
+    """**Rajan ratification 2026-06-07 Q-A.** The schema gate FAILS
+    (blocking) on any rule using a predicate not in ``LIVE_PREDICATES``.
+    Forward-compat predicates produce a precise error naming the wiring
+    PR. Unknown predicates also fail. The prior "WARN + runtime no-op"
+    path is gone — it let known-malicious-package rules ship inert."""
+
+    def test_truly_unknown_predicate_fails(self, tmp_path: Path) -> None:
         path = tmp_path / "rules.yaml"
         path.write_text("""\
 - id: r
   pattern:
     has_tags: [x]
-    some_future_predicate: 42
+    a_predicate_we_never_heard_of: 42
   modifier: 10
   explanation: x
   framework_ref:
     nist_csf: X
 """)
         result = _run_gate(path)
-        assert result.returncode == 0
-        # The unknown predicate must surface as a warning in output
-        assert "warn" in (result.stdout + result.stderr).lower() or "some_future_predicate" in (
-            result.stdout + result.stderr
-        )
+        assert result.returncode == 1
+        assert "a_predicate_we_never_heard_of" in (result.stdout + result.stderr)
+
+    def test_cve_severity_forward_compat_predicate_fails_naming_p4_1(self, tmp_path: Path) -> None:
+        """The §6.2 example using `cve_severity` cannot ship until P4.1
+        wires the input. Q-A: error must name the wiring PR."""
+        path = tmp_path / "rules.yaml"
+        path.write_text("""\
+- id: r
+  pattern:
+    has_tags: [x]
+    cve_severity: ">= 7"
+  modifier: 10
+  explanation: x
+  framework_ref:
+    nist_csf: X
+""")
+        result = _run_gate(path)
+        assert result.returncode == 1
+        out = result.stdout + result.stderr
+        assert "cve_severity" in out
+        assert "P4.1" in out
+
+    def test_integration_sensitivity_forward_compat_predicate_fails_naming_p3_7(self, tmp_path: Path) -> None:
+        """Spec §6.2's own example rule uses `integration_sensitivity`. Per
+        Q-A it cannot ship until P3.7 wires the input. Gate names the PR."""
+        path = tmp_path / "rules.yaml"
+        path.write_text("""\
+- id: r
+  pattern:
+    has_tags: [x]
+    integration_sensitivity: ">= 70"
+  modifier: 25
+  explanation: x
+  framework_ref:
+    nist_csf: PR.AC-4
+""")
+        result = _run_gate(path)
+        assert result.returncode == 1
+        out = result.stdout + result.stderr
+        assert "integration_sensitivity" in out
+        assert "P3.7" in out
+
+    def test_package_in_malicious_list_forward_compat_fails_naming_phase_3(self, tmp_path: Path) -> None:
+        """The catastrophic case Rajan named (known-malicious-package
+        scoring clean because the predicate no-ops). Gate MUST reject."""
+        path = tmp_path / "rules.yaml"
+        path.write_text("""\
+- id: r
+  pattern:
+    package_in_malicious_list: true
+  modifier: 30
+  explanation: Remove immediately.
+  framework_ref:
+    mitre_attack: T1195
+""")
+        result = _run_gate(path)
+        assert result.returncode == 1
+        out = result.stdout + result.stderr
+        assert "package_in_malicious_list" in out
+        assert "Phase 3" in out
+
+    def test_live_only_predicate_combination_passes(self, tmp_path: Path) -> None:
+        """A rule using only LIVE_PREDICATES (here: has_tags +
+        unknown_capability) passes the gate cleanly. This is the exfil
+        shape — the rule itself is NEEDS-RAJAN for P2.5."""
+        path = tmp_path / "rules.yaml"
+        path.write_text("""\
+- id: rule_exfil_shape
+  pattern:
+    unknown_capability: true
+    has_tags: [secrets_access]
+  modifier: 20
+  explanation: |
+    Exfil shape — unrecognized MCP with credentials.
+  framework_ref:
+    nist_csf: ID.RA-3
+    mitre_attack: T1041
+""")
+        assert _run_gate(path).returncode == 0
 
 
 class TestSchemaGateBombRejection:

@@ -36,7 +36,8 @@ sys.path.insert(0, str(_REPO_ROOT / "src"))
 
 from claude_monitoring.attack_surface.discovery.helpers import safe_yaml_load  # noqa: E402
 from claude_monitoring.attack_surface.risk.rules import (  # noqa: E402
-    _KNOWN_PREDICATES,
+    FORWARD_COMPAT_PREDICATES,
+    LIVE_PREDICATES,
     MODIFIER_MAX,
     MODIFIER_MIN,
 )
@@ -103,11 +104,27 @@ def main(argv: list[str]) -> int:
         if not isinstance(pattern, dict) or not pattern:
             failures.append(f"rule {rid!r}: pattern must be a non-empty dict")
         else:
+            # Per Rajan ratification 2026-06-07 Q-A (work-log/2026-06-07-P2.4-ratification.md):
+            # the gate FAILS (blocking) on any rule using a predicate not in the live
+            # Phase-2 dispatch. Forward-compat predicates are documented so the error
+            # message can name the wiring PR — but a rule using one is NOT shippable.
+            # Replaces the prior "WARN + runtime no-op" path which let known-malicious-
+            # package rules ship inert (silent misfire, the §4.4 inversion).
             for predicate_key in pattern:
-                if predicate_key not in _KNOWN_PREDICATES:
-                    warnings.append(
+                if predicate_key in LIVE_PREDICATES:
+                    continue
+                if predicate_key in FORWARD_COMPAT_PREDICATES:
+                    wiring_pr = FORWARD_COMPAT_PREDICATES[predicate_key]
+                    failures.append(
+                        f"rule {rid!r}: predicate {predicate_key!r} is wired by "
+                        f"{wiring_pr}; cannot ship a rule using it yet "
+                        f"(per Rajan ratification 2026-06-07 Q-A — see "
+                        f"work-log/2026-06-07-P2.4-ratification.md)"
+                    )
+                else:
+                    failures.append(
                         f"rule {rid!r}: unknown predicate {predicate_key!r} "
-                        f"(forward-compat warn; runtime will no-op until predicate is implemented)"
+                        f"(not in LIVE_PREDICATES or FORWARD_COMPAT_PREDICATES)"
                     )
 
         modifier = entry["modifier"]

@@ -10,15 +10,19 @@ an asset + ontology tags, applies a max-wins modifier per spec §6.2:
 directive §3 P2.4, §7.4 (modifier cap), §11.2 (schema gate), §16.5
 (config file location).
 
-**Ratifications (Phase A 2026-06-07):**
+**Ratifications (Phase A 2026-06-07 + Rajan ratification 2026-06-07
+work-log/2026-06-07-P2.4-ratification.md):**
 
 - **Composition (Phase A §2):** ship :func:`apply_curated_rules` as a
   downstream function (separate from :func:`compute_risk_score`).
   Keeps P2.3's contract pure.
-- **Predicates live in Phase 2 (Phase A §3):** ``has_tags`` (ALL-OF
-  semantics), ``source_in``, ``unknown_capability``. Schema-accepted
-  no-op predicates for forward compat: ``integration_sensitivity``,
-  ``cve_severity``, ``package_in_malicious_list``.
+- **Predicates live in Phase 2 (Q-A ratified):** :data:`LIVE_PREDICATES`
+  = ``{has_tags, source_in, unknown_capability}``. Forward-compat
+  predicates (``cve_severity``, ``integration_sensitivity``,
+  ``package_in_malicious_list``) are documented in
+  :data:`FORWARD_COMPAT_PREDICATES` with their wiring PR — but a
+  rule using one is **gate-rejected, not shippable**. The prior
+  silent ``_predicate_noop → False`` path was removed.
 - **Whole-file fail-closed (Phase A §4):** unparseable file → empty
   rule list, base scorer stands, log CRITICAL.
 - **Per-rule isolation (Phase A §5):** one bad rule does not zero
@@ -28,6 +32,13 @@ directive §3 P2.4, §7.4 (modifier cap), §11.2 (schema gate), §16.5
   suppressed rules surface in ``applied_rules`` for the popover.
 - **Modifier range (spec §6.2 + directive §7.4):** ``[-10, +30]``.
   Out-of-range at load time → skip the rule + WARN.
+- **Q-B floor re-assertion (spec §6.9):** in
+  :func:`score_asset_with_rules`, ``final = min(100, max(0, base +
+  max_modifier))``; then for unknown-capability MCPs,
+  ``final = max(UNKNOWN_CAPABILITY_FLOOR, final)``. A negative
+  modifier can never lower a score below an applicable floor. The
+  ``max(0, …)`` crash-guard prevents low-base + negative-modifier
+  from tripping the ``score_to_band`` ``[0, 100]`` invariant.
 
 **Out of scope (deferred):**
 
@@ -56,7 +67,10 @@ from claude_monitoring.attack_surface.risk.scoring import (
     RiskScoreResult,
     compute_risk_score,
 )
-from claude_monitoring.attack_surface.risk.unknown import is_unknown_capability_mcp
+from claude_monitoring.attack_surface.risk.unknown import (
+    UNKNOWN_CAPABILITY_FLOOR,
+    is_unknown_capability_mcp,
+)
 
 logger = logging.getLogger("ai-runtime-monitor.attack_surface.risk.rules")
 
@@ -75,18 +89,28 @@ CONTRACT §1."""
 
 
 _REQUIRED_FIELDS: tuple[str, ...] = ("id", "pattern", "modifier", "explanation", "framework_ref")
-_KNOWN_PREDICATES: frozenset[str] = frozenset(
-    {
-        # Phase 2 — live
-        "has_tags",
-        "source_in",
-        "unknown_capability",
-        # Forward-compat no-ops (P2.5 / P4.1 / Phase 3 wire them on real input)
-        "integration_sensitivity",
-        "cve_severity",
-        "package_in_malicious_list",
-    }
-)
+
+
+LIVE_PREDICATES: frozenset[str] = frozenset({"has_tags", "source_in", "unknown_capability"})
+"""Predicates actually dispatched in Phase 2. **A rule may only ship if every
+predicate in its pattern is in this set.** Per Rajan ratification 2026-06-07
+(work-log/2026-06-07-P2.4-ratification.md) Q-A: gate-reject any rule referencing
+a predicate outside this set. Catastrophic case (`package_in_malicious_list`
+inert so a known-malicious package scores clean) must be impossible to ship,
+not merely logged."""
+
+
+FORWARD_COMPAT_PREDICATES: dict[str, str] = {
+    "cve_severity": "P4.1 (OSV.dev CVE feed)",
+    "integration_sensitivity": "P3.7 (Claude Desktop OAuth integrations)",
+    "package_in_malicious_list": "Phase 3 (when the list source lands)",
+}
+"""Predicates the spec mentions but Phase 2 cannot dispatch. Documented here so
+the schema gate can produce a precise error ('predicate X is wired by PR Y;
+cannot ship a rule using it yet'). NEVER added to `_PREDICATE_DISPATCH` —
+adding them would silently lower the bar Rajan set in Q-A."""
+
+
 _KNOWN_FRAMEWORKS: frozenset[str] = frozenset({"nist_csf", "cis_controls", "mitre_attack"})
 
 
@@ -127,9 +151,7 @@ def load_curated_rules(path: Path) -> list[Rule]:
     except FileNotFoundError:
         return []
     except (ValueError, OSError) as exc:
-        logger.critical(
-            "risk-rules.yaml validate_path failed: %s; running with no curated rules", exc
-        )
+        logger.critical("risk-rules.yaml validate_path failed: %s; running with no curated rules", exc)
         return []
     try:
         raw = path.read_text(errors="replace")
@@ -251,25 +273,16 @@ def _predicate_unknown_capability(
     return is_unknown_capability_mcp(asset, ontology_tags)
 
 
-def _predicate_noop(
-    pattern_value: Any,
-    asset: Asset,
-    ontology_tags: frozenset[OntologyCategory],
-) -> bool:
-    """Forward-compat: predicates whose Phase-2 inputs are always 0.
-    Returns False so rules using them simply do not fire until the
-    input wires (P2.5 / P4.1 / Phase 3)."""
-    return False
-
-
 _PREDICATE_DISPATCH: dict[str, Any] = {
     "has_tags": _predicate_has_tags,
     "source_in": _predicate_source_in,
     "unknown_capability": _predicate_unknown_capability,
-    "integration_sensitivity": _predicate_noop,
-    "cve_severity": _predicate_noop,
-    "package_in_malicious_list": _predicate_noop,
 }
+"""Phase-2 live dispatch. **No forward-compat entries** — per Rajan ratification
+2026-06-07 Q-A, the schema gate is the choke point. If a rule somehow reaches
+runtime with a non-live predicate (gate bypass, hand-loaded fixture, etc.)
+:func:`_rule_matches` logs WARN and the predicate evaluates False as a defense-
+in-depth — but the rule cannot ship through the gate in the first place."""
 
 
 def _rule_matches(
@@ -279,15 +292,34 @@ def _rule_matches(
 ) -> bool:
     """A rule matches when EVERY predicate in its pattern evaluates True.
 
-    Multi-predicate patterns are AND-ed (spec §6.2 example combines
-    ``has_tags`` + ``integration_sensitivity``). Unknown predicate keys
-    in the pattern raise (caught by the outer per-rule try/except in
-    :func:`apply_curated_rules`).
+    Multi-predicate patterns are AND-ed.
+
+    Defense-in-depth (Rajan ratification 2026-06-07 Q-A): predicates outside
+    :data:`LIVE_PREDICATES` are NOT in :data:`_PREDICATE_DISPATCH`. If one is
+    encountered at runtime (gate bypass / hand-loaded fixture), we log WARN
+    naming the rule + the unwired predicate + the PR that will wire it, and
+    the rule does NOT match. Returning ``False`` here is a runtime guardrail,
+    NOT a contract — the gate FAILs blocking on this case so production never
+    sees it.
     """
     for key, value in rule.pattern.items():
         predicate = _PREDICATE_DISPATCH.get(key)
         if predicate is None:
-            raise KeyError(f"unknown predicate {key!r}")
+            if key in FORWARD_COMPAT_PREDICATES:
+                logger.warning(
+                    "rule %s references forward-compat predicate %r (wired by %s); "
+                    "this rule SHOULD have been gate-rejected — skipping per defense-in-depth",
+                    rule.id,
+                    key,
+                    FORWARD_COMPAT_PREDICATES[key],
+                )
+            else:
+                logger.warning(
+                    "rule %s references unknown predicate %r; skipping per defense-in-depth",
+                    rule.id,
+                    key,
+                )
+            return False
         if not predicate(value, asset, ontology_tags):
             return False
     return True
@@ -373,7 +405,17 @@ def score_asset_with_rules(
     if max_modifier == 0 and not applied_rules:
         return base_result
 
-    final_clamped = min(100.0, base_result.final_score + max_modifier)
+    # Crash-guard (Q-B mandatory) + floor preservation (Q-B ratified): clamp
+    # the modifier-adjusted score to [0, 100] FIRST so a negative max_modifier
+    # can never produce a negative score (would crash score_to_band). THEN
+    # re-assert any applicable capability floor (spec §6.8 unknown-capability
+    # floor) — a curated negative modifier must never breach a floor that
+    # exists to protect the asset class. Positive modifiers still compose
+    # above the floor (e.g., a future exfil +20 → 60).
+    candidate = base_result.final_score + max_modifier
+    final_clamped = min(100.0, max(0.0, candidate))
+    if is_unknown_capability_mcp(asset, ontology_tags):
+        final_clamped = max(UNKNOWN_CAPABILITY_FLOOR, final_clamped)
     final_score = round(final_clamped)
     band = score_to_band(final_score)
 

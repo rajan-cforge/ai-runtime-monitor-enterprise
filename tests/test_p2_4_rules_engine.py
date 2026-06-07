@@ -12,10 +12,15 @@ Key contracts pinned here:
 3. **Per-rule isolation** — one malformed rule MUST NOT zero out the rest.
 4. **Max-wins** — `max(rule_modifiers)`, NOT `sum(...)`. One rule wins, never stacking.
 5. **Modifier range** — [-10, +30] per spec §6.2 (lower) + directive §7.4 (upper).
-6. **Predicate inventory**: `has_tags` (ALL-OF), `source_in`, `unknown_capability`
-   are live in Phase 2; `integration_sensitivity` / `cve_severity` /
-   `package_in_malicious_list` are schema-accepted no-ops for forward compat.
+6. **Predicate inventory (Q-A ratified 2026-06-07):** `has_tags` (ALL-OF),
+   `source_in`, `unknown_capability` are LIVE in Phase 2; forward-compat
+   predicates (`cve_severity`, `integration_sensitivity`,
+   `package_in_malicious_list`) are GATE-REJECTED — cannot ship. Runtime
+   WARNs on any forward-compat or unknown predicate as defense-in-depth.
 7. **Additive `RiskScoreResult.applied_rules: list[dict]`** — for P7.9 popover.
+8. **Q-B floor re-assertion (spec §6.9):** floor preservation + crash-guard
+   in `score_asset_with_rules`. Three regression tests in
+   `TestFloorReassertionAndCrashGuard`.
 """
 
 from __future__ import annotations
@@ -320,9 +325,15 @@ class TestPredicateDispatch:
             ("package_in_malicious_list", True),
         ],
     )
-    def test_forward_compat_predicates_noop_in_phase_2(self, predicate_key: str, predicate_value: object) -> None:
-        """Schema-accepted predicates with no Phase-2 inputs must NO-OP
-        (return False), not raise. P2.5 / Phase-3 wires them on real input."""
+    def test_forward_compat_predicate_at_runtime_warns_and_does_not_match(
+        self, predicate_key: str, predicate_value: object, caplog
+    ) -> None:
+        """**Rajan ratification 2026-06-07 Q-A.** Forward-compat predicates are
+        gate-rejected (cannot ship), but the runtime is a defense-in-depth
+        layer: if one is encountered (gate bypass, hand-loaded fixture),
+        log WARN naming the wiring PR and DO NOT match. The silent
+        ``_predicate_noop → False`` path was removed; runtime evaluation of
+        an unwired predicate must WARN, not silently return False."""
         rule = Rule(
             id="r",
             pattern={predicate_key: predicate_value},
@@ -330,7 +341,29 @@ class TestPredicateDispatch:
             explanation="x",
             framework_ref={"nist_csf": "X"},
         )
-        max_mod, applied = apply_curated_rules(_asset(), frozenset(), [rule])
+        with caplog.at_level("WARNING", logger="ai-runtime-monitor.attack_surface.risk.rules"):
+            max_mod, applied = apply_curated_rules(_asset(), frozenset(), [rule])
+        assert max_mod == 0
+        assert applied == []
+        # WARN must fire AND name the predicate + the wiring PR per Q-A
+        relevant = [r for r in caplog.records if r.levelname == "WARNING" and predicate_key in (r.message or "")]
+        assert relevant, f"runtime WARN must name {predicate_key}"
+        assert any("wired" in (r.message or "").lower() for r in relevant), (
+            "runtime WARN must name the wiring PR per Q-A (defense-in-depth)"
+        )
+
+    def test_unknown_predicate_at_runtime_warns_and_does_not_match(self, caplog) -> None:
+        """A truly unknown predicate (not LIVE, not FORWARD_COMPAT) WARNs
+        and does not match — defense-in-depth alongside the schema gate."""
+        rule = Rule(
+            id="r",
+            pattern={"a_predicate_we_never_heard_of": 42},
+            modifier=10,
+            explanation="x",
+            framework_ref={"nist_csf": "X"},
+        )
+        with caplog.at_level("WARNING", logger="ai-runtime-monitor.attack_surface.risk.rules"):
+            max_mod, applied = apply_curated_rules(_asset(), frozenset(), [rule])
         assert max_mod == 0
         assert applied == []
 
@@ -457,6 +490,85 @@ class TestScoreAssetWithRules:
         bad_tags = frozenset({OntologyCategory.SHELL_EXECUTE, OntologyCategory.DATA_EXFILTRATION_CAPABLE})
         with pytest.raises(ValueError, match=r"orphan|data_exfiltration_capable"):
             score_asset_with_rules(asset, ontology_tags=bad_tags, rules=[rule])
+
+
+class TestFloorReassertionAndCrashGuard:
+    """**Rajan ratification 2026-06-07 Q-B (spec §6.9).** Three pinned
+    regression tests covering the post-modifier composition rule:
+
+        final = min(100, max(0, base + max_modifier))
+        if is_unknown_capability_mcp:
+            final = max(UNKNOWN_CAPABILITY_FLOOR, final)
+    """
+
+    def test_unknown_cap_floor_holds_against_negative_modifier(self) -> None:
+        """An unknown-cap MCP at floor 40 + a −10 modifier MUST stay at 40
+        (the floor wins over the negative modifier). Without this rule, the
+        spec §6.8 protection on the exfil-shape MCP would be silently undone
+        by a curated rule the buyer never sees."""
+        rule = Rule(
+            id="rule_negative",
+            pattern={"has_tags": ["inter_tool_communication"]},
+            modifier=-10,
+            explanation="hypothetical rule",
+            framework_ref={"nist_csf": "X"},
+        )
+        asset = _asset(
+            source="mcp-servers",
+            current_state={"command": "node", "args": ["/opt/custom/x.js"]},
+        )
+        # Unknown-capability MCP (singleton ITC; no command-derived tag)
+        tags = frozenset({OntologyCategory.INTER_TOOL_COMMUNICATION})
+        result = score_asset_with_rules(asset, ontology_tags=tags, rules=[rule])
+        assert result.final_score == 40, (
+            "REGRESSION: unknown-capability floor breached by negative modifier — "
+            "spec §6.8 protection undone (Rajan ratification 2026-06-07 Q-B)"
+        )
+        assert result.band == RiskBand.MEDIUM
+
+    def test_low_base_plus_negative_modifier_clamps_at_zero_no_crash(self) -> None:
+        """Crash-guard pin. Without `max(0, ...)` a low-base asset + −10
+        modifier would produce a negative score and `score_to_band(-N)`
+        would raise ValueError (the P2.3 [0, 100] invariant). The clamp
+        must catch this cleanly."""
+        rule = Rule(
+            id="rule_negative",
+            pattern={"has_tags": ["code_execution"]},
+            modifier=-10,
+            explanation="hypothetical rule",
+            framework_ref={"nist_csf": "X"},
+        )
+        # 1 tag → permission_breadth = 10 * 0.3 = 3. Base score 3. + −10 = −7
+        # without the clamp. The clamp must produce 0, not raise.
+        asset = _asset(source="claude-code-skills")
+        tags = frozenset({OntologyCategory.CODE_EXECUTION})
+        # Should not raise
+        result = score_asset_with_rules(asset, ontology_tags=tags, rules=[rule])
+        assert result.final_score == 0
+        assert result.band == RiskBand.INFO
+
+    def test_unknown_cap_floor_plus_positive_modifier_composes_above(self) -> None:
+        """The exfil shape Rajan flagged. Floor 40 + +20 → 60 (HIGH).
+        Positive modifiers compose ABOVE the floor; the floor only protects
+        against negative modifiers and low base scores. The rule itself
+        (exfil-capable +20) ships in P2.5 only after Rajan rules — this
+        test demonstrates the composition mechanism is ready."""
+        exfil_rule = Rule(
+            id="rule_exfil_capable_unrecognized",
+            pattern={"unknown_capability": True, "has_tags": ["secrets_access"]},
+            modifier=20,
+            explanation="Unrecognized server handling secrets — exfil shape.",
+            framework_ref={"nist_csf": "ID.RA-3", "mitre_attack": "T1041"},
+        )
+        asset = _asset(
+            source="mcp-servers",
+            current_state={"command": "node", "args": ["/opt/custom/server.js"]},
+        )
+        # Unknown-capability MCP with credentials (exfil shape)
+        tags = frozenset({OntologyCategory.INTER_TOOL_COMMUNICATION, OntologyCategory.SECRETS_ACCESS})
+        result = score_asset_with_rules(asset, ontology_tags=tags, rules=[exfil_rule])
+        assert result.final_score == 60
+        assert result.band == RiskBand.HIGH
 
 
 # ---------------------------------------------------------------------------
