@@ -53,11 +53,10 @@ def _asset(
 
 
 class TestRegistry:
-    def test_all_six_merged_sources_registered(self) -> None:
+    def test_all_merged_sources_registered(self) -> None:
         """Q5 structural-completeness contract: every registered discovery
-        source has a mapping function. P2.0 ships 6: ollama-models,
-        ai-tool-versions, ai-apps-info-plist, claude-code-skills,
-        openclaw-skills, mcp-servers."""
+        source has a mapping function. P2.0 shipped 6; P3.1 added
+        vscode-extensions."""
         expected = {
             "ollama-models",
             "ai-tool-versions",
@@ -65,6 +64,7 @@ class TestRegistry:
             "claude-code-skills",
             "openclaw-skills",
             "mcp-servers",
+            "vscode-extensions",
         }
         assert expected == REGISTERED_SOURCES
 
