@@ -1,0 +1,47 @@
+# config/mcp-trusted-authors.yaml — curated MCP-author trust list (P2.6).
+#
+# Match rule (architect pick, ratified 2026-06-08):
+#   Two-pass; an MCP server is "verified" if EITHER pass matches.
+#
+#   Pass 1 — commands: exact string match of the MCP server's
+#     `asset.current_state['command']` against the `commands` list.
+#     Use this for runner commands that signal "managed by a known
+#     package ecosystem" — e.g., `npx` (npm), `uvx` (PyPI Anthropic-owned
+#     runners). On its own, `npx` does not mean trusted, but combined
+#     with Pass 2 it gates which package is actually trusted.
+#
+#   Pass 2 — package_patterns: substring or fnmatch against
+#     `asset.current_state['args'][0]` (the package/module name on the
+#     command line). This is the load-bearing identity signal — the
+#     package name uniquely identifies the publisher.
+#
+# Curator-list discipline:
+# - PRs to this file MUST be human-reviewed; no auto-merge.
+# - "When in doubt, leave it out." False-negative (legit MCP gets +10)
+#   is recoverable; false-positive (malicious MCP trusted) is not.
+# - Patterns should be specific to a publisher, not a category.
+#   `package_patterns: ["*"]` is forbidden by the loader.
+#
+# Updating this file does not require a code change. Reload on next
+# Vigil scan.
+
+commands:
+  # Anthropic-published runners
+  - claude-mcp
+  # Generic runners only become trust signals via Pass 2 (commands +
+  # package_patterns). `npx` and `uvx` are listed here so the loader
+  # accepts them; the actual trust is gated by package_patterns.
+  - npx
+  - uvx
+  - python
+  - python3
+  - node
+  - bunx
+
+package_patterns:
+  # Official Anthropic MCP servers (modelcontextprotocol GitHub org)
+  - "@modelcontextprotocol/server-*"
+  - "modelcontextprotocol-*"
+  # Common reference servers shipped under the Anthropic GitHub org
+  - "@anthropic-ai/*"
+  - "anthropic-ai-*"
