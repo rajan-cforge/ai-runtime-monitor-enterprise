@@ -105,7 +105,7 @@ class MCPAuthorReputationClient:
         # P2.5 rules.py precedent (broad Exception catch on parse).
         try:
             payload = safe_yaml_load(raw)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.critical(
                 "mcp-trusted-authors.yaml parse failed: %s; all MCP assets default to unverified",
                 exc,
@@ -137,4 +137,4 @@ class MCPAuthorReputationClient:
         self._loaded = True
 
 
-__all__ = ["MCPAuthorReputationClient", "DEFAULT_CURATOR_PATH"]
+__all__ = ["DEFAULT_CURATOR_PATH", "MCPAuthorReputationClient"]

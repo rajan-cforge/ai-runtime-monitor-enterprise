@@ -27,7 +27,7 @@ import logging
 import urllib.error
 import urllib.parse
 from dataclasses import dataclass
-from urllib.request import Request, urlopen  # noqa: S310 — allowlisted hostnames
+from urllib.request import Request, urlopen
 
 from claude_monitoring.attack_surface.reputation.config import REQUEST_TIMEOUT_SECONDS
 from claude_monitoring.attack_surface.reputation.types import (
@@ -39,8 +39,8 @@ from claude_monitoring.attack_surface.reputation.types import (
 logger = logging.getLogger("ai-runtime-monitor.attack_surface.reputation.pypi")
 
 
-PYPI_PKG_URL: str = "https://pypi.org/pypi/{pkg}/json"
-PYPISTATS_URL: str = "https://pypistats.org/api/packages/{pkg}/recent?period=week"
+PYPI_PKG_PREFIX: str = "https://pypi.org/pypi/"
+PYPISTATS_PREFIX: str = "https://pypistats.org/api/packages/"
 
 LOW_DOWNLOADS_THRESHOLD: int = 100
 """Spec §6.6.3: ``< 100/week`` is the typosquat signal. Strict inequality."""
@@ -141,9 +141,12 @@ class PyPIReputationClient:
         """Returns ``None`` for 404; raises :class:`_LookupFailed` for
         other failure modes; returns a dict with ``downloads_last_week``
         (an int >= 0) or ``None`` (sentinel) on success."""
-        url = PYPI_PKG_URL.format(pkg=pkg_quoted)
+        # Literal-prefix concat so gate verifies pypi.org statically
         try:
-            with urlopen(Request(url), timeout=REQUEST_TIMEOUT_SECONDS) as response:  # noqa: S310
+            with urlopen(
+                Request("https://pypi.org/pypi/" + pkg_quoted + "/json"),
+                timeout=REQUEST_TIMEOUT_SECONDS,
+            ) as response:
                 body = response.read()
         except urllib.error.HTTPError as exc:
             if exc.code == 404:
@@ -178,10 +181,12 @@ class PyPIReputationClient:
         field. Raises :class:`_LookupFailed` for HTTP / parse errors.
         429 maps to ``RATE_LIMITED``."""
         self._budget.remaining -= 1
-        url = PYPISTATS_URL.format(pkg=pkg_quoted)
         logger.info("reputation lookup: pypistats %s (budget remaining: %d)", pkg_quoted, self._budget.remaining)
         try:
-            with urlopen(Request(url), timeout=REQUEST_TIMEOUT_SECONDS) as response:  # noqa: S310
+            with urlopen(
+                Request("https://pypistats.org/api/packages/" + pkg_quoted + "/recent?period=week"),
+                timeout=REQUEST_TIMEOUT_SECONDS,
+            ) as response:
                 body = response.read()
         except urllib.error.HTTPError as exc:
             if exc.code == 429:

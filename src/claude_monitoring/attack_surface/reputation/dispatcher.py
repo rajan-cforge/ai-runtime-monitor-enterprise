@@ -116,7 +116,7 @@ class ReputationDispatcher:
 
         try:
             return self._lookup_unchecked(asset)
-        except Exception as exc:  # noqa: BLE001 — per-item isolation
+        except Exception as exc:
             logger.warning(
                 "reputation dispatcher failed for asset %s (source=%s): %s",
                 getattr(asset, "name", "?"),
@@ -147,10 +147,14 @@ class ReputationDispatcher:
             return cached
 
         # Dormant gate (Chrome/VSCode +20 only)
-        if signal in (
-            ReputationSignal.CHROME_NOT_IN_STORE,
-            ReputationSignal.VSCODE_NOT_IN_MARKETPLACE,
-        ) and not chrome_vscode_enabled():
+        if (
+            signal
+            in (
+                ReputationSignal.CHROME_NOT_IN_STORE,
+                ReputationSignal.VSCODE_NOT_IN_MARKETPLACE,
+            )
+            and not chrome_vscode_enabled()
+        ):
             result = ReputationResult(
                 signal=signal,
                 present=None,

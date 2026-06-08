@@ -23,7 +23,7 @@ from __future__ import annotations
 import json
 import logging
 import urllib.error
-from urllib.request import Request, urlopen  # noqa: S310 — allowlisted hostname
+from urllib.request import Request, urlopen
 
 from claude_monitoring.attack_surface.reputation.config import REQUEST_TIMEOUT_SECONDS
 from claude_monitoring.attack_surface.reputation.types import (
@@ -63,17 +63,22 @@ class VSCodeMarketplaceReputationClient:
             "flags": _FLAGS_INCLUDE_STATISTICS,
         }
         body_bytes = json.dumps(payload).encode("utf-8")
-        request = Request(
-            EXTENSIONQUERY_URL,
-            data=body_bytes,
-            headers={
-                "Content-Type": "application/json",
-                "Accept": "application/json;api-version=3.0-preview.1",
-            },
-            method="POST",
-        )
+        # Request constructed inline so the gate sees the literal URL on
+        # urlopen()'s first arg (variable indirection defeats AST-level
+        # static analysis).
         try:
-            with urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:  # noqa: S310
+            with urlopen(
+                Request(
+                    "https://marketplace.visualstudio.com/_apis/public/gallery/extensionquery",
+                    data=body_bytes,
+                    headers={
+                        "Content-Type": "application/json",
+                        "Accept": "application/json;api-version=3.0-preview.1",
+                    },
+                    method="POST",
+                ),
+                timeout=REQUEST_TIMEOUT_SECONDS,
+            ) as response:
                 body = response.read()
         except urllib.error.HTTPError as exc:
             reason = UnavailableReason.RATE_LIMITED if exc.code == 429 else UnavailableReason.LOOKUP_FAILED

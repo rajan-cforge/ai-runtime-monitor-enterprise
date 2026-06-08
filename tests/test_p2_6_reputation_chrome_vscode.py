@@ -62,9 +62,7 @@ class TestChromeUnlisted:
 
     def test_empty_title_marker_in_body_returns_present_false(self) -> None:
         client = ChromeWebStoreReputationClient()
-        unlisted_body = (
-            b"<html><body>some content with empty-title/aaa in the URL path</body></html>"
-        )
+        unlisted_body = b"<html><body>some content with empty-title/aaa in the URL path</body></html>"
         with patch(
             "claude_monitoring.attack_surface.reputation.chrome_web_store.urlopen",
             side_effect=[_http_response(unlisted_body)],

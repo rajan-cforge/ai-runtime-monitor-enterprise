@@ -43,7 +43,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import time
 from pathlib import Path
 
@@ -80,6 +79,21 @@ expires at the end of the backoff window."""
 
 
 _CACHE_VERSION: int = 1
+
+
+def _decode_strict(raw: dict) -> ReputationResult:
+    """Raises ``KeyError`` / ``ValueError`` on a bad entry; the cache
+    wraps this to translate to per-item-isolation behavior."""
+    signal = ReputationSignal(raw["signal"])
+    present = raw.get("present")
+    if present is not None and not isinstance(present, bool):
+        raise ValueError(f"present must be bool or None, got {type(present).__name__}")
+    downloads = raw.get("downloads")
+    if downloads is not None and not isinstance(downloads, int):
+        raise ValueError(f"downloads must be int or None, got {type(downloads).__name__}")
+    reason_value = raw.get("reason")
+    reason = UnavailableReason(reason_value) if reason_value is not None else None
+    return ReputationResult(signal=signal, present=present, downloads=downloads, reason=reason)
 
 
 class ReputationCache:
@@ -171,16 +185,7 @@ class ReputationCache:
     def _decode(self, raw: dict) -> ReputationResult | None:
         """Per-item isolation: bad entry → return None, log warning."""
         try:
-            signal = ReputationSignal(raw["signal"])
-            present = raw.get("present")
-            if present is not None and not isinstance(present, bool):
-                raise ValueError(f"present must be bool or None, got {type(present).__name__}")
-            downloads = raw.get("downloads")
-            if downloads is not None and not isinstance(downloads, int):
-                raise ValueError(f"downloads must be int or None, got {type(downloads).__name__}")
-            reason_value = raw.get("reason")
-            reason = UnavailableReason(reason_value) if reason_value is not None else None
-            return ReputationResult(signal=signal, present=present, downloads=downloads, reason=reason)
+            return _decode_strict(raw)
         except (KeyError, ValueError) as exc:
             logger.warning("cache entry skipped: %s", exc)
             return None
@@ -223,10 +228,10 @@ class ReputationCache:
         # is never world-readable even momentarily.
         tmp.write_text(text)
         try:
-            os.chmod(str(tmp), 0o600)
+            tmp.chmod(0o600)
         except OSError as exc:
             logger.warning("chmod 600 on reputation cache tmp failed: %s", exc)
-        os.replace(str(tmp), str(self._path))
+        tmp.replace(self._path)
 
 
 __all__ = [

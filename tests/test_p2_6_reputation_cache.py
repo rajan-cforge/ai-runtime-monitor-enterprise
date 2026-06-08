@@ -98,7 +98,7 @@ class TestPermissionsEnforcedChmod600:
         cache_path = tmp_path / "rep.json"
         cache = ReputationCache(cache_path)
         cache.set("npm:x", _existence_result(present=True))
-        mode = stat.S_IMODE(os.stat(cache_path).st_mode)
+        mode = stat.S_IMODE(cache_path.stat().st_mode)
         assert mode == 0o600, f"expected 0o600, got {oct(mode)}"
 
     def test_update_preserves_chmod_600(self, tmp_path: Path) -> None:
@@ -108,7 +108,7 @@ class TestPermissionsEnforcedChmod600:
         # Tamper: chmod 644 then re-save
         os.chmod(cache_path, 0o644)
         cache.set("npm:y", _existence_result(present=False))
-        mode = stat.S_IMODE(os.stat(cache_path).st_mode)
+        mode = stat.S_IMODE(cache_path.stat().st_mode)
         assert mode == 0o600, f"expected 0o600 after re-save, got {oct(mode)}"
 
 

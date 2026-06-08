@@ -5,7 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 
 from claude_monitoring.attack_surface.reputation.mcp_author import (
-    DEFAULT_CURATOR_PATH,
     MCPAuthorReputationClient,
 )
 from claude_monitoring.attack_surface.reputation.types import (

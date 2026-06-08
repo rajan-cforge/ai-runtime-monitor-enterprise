@@ -64,6 +64,10 @@ Env override exists for development / testing; production default is OFF."""
 
 
 def chrome_vscode_enabled() -> bool:
+    """True if the Chrome/VSCode reputation rules are enabled.
+
+    Default False. Flipped to True only by the PR that lands managed-
+    install detection (P3.1 / P3.2)."""
     return _truthy(os.environ.get(CHROME_VSCODE_ENABLED_ENV))
 
 

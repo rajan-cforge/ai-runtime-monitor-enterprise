@@ -58,7 +58,7 @@ from claude_monitoring.attack_surface.reputation.types import (
     UnavailableReason,
 )
 from claude_monitoring.attack_surface.risk.bands import RiskBand
-from claude_monitoring.attack_surface.risk.rules import load_curated_rules, DEFAULT_RULES_PATH
+from claude_monitoring.attack_surface.risk.rules import DEFAULT_RULES_PATH, load_curated_rules
 
 
 @pytest.fixture(scope="module")
@@ -144,9 +144,7 @@ class TestUnknownCapMCPPath:
                 OntologyCategory.SECRETS_ACCESS,
             }
         )
-        result = score_asset_with_rules_and_reputation(
-            asset, tags, shipped_rules, dispatcher
-        )
+        result = score_asset_with_rules_and_reputation(asset, tags, shipped_rules, dispatcher)
         # Floor (40) + winning rule (+20) + reputation (+10) = 70
         assert result.final_score == 70
         assert result.band is RiskBand.HIGH
@@ -166,20 +164,14 @@ class TestUnknownCapMCPPath:
     ) -> None:
         """A curator-list HIT (present=True) does NOT add +10. Floor
         (40) + rule (+20) = 60 HIGH still — the existing P2.5 result."""
-        verified = ReputationResult(
-            signal=ReputationSignal.MCP_AUTHOR_UNVERIFIED, present=True
-        )
+        verified = ReputationResult(signal=ReputationSignal.MCP_AUTHOR_UNVERIFIED, present=True)
         dispatcher = _dispatcher_returning(tmp_path, verified, monkeypatch)
         asset = _asset(
             source="mcp-servers",
             current_state={"command": "claude-mcp", "args": []},
         )
-        tags = frozenset(
-            {OntologyCategory.INTER_TOOL_COMMUNICATION, OntologyCategory.SECRETS_ACCESS}
-        )
-        result = score_asset_with_rules_and_reputation(
-            asset, tags, shipped_rules, dispatcher
-        )
+        tags = frozenset({OntologyCategory.INTER_TOOL_COMMUNICATION, OntologyCategory.SECRETS_ACCESS})
+        result = score_asset_with_rules_and_reputation(asset, tags, shipped_rules, dispatcher)
         # 60 from P2.5 result; +10 SUPPRESSED because present is True
         assert result.final_score == 60
         assert result.band is RiskBand.HIGH
@@ -200,9 +192,7 @@ class TestRecognizedMCPPath:
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        unverified = ReputationResult(
-            signal=ReputationSignal.MCP_AUTHOR_UNVERIFIED, present=False
-        )
+        unverified = ReputationResult(signal=ReputationSignal.MCP_AUTHOR_UNVERIFIED, present=False)
         dispatcher = _dispatcher_returning(tmp_path, unverified, monkeypatch)
         asset = _asset(
             source="mcp-servers",
@@ -217,9 +207,7 @@ class TestRecognizedMCPPath:
                 OntologyCategory.SECRETS_ACCESS,
             }
         )
-        result = score_asset_with_rules_and_reputation(
-            asset, tags, shipped_rules, dispatcher
-        )
+        result = score_asset_with_rules_and_reputation(asset, tags, shipped_rules, dispatcher)
         # Empirical: base = (3/10) * 100 * 0.30 = 9; rule shell+secrets = +20;
         # reputation = +10; final = 9 + 20 + 10 = 39 → LOW band (20-39).
         # Cap holds; no escape past HIGH. This is *informational* —
@@ -257,9 +245,7 @@ class TestNpmTyposquatPath:
         # 15 is the INFO band (0-19). The +15 reputation alone is NOT
         # band-moving — it composes with capability rules when those
         # land in P3.8. Documented in carry-forwards.
-        result = score_asset_with_rules_and_reputation(
-            asset, frozenset(), shipped_rules, dispatcher
-        )
+        result = score_asset_with_rules_and_reputation(asset, frozenset(), shipped_rules, dispatcher)
         assert result.final_score == 15
         assert result.band is RiskBand.INFO
         assert result.applied_reputation[0]["modifier_applied"] == 15
@@ -287,9 +273,7 @@ class TestPipUnavailableDoesNotFire:
         )
         dispatcher = _dispatcher_returning(tmp_path, rate_limited, monkeypatch)
         asset = _asset(source="python-packages", name="x")
-        result = score_asset_with_rules_and_reputation(
-            asset, frozenset(), shipped_rules, dispatcher
-        )
+        result = score_asset_with_rules_and_reputation(asset, frozenset(), shipped_rules, dispatcher)
         # Base 0 + 0 rules + 0 reputation = 0
         assert result.final_score == 0
         assert result.band is RiskBand.INFO
@@ -312,9 +296,7 @@ class TestPipUnavailableDoesNotFire:
         )
         dispatcher = _dispatcher_returning(tmp_path, failed, monkeypatch)
         asset = _asset(source="python-packages", name="x")
-        result = score_asset_with_rules_and_reputation(
-            asset, frozenset(), shipped_rules, dispatcher
-        )
+        result = score_asset_with_rules_and_reputation(asset, frozenset(), shipped_rules, dispatcher)
         assert result.final_score == 0
         assert result.applied_reputation[0]["modifier_applied"] == 0
         assert result.applied_reputation[0]["reason"] == "lookup_failed"
@@ -345,9 +327,7 @@ class TestChromeDormantSuppresses:
         # exercise the real gate (the mocked client is never called).
         dispatcher = _dispatcher_returning(tmp_path, None, monkeypatch)
         asset = _asset(source="chrome-extensions", name="abc")
-        result = score_asset_with_rules_and_reputation(
-            asset, frozenset(), shipped_rules, dispatcher
-        )
+        result = score_asset_with_rules_and_reputation(asset, frozenset(), shipped_rules, dispatcher)
         # Base 0 + 0 rules + 0 reputation (dormant) = 0
         assert result.final_score == 0
         # Popover STILL shows the reason — "Chrome reputation pending P3.2"
@@ -374,17 +354,13 @@ class TestWorstCaseCapHoldsUnderProvenPaths:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         # Re-run the unknown-cap MCP exfil shape
-        unverified = ReputationResult(
-            signal=ReputationSignal.MCP_AUTHOR_UNVERIFIED, present=False
-        )
+        unverified = ReputationResult(signal=ReputationSignal.MCP_AUTHOR_UNVERIFIED, present=False)
         dispatcher = _dispatcher_returning(tmp_path, unverified, monkeypatch)
         asset = _asset(
             source="mcp-servers",
             current_state={"command": "strange", "args": ["unknown"]},
         )
-        tags = frozenset(
-            {OntologyCategory.INTER_TOOL_COMMUNICATION, OntologyCategory.SECRETS_ACCESS}
-        )
+        tags = frozenset({OntologyCategory.INTER_TOOL_COMMUNICATION, OntologyCategory.SECRETS_ACCESS})
         result = score_asset_with_rules_and_reputation(asset, tags, shipped_rules, dispatcher)
         # 70 = HIGH band lower edge. NOT CRITICAL (>=80).
         assert result.final_score == 70

@@ -25,14 +25,11 @@ import json
 import urllib.error
 from unittest.mock import patch
 
-import pytest
-
 from claude_monitoring.attack_surface.reputation.pypi import (
     PyPIReputationClient,
     PyPIScanBudget,
 )
 from claude_monitoring.attack_surface.reputation.types import (
-    ReputationResult,
     ReputationSignal,
     UnavailableReason,
 )
@@ -48,7 +45,11 @@ def _http_response(payload: dict | bytes, status: int = 200) -> io.BytesIO:
 
 def _http_error(status: int) -> urllib.error.HTTPError:
     return urllib.error.HTTPError(
-        url="http://test", code=status, msg=f"HTTP {status}", hdrs=None, fp=None  # type: ignore[arg-type]
+        url="http://test",
+        code=status,
+        msg=f"HTTP {status}",
+        hdrs=None,
+        fp=None,  # type: ignore[arg-type]
     )
 
 
@@ -228,12 +229,14 @@ class TestPyPIScanBudget:
     def test_budget_consumed_only_by_pypistats_calls(self) -> None:
         budget = PyPIScanBudget(remaining=2)
         client = PyPIReputationClient(budget)
+
         # Fresh BytesIO per call (can only be read once).
         def make_responses():
             return [
                 _http_response(_pypi_payload(sentinel_downloads=True)),
                 _http_response({"data": {"last_week": 5_000}, "package": "x"}),
             ]
+
         with patch(
             "claude_monitoring.attack_surface.reputation.pypi.urlopen",
             side_effect=make_responses() + make_responses(),

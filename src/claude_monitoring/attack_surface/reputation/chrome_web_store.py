@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import logging
 import urllib.error
-from urllib.request import Request, urlopen  # noqa: S310 — allowlisted hostname
+from urllib.request import Request, urlopen
 
 from claude_monitoring.attack_surface.reputation.config import REQUEST_TIMEOUT_SECONDS
 from claude_monitoring.attack_surface.reputation.types import (
@@ -41,7 +41,7 @@ from claude_monitoring.attack_surface.reputation.types import (
 logger = logging.getLogger("ai-runtime-monitor.attack_surface.reputation.chrome_web_store")
 
 
-CHROME_WEB_STORE_URL: str = "https://chrome.google.com/webstore/detail/{ext_id}"
+CHROME_WEB_STORE_PREFIX: str = "https://chrome.google.com/webstore/detail/"
 
 EMPTY_TITLE_MARKER: str = "empty-title"
 """Literal substring Google places in the placeholder URL when an
@@ -59,10 +59,17 @@ class ChromeWebStoreReputationClient:
     """
 
     def lookup(self, extension_id: str) -> ReputationResult:
+        """Return the reputation result for ``extension_id``. Never raises.
+
+        Body fetch + ``empty-title`` substring detection per the
+        2026-06-08 empirical recon. The dispatcher gates this call
+        behind the dormant flag in P2.6."""
         logger.info("reputation lookup: chrome_web_store %s", extension_id)
-        url = CHROME_WEB_STORE_URL.format(ext_id=extension_id)
         try:
-            with urlopen(Request(url), timeout=REQUEST_TIMEOUT_SECONDS) as response:  # noqa: S310
+            with urlopen(
+                Request("https://chrome.google.com/webstore/detail/" + extension_id),
+                timeout=REQUEST_TIMEOUT_SECONDS,
+            ) as response:
                 body = response.read()
         except (urllib.error.HTTPError, urllib.error.URLError, OSError):
             return ReputationResult(
@@ -89,6 +96,6 @@ class ChromeWebStoreReputationClient:
 
 
 __all__ = [
-    "ChromeWebStoreReputationClient",
     "EMPTY_TITLE_MARKER",
+    "ChromeWebStoreReputationClient",
 ]

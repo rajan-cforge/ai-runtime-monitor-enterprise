@@ -20,7 +20,7 @@ import json
 import logging
 import urllib.error
 import urllib.parse
-from urllib.request import Request, urlopen  # noqa: S310 — allowlisted hostnames
+from urllib.request import Request, urlopen
 
 from claude_monitoring.attack_surface.reputation.config import REQUEST_TIMEOUT_SECONDS
 from claude_monitoring.attack_surface.reputation.types import (
@@ -32,15 +32,22 @@ from claude_monitoring.attack_surface.reputation.types import (
 logger = logging.getLogger("ai-runtime-monitor.attack_surface.reputation.npm")
 
 
-NPM_REGISTRY_URL: str = "https://registry.npmjs.org/{pkg}"
-NPM_DOWNLOADS_URL: str = "https://api.npmjs.org/downloads/point/last-week/{pkg}"
+NPM_REGISTRY_PREFIX: str = "https://registry.npmjs.org/"
+NPM_DOWNLOADS_PREFIX: str = "https://api.npmjs.org/downloads/point/last-week/"
 
 LOW_DOWNLOADS_THRESHOLD: int = 100
 """Spec §6.6.3: ``< 100/week`` typosquat signal."""
 
 
 class NPMReputationClient:
+    """npm package reputation client. Composes existence + downloads."""
+
     def lookup(self, package_name: str) -> ReputationResult:
+        """Return the reputation result for ``package_name``. Never raises.
+
+        Two-step lookup: registry existence (200/404), then weekly
+        downloads. 429 on either endpoint → ``RATE_LIMITED``; other
+        failures → ``LOOKUP_FAILED`` (fail-open per ratification item 6)."""
         pkg_quoted = urllib.parse.quote(package_name, safe="@")
         logger.info("reputation lookup: npm %s", package_name)
 
@@ -78,10 +85,16 @@ class NPMReputationClient:
 
     def _fetch_existence(self, pkg_quoted: str):
         """True = present (200), False = absent (404),
-        ``_LOOKUP_FAILED`` = anything else."""
-        url = NPM_REGISTRY_URL.format(pkg=pkg_quoted)
+        ``_LOOKUP_FAILED`` = anything else.
+
+        The URL is composed via literal-prefix + ``+ pkg_quoted`` so the
+        `privacy-no-telemetry-check` gate can statically verify
+        ``registry.npmjs.org`` as the destination."""
         try:
-            with urlopen(Request(url), timeout=REQUEST_TIMEOUT_SECONDS) as response:  # noqa: S310
+            with urlopen(
+                Request("https://registry.npmjs.org/" + pkg_quoted),
+                timeout=REQUEST_TIMEOUT_SECONDS,
+            ) as response:
                 body = response.read()
         except urllib.error.HTTPError as exc:
             if exc.code == 404:
@@ -99,10 +112,13 @@ class NPMReputationClient:
 
     def _fetch_downloads(self, pkg_quoted: str):
         """Int downloads, or ``_LOOKUP_FAILED`` / ``_RATE_LIMITED`` /
-        ``None`` for unparseable."""
-        url = NPM_DOWNLOADS_URL.format(pkg=pkg_quoted)
+        ``None`` for unparseable. URL composed literal-prefix-first so
+        the gate verifies ``api.npmjs.org``."""
         try:
-            with urlopen(Request(url), timeout=REQUEST_TIMEOUT_SECONDS) as response:  # noqa: S310
+            with urlopen(
+                Request("https://api.npmjs.org/downloads/point/last-week/" + pkg_quoted),
+                timeout=REQUEST_TIMEOUT_SECONDS,
+            ) as response:
                 body = response.read()
         except urllib.error.HTTPError as exc:
             if exc.code == 429:

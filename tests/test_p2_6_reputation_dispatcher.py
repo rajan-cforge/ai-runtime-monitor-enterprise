@@ -106,9 +106,7 @@ class TestPerSourceRouting:
         dispatcher.lookup(asset)
         mcp_author.lookup.assert_called_once_with("npx", "@modelcontextprotocol/server-filesystem")
 
-    def test_unrelated_source_returns_none(
-        self, dispatcher_with_mock_clients, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_unrelated_source_returns_none(self, dispatcher_with_mock_clients, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("VIGIL_NO_REPUTATION", raising=False)
         monkeypatch.delenv("NO_NETWORK", raising=False)
         dispatcher, npm, pypi, *_ = dispatcher_with_mock_clients
@@ -143,9 +141,7 @@ class TestKillSwitchShortCircuits:
         result = dispatcher.lookup(_asset(source="claude-code-skills"))
         assert result is None
 
-    def test_NO_NETWORK_also_kills(
-        self, dispatcher_with_mock_clients, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_NO_NETWORK_also_kills(self, dispatcher_with_mock_clients, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("VIGIL_NO_REPUTATION", raising=False)
         monkeypatch.setenv("NO_NETWORK", "1")
         dispatcher, npm, *_ = dispatcher_with_mock_clients
@@ -189,9 +185,7 @@ class TestDormantGate:
         monkeypatch.delenv("NO_NETWORK", raising=False)
         monkeypatch.setenv("VIGIL_REPUTATION_CHROME_VSCODE_ENABLED", "1")
         dispatcher, _npm, _pypi, chrome, *_ = dispatcher_with_mock_clients
-        chrome.lookup.return_value = ReputationResult(
-            signal=ReputationSignal.CHROME_NOT_IN_STORE, present=True
-        )
+        chrome.lookup.return_value = ReputationResult(signal=ReputationSignal.CHROME_NOT_IN_STORE, present=True)
         result = dispatcher.lookup(_asset(source="chrome-extensions", name="abc"))
         chrome.lookup.assert_called_once_with("abc")
         assert result is not None
@@ -199,9 +193,7 @@ class TestDormantGate:
 
 
 class TestCacheFirst:
-    def test_cache_hit_skips_client_call(
-        self, dispatcher_with_mock_clients, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_cache_hit_skips_client_call(self, dispatcher_with_mock_clients, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("VIGIL_NO_REPUTATION", raising=False)
         monkeypatch.delenv("NO_NETWORK", raising=False)
         dispatcher, npm, *_ = dispatcher_with_mock_clients

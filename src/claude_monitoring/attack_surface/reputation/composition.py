@@ -93,9 +93,7 @@ def score_asset_with_rules_and_reputation(
     base.final_score = final_score
     base.band = score_to_band(final_score)
     base.applied_rules = applied_rules
-    base.applied_reputation = (
-        [_reputation_to_dict(rep_result, rep_mod)] if rep_result is not None else []
-    )
+    base.applied_reputation = [_reputation_to_dict(rep_result, rep_mod)] if rep_result is not None else []
     return base
 
 
