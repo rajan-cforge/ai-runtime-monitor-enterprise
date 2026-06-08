@@ -17,6 +17,18 @@ A future PR may add ``~/.vigil/config`` reading; until then, env wins.
 from __future__ import annotations
 
 import os
+from pathlib import Path
+
+from claude_monitoring.config import get_output_dir
+
+
+def get_reputation_cache_path() -> Path:
+    """Single source of truth for the reputation cache file path.
+
+    Used by ``reputation/cache.py`` for the JSON file location AND by
+    ``security.py`` so the startup permission sweep enforces chmod 600
+    on the same path (architect-pass STRONG #3, 2026-06-08)."""
+    return get_output_dir() / "reputation-cache.json"
 
 # ---------------------------------------------------------------------------
 # Kill-switch (item 7 ratified — env var only)

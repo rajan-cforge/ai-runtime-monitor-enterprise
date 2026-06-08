@@ -673,6 +673,13 @@ _PROTECTED_FILES_600 = [
     lambda: get_token_path(),
     lambda: get_setup_marker_path(),
     lambda: get_mitmproxy_confdir() / "mitmproxy-ca.pem",
+    # P2.6 reputation cache — holds per-asset reputation lookup results
+    # the attacker shouldn't read (architect-pass STRONG #3,
+    # 2026-06-08). chmod 600 is also applied on every cache write in
+    # `reputation/cache.py:_flush`; this entry adds the startup-sweep
+    # safety net per CLAUDE.md mandatory pattern. Source-of-truth path
+    # resolver lives in attack_surface/reputation/config.py.
+    lambda: _resolve_reputation_cache_path(),
 ]
 
 # Directories that must be owner-only traversable (chmod 700).
@@ -681,6 +688,15 @@ _PROTECTED_DIRS_700 = [
     lambda: get_cert_dir(),
     lambda: get_mitmproxy_confdir(),
 ]
+
+
+def _resolve_reputation_cache_path():
+    """Lazy import — `attack_surface.reputation.config` imports back
+    from `config` (no cycle) but we keep the import lazy here so
+    `security` doesn't pull in the reputation module at startup."""
+    from claude_monitoring.attack_surface.reputation.config import get_reputation_cache_path
+
+    return get_reputation_cache_path()
 
 
 def enforce_permissions() -> list[str]:

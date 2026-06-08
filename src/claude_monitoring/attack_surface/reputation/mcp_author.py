@@ -10,18 +10,35 @@ merged code enforces. ``asset.name`` is the user's registration key
 (trivially spoofable). ``args[0]`` is the package/module name the
 runner executes.
 
-Pass 1: exact match of ``command`` against the YAML ``commands`` list.
-Pass 2: substring + fnmatch of ``args[0]`` against the YAML
-``package_patterns`` list.
+**Two-tier match (tightened 2026-06-08 after architect-pass BLOCKER #1):**
 
-Unverified = neither pass produces a match → ``present=False``
-(``+10`` modifier fires).
+- **Pass 1 — privileged_commands:** exact match of ``command`` against
+  the curated ``privileged_commands`` list. A privileged command (e.g.,
+  the Anthropic-published ``claude-mcp`` runner) carries standalone
+  trust and verifies the asset.
+
+- **Pass 2 — generic_runners + package_patterns:** when ``command`` is
+  in the ``generic_runners`` list (``npx``, ``uvx``, ``python``, etc.),
+  the runner alone is NOT a trust signal. The asset verifies only when
+  ``args[0]`` (the package/module the runner executes) substring-or-
+  fnmatch matches one of the curated ``package_patterns``.
+
+  WHY this matters: an adversarial MCP server with
+  ``command: npx, args: ["evil-package"]`` would slip past a
+  command-only check because ``npx`` is on the recognized list. The
+  trust signal in that scenario is the PACKAGE the runner executes,
+  not the runner itself.
+
+Unverified = neither pass matches → ``present=False`` (``+10`` modifier
+fires).
 
 **Inversion fix (judge):** loading the YAML fails (missing /
-unparseable / wrong shape) → log CRITICAL + treat ALL assets as
-unverified for the scan (fail-CLOSED here is acceptable because
-"unverified" is a defensive default — it's the OPPOSITE of fail-open
-for in-flight network calls).
+unparseable / wrong shape) → log CRITICAL ONCE + latch
+``_load_failed=True`` so subsequent lookups in the same scan don't
+re-attempt the load (architect-pass STRONG #2). Defensive default
+returns ``LOOKUP_FAILED`` — the +10 does NOT fire on load failure
+(fail-open in the modifier sense; the unverified-by-default posture
+applies only when the curator list is present and a lookup misses).
 """
 
 from __future__ import annotations
@@ -47,14 +64,18 @@ class MCPAuthorReputationClient:
     """Loads + caches the curator list, then matches per-asset.
 
     The curator list loads once per scan (``ensure_loaded``); subsequent
-    lookups are pure dict + fnmatch ops.
+    lookups are pure set + fnmatch ops. A load failure latches so the
+    CRITICAL log fires once, not once per MCP asset (architect-pass
+    STRONG #2).
     """
 
     def __init__(self, curator_path: Path = DEFAULT_CURATOR_PATH) -> None:
         self._path = curator_path
-        self._commands: set[str] = set()
+        self._privileged_commands: set[str] = set()
+        self._generic_runners: set[str] = set()
         self._package_patterns: list[str] = []
         self._loaded = False
+        self._load_failed = False
 
     def lookup(self, command: str | None, first_arg: str | None) -> ReputationResult:
         """Match ``(command, first_arg)`` against the curator list.
@@ -63,22 +84,26 @@ class MCPAuthorReputationClient:
         Missing fields cannot match → the asset reads as unverified.
         """
         self._ensure_loaded()
-        if not self._loaded:
-            # YAML load failed at startup; defensive default = unverified
+        if self._load_failed:
             return ReputationResult(
                 signal=ReputationSignal.MCP_AUTHOR_UNVERIFIED,
                 present=None,
                 reason=UnavailableReason.LOOKUP_FAILED,
             )
+        # Pass 1: privileged command — standalone trust
+        if isinstance(command, str) and command in self._privileged_commands:
+            return ReputationResult(
+                signal=ReputationSignal.MCP_AUTHOR_UNVERIFIED,
+                present=True,
+                downloads=None,
+            )
+        # Pass 2: generic runner + curated package pattern (BOTH required)
         verified = False
-        if isinstance(command, str) and command in self._commands:
-            # Pass 1 fired — but only meaningful in combination with
-            # the package pattern; a bare `npx` is not trusted.
-            # Architect pick: treat Pass 1 + Pass 2 as independent;
-            # EITHER fires verified.
-            # (For `npx`-style runners, Pass 2 narrows the trust.)
-            verified = True
-        if not verified and isinstance(first_arg, str):
+        if (
+            isinstance(command, str)
+            and command in self._generic_runners
+            and isinstance(first_arg, str)
+        ):
             for pattern in self._package_patterns:
                 if fnmatch.fnmatchcase(first_arg, pattern):
                     verified = True
@@ -90,7 +115,9 @@ class MCPAuthorReputationClient:
         )
 
     def _ensure_loaded(self) -> None:
-        if self._loaded:
+        """Load the YAML on first call. Latches success OR failure so
+        repeated lookups within a scan never re-read the file."""
+        if self._loaded or self._load_failed:
             return
         try:
             validate_path(self._path, root=self._path.parent, check_size=True, max_size_mb=1.0)
@@ -100,27 +127,32 @@ class MCPAuthorReputationClient:
                 "mcp-trusted-authors.yaml load failed: %s; all MCP assets default to unverified",
                 exc,
             )
+            self._load_failed = True
             return
-        # safe_yaml_load raises yaml.YAMLError + subclasses; match the
-        # P2.5 rules.py precedent (broad Exception catch on parse).
         try:
             payload = safe_yaml_load(raw)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — broad parse-error catch, P2.5 rules.py precedent
             logger.critical(
                 "mcp-trusted-authors.yaml parse failed: %s; all MCP assets default to unverified",
                 exc,
             )
+            self._load_failed = True
             return
         if not isinstance(payload, dict):
             logger.critical(
                 "mcp-trusted-authors.yaml top-level not a dict (got %s); defensive default",
                 type(payload).__name__,
             )
+            self._load_failed = True
             return
-        commands = payload.get("commands", [])
+        privileged = payload.get("privileged_commands", [])
+        runners = payload.get("generic_runners", [])
         patterns = payload.get("package_patterns", [])
-        if not isinstance(commands, list) or not isinstance(patterns, list):
+        if not (
+            isinstance(privileged, list) and isinstance(runners, list) and isinstance(patterns, list)
+        ):
             logger.critical("mcp-trusted-authors.yaml shape invalid; defensive default")
+            self._load_failed = True
             return
         # Forbid `*` as a pattern — that would trust everything.
         cleaned_patterns: list[str] = []
@@ -129,10 +161,14 @@ class MCPAuthorReputationClient:
                 logger.warning("mcp-trusted-authors.yaml pattern %r is not str; skipping", p)
                 continue
             if p == "*":
-                logger.critical("mcp-trusted-authors.yaml pattern '*' forbidden; defensive default")
+                logger.critical(
+                    "mcp-trusted-authors.yaml pattern '*' forbidden; defensive default"
+                )
+                self._load_failed = True
                 return
             cleaned_patterns.append(p)
-        self._commands = {c for c in commands if isinstance(c, str)}
+        self._privileged_commands = {c for c in privileged if isinstance(c, str)}
+        self._generic_runners = {c for c in runners if isinstance(c, str)}
         self._package_patterns = cleaned_patterns
         self._loaded = True
 

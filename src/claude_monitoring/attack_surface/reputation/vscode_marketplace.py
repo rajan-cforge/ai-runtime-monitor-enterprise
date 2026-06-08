@@ -45,6 +45,13 @@ _FLAGS_INCLUDE_STATISTICS: int = 914
 
 
 class VSCodeMarketplaceReputationClient:
+    """VSCode Marketplace ``extensionquery`` POST client.
+
+    DORMANT in P2.6 — the dispatcher gates this client behind
+    ``reputation.chrome_vscode_enabled`` (default False). Flipped True
+    by the PR that lands managed-install detection (P3.1).
+    """
+
     def lookup(self, extension_identifier: str) -> ReputationResult:
         """Query the marketplace for ``extension_identifier`` (a
         ``publisher.name`` string, e.g. ``ms-python.python``)."""

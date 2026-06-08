@@ -1,19 +1,24 @@
 # config/mcp-trusted-authors.yaml — curated MCP-author trust list (P2.6).
 #
-# Match rule (architect pick, ratified 2026-06-08):
-#   Two-pass; an MCP server is "verified" if EITHER pass matches.
+# Match rule (architect pick, ratified 2026-06-08; tightened 2026-06-08
+# after architect-pass BLOCKER #1):
 #
-#   Pass 1 — commands: exact string match of the MCP server's
-#     `asset.current_state['command']` against the `commands` list.
-#     Use this for runner commands that signal "managed by a known
-#     package ecosystem" — e.g., `npx` (npm), `uvx` (PyPI Anthropic-owned
-#     runners). On its own, `npx` does not mean trusted, but combined
-#     with Pass 2 it gates which package is actually trusted.
+#   An MCP server is "verified" if EITHER:
 #
-#   Pass 2 — package_patterns: substring or fnmatch against
-#     `asset.current_state['args'][0]` (the package/module name on the
-#     command line). This is the load-bearing identity signal — the
-#     package name uniquely identifies the publisher.
+#   Pass 1 — privileged_commands: exact string match of the MCP server's
+#     `asset.current_state['command']` against `privileged_commands`.
+#     A privileged command grants standalone trust (e.g.,
+#     publisher-installed `claude-mcp` runner). Reserved for commands
+#     that ARE a trust signal on their own — not generic runners.
+#
+#   Pass 2 — `command` in `generic_runners` AND
+#            `asset.current_state['args'][0]` substring/fnmatch against
+#            one of `package_patterns`. The package name is the
+#            load-bearing identity signal — the runner alone (`npx`,
+#            `uvx`, …) is NOT a trust signal; the package executed by
+#            the runner IS. Without Pass 2 the runner could carry any
+#            adversarial package, so the runner must combine with a
+#            curated package pattern to verify.
 #
 # Curator-list discipline:
 # - PRs to this file MUST be human-reviewed; no auto-merge.
@@ -21,16 +26,17 @@
 #   is recoverable; false-positive (malicious MCP trusted) is not.
 # - Patterns should be specific to a publisher, not a category.
 #   `package_patterns: ["*"]` is forbidden by the loader.
-#
-# Updating this file does not require a code change. Reload on next
-# Vigil scan.
+# - A command in `privileged_commands` grants trust on its own — be
+#   extra conservative about additions here.
 
-commands:
-  # Anthropic-published runners
+privileged_commands:
+  # Anthropic-published runner that ships with Claude tooling.
+  # Its presence is itself a publisher signal — no Pass-2 required.
   - claude-mcp
-  # Generic runners only become trust signals via Pass 2 (commands +
-  # package_patterns). `npx` and `uvx` are listed here so the loader
-  # accepts them; the actual trust is gated by package_patterns.
+
+generic_runners:
+  # Generic invocation runners. A command alone does NOT trust the MCP
+  # server; it must ALSO have a package matching a curated pattern.
   - npx
   - uvx
   - python
