@@ -719,6 +719,17 @@ class ProxyManager:
         except (OSError, subprocess.SubprocessError):
             return False
 
+    def was_explicitly_stopped(self) -> bool:
+        """True iff :meth:`stop` has been called on this manager.
+
+        Used by the watchdog (``monitor._watchdog_loop``) to distinguish
+        "mitmdump crashed, please restart it" from "user asked for
+        shutdown, do NOT respawn it." Without this guard the watchdog
+        resurrects mitmdump moments after `--stop` kills it, leaving an
+        orphan that survives the monitor process. Issue #98 (4th gap).
+        """
+        return self._stopped
+
     def is_alive(self) -> bool:
         """Return True if mitmdump is running (via Popen.poll() or PID file)."""
         if self._stopped:

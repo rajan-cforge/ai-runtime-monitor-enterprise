@@ -981,15 +981,25 @@ class TestReusableHTTPServer:
 
         assert issubclass(ReusableHTTPServer, HTTPServer)
 
-    def test_start_monitoring_defines_reusable_server(self):
-        """Verify that start_monitoring's source contains ReusableHTTPServer with allow_reuse_address."""
-        import inspect
+    def test_reusable_server_is_module_level(self):
+        """Verify ``ReusableHTTPServer`` lives at module scope (not inside
+        ``start_monitoring``) so tests can import + exercise it directly.
 
-        from claude_monitoring.monitor import start_monitoring
+        Moved in fix/dashboard-threading-http-server (issue #98 3rd gap)
+        — was previously a local class inside the function, which made
+        the threading regression test impossible to write."""
+        # Re-exported from monitor for back-compat, but defined in
+        # dashboard_server. Either import path works.
+        from claude_monitoring.dashboard_server import (
+            ReusableHTTPServer as FromDashboard,
+        )
+        from claude_monitoring.monitor import (
+            ReusableHTTPServer as FromMonitor,
+        )
 
-        source = inspect.getsource(start_monitoring)
-        assert "class ReusableHTTPServer" in source
-        assert "allow_reuse_address = True" in source
+        assert FromDashboard is FromMonitor
+        assert FromDashboard.__module__ == "claude_monitoring.dashboard_server"
+        assert FromDashboard.allow_reuse_address is True
 
 
 # ─────────────────────────────────────────────────────────────
