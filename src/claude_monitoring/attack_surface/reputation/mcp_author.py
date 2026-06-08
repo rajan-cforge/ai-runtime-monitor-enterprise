@@ -131,7 +131,10 @@ class MCPAuthorReputationClient:
             return
         try:
             payload = safe_yaml_load(raw)
-        except Exception as exc:  # noqa: BLE001 — broad parse-error catch, P2.5 rules.py precedent
+        except Exception as exc:
+            # Broad parse-error catch — safe_yaml_load can raise
+            # yaml.YAMLError + subclasses. Matches the P2.5 rules.py
+            # precedent for curator-list YAML loading.
             logger.critical(
                 "mcp-trusted-authors.yaml parse failed: %s; all MCP assets default to unverified",
                 exc,
