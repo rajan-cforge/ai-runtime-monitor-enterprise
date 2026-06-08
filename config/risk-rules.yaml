@@ -122,6 +122,14 @@
     nist_csf: ID.SC-2
     mitre_attack: T1195
 
+# Citation rationale (per P2.5.a1 verdict, 2026-06-07): the pattern
+# proves credential access in an unrecognized component but does NOT
+# check for any network capability, so MITRE T1041 (Exfiltration Over
+# C2 Channel) would presume a channel the rule never establishes.
+# T1552 (Unsecured Credentials) and PR.DS-5 (data leak protections)
+# match what the pattern actually proves: a credential surface exposed
+# to a component Vigil cannot reason about. Differentiates from r8
+# (any unknown component) by the credential dimension.
 - id: rule_exfil_capable_unrecognized
   pattern:
     unknown_capability: true
@@ -137,5 +145,5 @@
     surface. Composes with the spec §6.8 floor (40) per §6.9
     re-assertion to land at HIGH (60).
   framework_ref:
-    nist_csf: ID.RA-3
-    mitre_attack: T1041
+    nist_csf: PR.DS-5
+    mitre_attack: T1552
