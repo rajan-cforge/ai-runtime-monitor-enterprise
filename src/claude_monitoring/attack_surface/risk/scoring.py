@@ -98,6 +98,15 @@ class RiskScoreResult:
       spec §6.4. Both matched and suppressed-by-max-wins rules
       appear here; ``final_score`` reflects only the winning
       modifier.
+    - ``applied_reputation``: additive contract extension landed in
+      P2.6. Empty when no reputation lookup ran. When the reputation
+      dispatcher runs, AT MOST ONE entry is present (one signal per
+      asset.source) with shape ``{signal, modifier_applied, present,
+      reason, downloads}``. Hard requirement #2 (Rajan 2026-06-08
+      addendum): the ``reason`` field is preserved end-to-end so the
+      P7.9 popover renders ``rate_limited`` / ``budget_exceeded`` /
+      ``lookup_failed`` / ``dormant`` distinctly from "checked clean"
+      — silence is never all-clear.
     """
 
     final_score: int
@@ -106,6 +115,7 @@ class RiskScoreResult:
     contributions: dict[str, float] = field(default_factory=dict)
     weights: dict[str, float] = field(default_factory=dict)
     applied_rules: list[dict] = field(default_factory=list)
+    applied_reputation: list[dict] = field(default_factory=list)
 
 
 def _compute_permission_breadth(ontology_tags: frozenset[OntologyCategory]) -> float:
