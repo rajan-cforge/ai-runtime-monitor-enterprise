@@ -40,7 +40,7 @@ import threading
 import time
 from collections import deque
 from datetime import datetime, timezone
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
@@ -2027,6 +2027,11 @@ class ChromeHistoryWatcher:
 # ─────────────────────────────────────────────────────────────
 # SECTION 8: WEB DASHBOARD SERVER
 # ─────────────────────────────────────────────────────────────
+
+# `ReusableHTTPServer` (the threaded dashboard server) lives in
+# `dashboard_server.py` — see issue #98 (3rd gap). Re-exported here for
+# back-compat with consumers that import it from `monitor`.
+from claude_monitoring.dashboard_server import ReusableHTTPServer  # noqa: E402
 
 
 class DashboardHandler(BaseHTTPRequestHandler):
@@ -4912,19 +4917,9 @@ def start_monitoring(cp_url=None, cp_api_key=None):
     else:
         print("  Chrome AI watcher: Chrome history not found")
 
-    # Web Dashboard
-    class ReusableHTTPServer(HTTPServer):
-        allow_reuse_address = True
-
-        def handle_error(self, request, client_address):
-            """Suppress BrokenPipeError tracebacks from disconnected clients."""
-            import sys
-
-            exc_type = sys.exc_info()[0]
-            if exc_type is BrokenPipeError:
-                return
-            super().handle_error(request, client_address)
-
+    # Web Dashboard — `ReusableHTTPServer` lives in `dashboard_server.py`
+    # (re-exported at module top). Issue #98: now ThreadingHTTPServer-based
+    # so long-polls don't starve siblings.
     server = bind_with_retry(
         lambda: ReusableHTTPServer((get_bind_address(), DASHBOARD_PORT), DashboardHandler),
         port=DASHBOARD_PORT,
