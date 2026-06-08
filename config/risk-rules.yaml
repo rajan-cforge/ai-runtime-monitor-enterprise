@@ -1,9 +1,149 @@
 # config/risk-rules.yaml — curated risk rules for Vigil v0.2.2.
 #
-# Spec §6.2 schema. P2.4 ships an empty rule set; P2.5 ships the curated
-# ≥ 8 rules with NIST CSF + MITRE ATT&CK citations.
+# Spec §6.2 schema. P2.5 ships 9 curated rules with NIST CSF + MITRE
+# ATT&CK citations. Rule weighting + the exfil-unrecognized rule are
+# ratified per work-log/2026-06-07-P2.5-ratification.md
+# (Q1 = +20, Q2 = +20, Q3 = defaults, Path A tightened).
 #
-# The exfil-capable rule (unknown_capability + secrets_access) is
-# NEEDS-RAJAN per CONTRACT §7 and lands in P2.5 only after Rajan
-# rules on weighting (Phase A §7).
-[]
+# Schema gate accepts ONLY predicates in
+# claude_monitoring.attack_surface.risk.rules.LIVE_PREDICATES
+# = {has_tags, source_in, unknown_capability}. Forward-compat predicates
+# (cve_severity, integration_sensitivity, package_in_malicious_list)
+# land with their wiring PR (P4.1 / P3.7 / Phase 3).
+#
+# Citation discipline: NIST CSF v1.1 subcategory IDs; MITRE ATT&CK
+# enterprise technique IDs. Citations name the SUBCATEGORY/TECHNIQUE
+# most directly mapping to the capability combination, not a parent
+# category.
+
+- id: rule_shell_filesystem_combo_001
+  pattern:
+    has_tags: [shell_execute, file_system_write]
+  modifier: 10
+  explanation: >-
+    Asset can execute shell commands AND write to the host file system.
+    This combination enables dropper / persistence patterns: a compromised
+    or coerced asset can stage payloads on disk via the file system and
+    invoke them via the shell.
+  framework_ref:
+    nist_csf: PR.PT-3
+    mitre_attack: T1059
+
+- id: rule_shell_network_combo_001
+  pattern:
+    has_tags: [shell_execute, network_unrestricted]
+  modifier: 15
+  explanation: >-
+    Asset can execute shell commands AND reach arbitrary network hosts.
+    The shell-plus-egress combination is the canonical command-and-control
+    surface: outbound traffic carries arbitrary shell results, inbound
+    traffic carries arbitrary shell input.
+  framework_ref:
+    nist_csf: PR.PT-4
+    mitre_attack: T1071
+
+- id: rule_exfil_capable_001
+  pattern:
+    has_tags: [data_exfiltration_capable]
+  modifier: 15
+  explanation: >-
+    Asset is data-exfiltration capable per spec §5.4 derivation:
+    (secrets_access OR file_system_read) AND (network_unrestricted OR
+    network_scoped). A single compromised request from such an asset
+    can ship sensitive data to an attacker-controlled endpoint.
+  framework_ref:
+    nist_csf: PR.DS-5
+    mitre_attack: T1567
+
+- id: rule_secrets_network_001
+  pattern:
+    has_tags: [secrets_access, network_unrestricted]
+  modifier: 20
+  explanation: >-
+    Asset can read secrets (credentials, tokens, cookies) AND reach
+    arbitrary network hosts. This is the credential-exfiltration surface:
+    a single coerced request egresses credentials to an attacker
+    endpoint, after which the attacker reuses the credential at will.
+  framework_ref:
+    nist_csf: PR.DS-5
+    mitre_attack: T1567
+
+- id: rule_shell_secrets_combo_001
+  pattern:
+    has_tags: [shell_execute, secrets_access]
+  modifier: 20
+  explanation: >-
+    Asset can execute shell commands AND read secrets. Shell access
+    expands the secret-access reach far beyond declared APIs: a shell
+    can grep config files, env vars, keychains, and dotfiles for any
+    secret the asset's process can read, violating least privilege.
+  framework_ref:
+    nist_csf: PR.AC-4
+    mitre_attack: T1552
+
+- id: rule_filesystem_read_network_001
+  pattern:
+    has_tags: [file_system_read, network_unrestricted]
+  modifier: 15
+  explanation: >-
+    Asset can read host files AND reach arbitrary network hosts. The
+    read-plus-egress combination is a generic data-exfil surface: any
+    file the asset's process can read may be shipped to an
+    attacker-controlled endpoint.
+  framework_ref:
+    nist_csf: PR.DS-5
+    mitre_attack: T1567
+
+- id: rule_code_execution_network_001
+  pattern:
+    has_tags: [code_execution, network_unrestricted]
+  modifier: 15
+  explanation: >-
+    Asset can execute arbitrary code in the host AI agent's process
+    AND reach arbitrary network hosts. The combined capability is the
+    operational profile of a remote-access tool: inbound network can
+    deliver code; the asset executes it; outbound network exfiltrates
+    results.
+  framework_ref:
+    nist_csf: PR.PT-4
+    mitre_attack: T1071
+
+- id: rule_unknown_capability_sharpener_001
+  pattern:
+    unknown_capability: true
+  modifier: 5
+  explanation: >-
+    Asset's capabilities are not recognized by Vigil's ontology (the
+    spec §6.8 unknown-capability path fired). Sharpens the unknown-
+    capability MEDIUM floor (40) into the upper half of MEDIUM, since
+    an unrecognized component is a supply-chain visibility gap until
+    v0.3 introspection or a manifest analysis lands.
+  framework_ref:
+    nist_csf: ID.SC-2
+    mitre_attack: T1195
+
+# Citation rationale (per P2.5.a1 verdict, 2026-06-07): the pattern
+# proves credential access in an unrecognized component but does NOT
+# check for any network capability, so MITRE T1041 (Exfiltration Over
+# C2 Channel) would presume a channel the rule never establishes.
+# T1552 (Unsecured Credentials) and PR.DS-5 (data leak protections)
+# match what the pattern actually proves: a credential surface exposed
+# to a component Vigil cannot reason about. Differentiates from r8
+# (any unknown component) by the credential dimension.
+- id: rule_exfil_capable_unrecognized
+  pattern:
+    unknown_capability: true
+    has_tags: [secrets_access]
+  modifier: 20
+  explanation: >-
+    Asset is unrecognized by Vigil's ontology AND declares
+    secrets_access via its installation surface. An unrecognized
+    component with credential access is the worst pairing of the
+    unknown-capability path: Vigil cannot reason about how the
+    component uses those credentials, and the historical compromise
+    pattern (typosquats, dependency confusion) targets exactly this
+    surface. Composes with the spec §6.8 floor (40) per §6.9
+    re-assertion to land at HIGH (60).
+  framework_ref:
+    nist_csf: PR.DS-5
+    mitre_attack: T1552
