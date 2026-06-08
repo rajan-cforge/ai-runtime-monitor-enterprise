@@ -59,15 +59,12 @@ class TestPass2GenericRunnerRequiresPackagePattern:
         )
         assert result.present is True
 
-    def test_generic_runner_with_uncurated_package_is_unverified(
-        self, tmp_path: Path
-    ) -> None:
+    def test_generic_runner_with_uncurated_package_is_unverified(self, tmp_path: Path) -> None:
         """The adversarial case — npx + evil-package MUST NOT verify."""
         client = MCPAuthorReputationClient(_write_curator(tmp_path, _VALID_YAML))
         result = client.lookup(command="npx", first_arg="evil-package")
         assert result.present is False, (
-            "command in generic_runners alone must NOT verify; "
-            "the runner must combine with a curated package pattern"
+            "command in generic_runners alone must NOT verify; the runner must combine with a curated package pattern"
         )
 
     def test_generic_runner_with_no_args_is_unverified(self, tmp_path: Path) -> None:
@@ -131,9 +128,7 @@ class TestLoadFailures:
         assert result.present is None
         assert result.reason is UnavailableReason.LOOKUP_FAILED
 
-    def test_load_failure_latches_no_repeated_critical_log(
-        self, tmp_path: Path, caplog
-    ) -> None:
+    def test_load_failure_latches_no_repeated_critical_log(self, tmp_path: Path, caplog) -> None:
         """Architect-pass STRONG #2 fix: a failed load logs CRITICAL once,
         not once per asset. The `_load_failed` latch prevents re-reading
         the file on every lookup."""
@@ -144,9 +139,7 @@ class TestLoadFailures:
                 result = client.lookup(command="claude-mcp", first_arg=None)
                 assert result.reason is UnavailableReason.LOOKUP_FAILED
         critical_count = sum(1 for r in caplog.records if r.levelname == "CRITICAL")
-        assert critical_count == 1, (
-            f"expected CRITICAL log exactly once across 5 lookups, got {critical_count}"
-        )
+        assert critical_count == 1, f"expected CRITICAL log exactly once across 5 lookups, got {critical_count}"
 
 
 class TestShippedCuratorListLoads:

@@ -99,11 +99,7 @@ class MCPAuthorReputationClient:
             )
         # Pass 2: generic runner + curated package pattern (BOTH required)
         verified = False
-        if (
-            isinstance(command, str)
-            and command in self._generic_runners
-            and isinstance(first_arg, str)
-        ):
+        if isinstance(command, str) and command in self._generic_runners and isinstance(first_arg, str):
             for pattern in self._package_patterns:
                 if fnmatch.fnmatchcase(first_arg, pattern):
                     verified = True
@@ -151,9 +147,7 @@ class MCPAuthorReputationClient:
         privileged = payload.get("privileged_commands", [])
         runners = payload.get("generic_runners", [])
         patterns = payload.get("package_patterns", [])
-        if not (
-            isinstance(privileged, list) and isinstance(runners, list) and isinstance(patterns, list)
-        ):
+        if not (isinstance(privileged, list) and isinstance(runners, list) and isinstance(patterns, list)):
             logger.critical("mcp-trusted-authors.yaml shape invalid; defensive default")
             self._load_failed = True
             return
@@ -164,9 +158,7 @@ class MCPAuthorReputationClient:
                 logger.warning("mcp-trusted-authors.yaml pattern %r is not str; skipping", p)
                 continue
             if p == "*":
-                logger.critical(
-                    "mcp-trusted-authors.yaml pattern '*' forbidden; defensive default"
-                )
+                logger.critical("mcp-trusted-authors.yaml pattern '*' forbidden; defensive default")
                 self._load_failed = True
                 return
             cleaned_patterns.append(p)

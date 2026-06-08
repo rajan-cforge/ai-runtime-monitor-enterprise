@@ -30,6 +30,7 @@ def get_reputation_cache_path() -> Path:
     on the same path (architect-pass STRONG #3, 2026-06-08)."""
     return get_output_dir() / "reputation-cache.json"
 
+
 # ---------------------------------------------------------------------------
 # Kill-switch (item 7 ratified — env var only)
 # ---------------------------------------------------------------------------
