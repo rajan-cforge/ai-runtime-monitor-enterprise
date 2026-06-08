@@ -65,6 +65,22 @@ ALLOWED_HOSTNAMES: frozenset[str] = frozenset(
         "localhost",
         "127.0.0.1",
         "::1",
+        # P2.6 — Source reputation (Rajan-ratified 2026-06-08,
+        # work-log/2026-06-08-P2.6-ratification.md). All lookups
+        # transmit only the asset identifier (package name, extension
+        # ID, publisher.name) — no machine ID, no user ID, no install
+        # path, no credentials. CONTRACT §1a: validation, not
+        # telemetry. Listed alongside the spec §10.3 amendment.
+        # Note: Chrome / VSCode hosts are present so the source-scan
+        # gate accepts the dispatcher's code path; runtime gating
+        # behind `reputation.chrome_vscode_enabled` (default False)
+        # keeps the actual calls dormant until P3.1/P3.2.
+        "registry.npmjs.org",  # npm: package existence + metadata
+        "api.npmjs.org",  # npm: weekly download counts
+        "pypi.org",  # PyPI: package existence
+        "pypistats.org",  # PyPI: weekly download counts (3rd-party)
+        "chrome.google.com",  # Chrome Web Store: HEAD/body check (dormant)
+        "marketplace.visualstudio.com",  # VSCode Marketplace: extensionquery (dormant)
     }
 )
 """Hostnames the attack-surface package is permitted to talk to.
@@ -168,22 +184,92 @@ def _dotted_call_name(call: ast.Call, alias_map: dict[str, str]) -> str | None:
 
 
 def _extract_url_literal(call: ast.Call) -> str | None:
-    """Return the first positional-arg or ``url=`` kwarg URL literal.
+    """Return the literal URL prefix of the first positional arg or
+    ``url=`` kwarg, if discoverable.
 
-    Returns the literal string if found, or ``None`` if the URL is
-    computed at runtime (f-string, variable, expression). Runtime URLs
-    are flagged separately — the gate can't statically verify them.
+    Accepts three shapes (auditability preserved by always anchoring on
+    a literal scheme+host prefix):
+
+    1. Bare string literal: ``urlopen("https://example.org/foo")``.
+    2. f-string: ``urlopen(f"https://example.org/{pkg}")`` —
+       leftmost ``FormattedValue``-free segment captured.
+    3. Binary concatenation: ``urlopen("https://example.org/" + pkg)`` —
+       leftmost Constant operand of a ``BinOp(Add)`` captured.
+
+    Returns the literal string prefix (the gate only inspects the
+    hostname, so the prefix is sufficient), or ``None`` if no literal
+    is discoverable (purely runtime expression).
     """
-    # First positional arg
+    arg: ast.expr | None = None
     if call.args:
-        first = call.args[0]
+        arg = call.args[0]
+    if arg is None:
+        for kw in call.keywords:
+            if kw.arg == "url":
+                arg = kw.value
+                break
+    if arg is None:
+        return None
+    return _leftmost_str_literal(arg)
+
+
+def _leftmost_str_literal(node: ast.expr) -> str | None:
+    """Return the leftmost string-literal prefix of ``node`` if found.
+
+    Recurses into:
+    - ``BinOp(Add)`` (string concatenation) — checks the left operand.
+    - ``JoinedStr`` (f-string) — returns the leading ``Constant`` chunk
+      before any ``FormattedValue``.
+    - ``Call`` whose func resolves to one of the wrapper constructors
+      in :data:`URL_WRAPPER_CALLS` (e.g., ``Request("https://...")``);
+      checks that wrapper's first positional arg as if it were the
+      original URL. This lets ``urlopen(Request("https://example.org/" + var))``
+      be statically verified by reading the literal prefix on Request's
+      first arg.
+    """
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        return _leftmost_str_literal(node.left)
+    if isinstance(node, ast.JoinedStr) and node.values:
+        # f-string: only accept if the leading literal already contains a
+        # complete ``scheme://hostname`` (i.e., the interpolation is in
+        # the path/query, not the hostname). ``f"https://example.org/{p}"``
+        # is fine; ``f"https://{host}/api"`` is correctly flagged as
+        # runtime-computed because the hostname itself is interpolated.
+        first = node.values[0]
         if isinstance(first, ast.Constant) and isinstance(first.value, str):
-            return first.value
-    # url= kwarg
-    for kw in call.keywords:
-        if kw.arg == "url" and isinstance(kw.value, ast.Constant) and isinstance(kw.value.value, str):
-            return kw.value.value
+            candidate = first.value
+            host = _hostname_from_url(candidate)
+            if host:
+                return candidate
+    if isinstance(node, ast.Call):
+        func_name = _func_attr_name(node.func)
+        if func_name in URL_WRAPPER_CALLS and node.args:
+            return _leftmost_str_literal(node.args[0])
     return None
+
+
+def _func_attr_name(func: ast.expr) -> str | None:
+    """``ast.Attribute`` or ``ast.Name`` → dotted name string."""
+    if isinstance(func, ast.Attribute):
+        prefix = _func_attr_name(func.value)
+        return f"{prefix}.{func.attr}" if prefix else func.attr
+    if isinstance(func, ast.Name):
+        return func.id
+    return None
+
+
+URL_WRAPPER_CALLS: frozenset[str] = frozenset(
+    {
+        # Calls whose first positional arg is a URL — the gate
+        # transparently looks inside these so a literal-prefix
+        # concat survives the unwrap (e.g.,
+        # ``urlopen(Request("https://example.org/" + pkg))``).
+        "Request",
+        "urllib.request.Request",
+    }
+)
 
 
 def _hostname_from_url(url: str) -> str | None:

@@ -111,10 +111,10 @@ src/claude_monitoring/security.py:60: public function 'get_token_path' missing d
 src/claude_monitoring/security.py:635: empty 'except Exception: pass' (silently swallowing errors)
 src/claude_monitoring/security.py:64: public function 'get_setup_marker_path' missing docstring
 src/claude_monitoring/security.py:650: public function 'untrust_ca_cert' missing docstring
-src/claude_monitoring/security.py:702: empty 'except Exception: pass' (silently swallowing errors)
-src/claude_monitoring/security.py:717: empty 'except Exception: pass' (silently swallowing errors)
-src/claude_monitoring/security.py:740: empty 'except Exception: pass' (silently swallowing errors)
-src/claude_monitoring/security.py:747: empty 'except Exception: pass' (silently swallowing errors)
+src/claude_monitoring/security.py:718: empty 'except Exception: pass' (silently swallowing errors)
+src/claude_monitoring/security.py:733: empty 'except Exception: pass' (silently swallowing errors)
+src/claude_monitoring/security.py:756: empty 'except Exception: pass' (silently swallowing errors)
+src/claude_monitoring/security.py:763: empty 'except Exception: pass' (silently swallowing errors)
 src/claude_monitoring/status.py:621: empty 'except Exception: pass' (silently swallowing errors)
 src/claude_monitoring/status.py:690: empty 'except Exception: pass' (silently swallowing errors)
 src/claude_monitoring/status.py:714: empty 'except Exception: pass' (silently swallowing errors)
