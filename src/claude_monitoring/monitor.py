@@ -4974,7 +4974,13 @@ def start_monitoring(cp_url=None, cp_api_key=None):
         while not stop_event.is_set():
             write_heartbeat()
             pm = globals().get("_PROXY_MANAGER")
-            if pm is not None and not pm.is_alive():
+            # Issue #98 (4th gap): if the user invoked `--stop`, ProxyManager.stop()
+            # set ``_stopped = True`` and SIGTERM'd mitmdump. WITHOUT this guard
+            # the watchdog sees mitmdump's pid gone, can't distinguish "user
+            # asked for shutdown" from "mitmdump crashed," and respawns it as
+            # an orphan that outlives the monitor process. With the guard,
+            # explicit shutdown is honored and the watchdog stays out of it.
+            if pm is not None and not pm.is_alive() and not pm.was_explicitly_stopped():
                 healthy_streak = 0
                 print("\n  ⚠ Watchdog: mitmdump died — disabling system proxy")
                 try:
@@ -4987,7 +4993,7 @@ def start_monitoring(cp_url=None, cp_api_key=None):
                     print("  ✅ Watchdog: mitmdump restarted")
                 else:
                     print("  ❌ Watchdog: max restart attempts reached — giving up")
-            elif pm is not None:
+            elif pm is not None and not pm.was_explicitly_stopped():
                 healthy_streak += 1
                 if healthy_streak >= HEALTHY_TICKS_BEFORE_RESET:
                     pm.reset_restart_count()
