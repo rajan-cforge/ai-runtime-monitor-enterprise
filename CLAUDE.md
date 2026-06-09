@@ -101,7 +101,21 @@ A PR is C4 if it is C4 on either axis — neither axis is subordinated.
 - **C4** — auth, secrets, crypto, or trust boundary, OR a change to how Vigil
   fundamentally operates
 
-C3 and C4 PRs require human diff review even if all agents pass.
+**Human diff review — keyed to the security axis, not the tier label (2026-06-08).**
+Human diff review is required when a PR is C4 on the **security axis** — it touches
+(a) auth / credential or token comparison / session / access-control routes;
+(b) crypto / CA generation / signing / key material;
+(c) secret handling / redaction / the sanitization path; or
+(d) a NEW outbound data flow carrying findings/captured content off-box, or a new trust
+boundary that receives data.
+
+A PR that is high-tier only on the **architecture / blast-radius axis** (hot path, large
+diff, new sub-package, first/Nth outbound *enrichment* call) does NOT require human review,
+provided ALL of: (i) the architect-pass ran and its findings were folded; (ii) all relevant
+CI gates are green; (iii) the vigil-loop verdict is APPROVE on the judge's independent
+re-read; (iv) empirical-ratchet evidence is present; (v) no R0 keystone item is touched.
+Otherwise → human review. Safe default: if unsure whether a change touches a security
+surface (a)–(d), treat it as security-C4 → human review.
 
 Note for v0.2.2 sprint PRs: the implementation directive
 (`~/Documents/vigil-notes/v022-implementation-directive-v1-LOCKED.md` §5)
@@ -119,3 +133,30 @@ axis under the union, classify and treat it as C4.
 - Agent definitions: `.claude/agents/`
 - Quality gate scripts: `scripts/check_*.py`
 - Local-only operational notes: `~/Documents/vigil-notes/` (NOT in repo)
+
+## vigil-notes judge/executor loop (compaction-durable)
+
+When working a v0.2.2 sprint PR you are the **executor** in the vigil-notes loop;
+Claude Desktop is the **judge**. The full protocol is the rulebook at
+`~/Documents/vigil-notes/v022/CONTRACT.md`. This section exists so the loop survives
+context compaction — it is re-loaded from this file, not from chat history.
+
+**Re-hydration — do this at the start of every task AND immediately after any context
+compaction, before taking any action:**
+
+1. Re-read `~/Documents/vigil-notes/v022/CONTRACT.md` and this section.
+2. Re-read `~/Documents/vigil-notes/v022/STATUS.md` to recover the active task, attempt,
+   phase, last verdict, and carry-forwards. Your conversation history is NOT the source
+   of truth after a compaction — these files are.
+
+**Per PR:** run Phase A → B → C (architect-pass for C3/C4), then submit and act on the
+verdict using `~/Documents/vigil-notes/v022/scripts/executor-loop.sh`
+(`submit` → `wait` → act). Verdicts: `APPROVE` / `APPROVE-WITH-FIX` / `CHANGES` /
+`NEEDS-RAJAN` (CONTRACT §6). Keep `STATUS.md` current and append one line per cycle to
+`work-log/`.
+
+**Merge gate (mechanical):** a `pre-push` hook blocks pushing a `feat/v022-pX.Y*`
+branch unless an `APPROVE`/`APPROVE-WITH-FIX` verdict for that taskid exists in the
+vigil-notes loop. Install it once with `make install-vigil-hook`. Do not set
+`VIGIL_LOOP_OVERRIDE` to bypass it except for an intentional WIP push you will not turn
+into a PR.

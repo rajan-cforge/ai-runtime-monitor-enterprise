@@ -10,7 +10,15 @@
 - [ ] **C3** feature with security implication or hot-path touch
 - [ ] **C4** auth, secrets, crypto, trust boundary
 
-C3 and C4 require human diff review even if all agents pass.
+Human diff review is required for **C4 on the security axis** (auth / secrets / crypto /
+trust boundary / new off-box data flow). A PR high-tier only on the architecture axis is
+review-satisfied by architect-pass + green CI + vigil-loop APPROVE + empirical evidence +
+no R0 touched. See `CLAUDE.md` → Criticality classification.
+
+## Hygiene (required)
+
+- [ ] No AI attribution anywhere — no `Co-Authored-By: Claude`, no "Generated with Claude
+  Code", no `claude.com/claude-code` link, no 🤖 line, in commits OR this PR description.
 
 ## Spec coverage
 
