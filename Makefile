@@ -118,3 +118,8 @@ pre-commit-run: ## Run all pre-commit hooks against every tracked file
 clean: ## Remove build artifacts
 	rm -rf dist/ build/ *.egg-info src/*.egg-info .pytest_cache .coverage htmlcov coverage.xml
 	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
+
+install-vigil-hook: ## Install vigil-notes pre-push verdict gate (run once per clone)
+	ln -sf ../../scripts/dev/vigil_verdict_gate.sh .git/hooks/pre-push
+	chmod +x scripts/dev/vigil_verdict_gate.sh
+	@echo "✓ vigil pre-push verdict gate installed"
