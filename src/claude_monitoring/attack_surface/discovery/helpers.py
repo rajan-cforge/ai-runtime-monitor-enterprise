@@ -291,6 +291,58 @@ def validate_path(
 
 
 # ---------------------------------------------------------------------------
+# list_pip_packages — `pip list --format=json` against a chosen interpreter
+# ---------------------------------------------------------------------------
+
+
+def list_pip_packages(python_bin: Path | str) -> list[dict]:
+    """Run ``<python_bin> -m pip list --format=json`` and return the parsed list.
+
+    The argv shape (`[..., "-m", "pip", "list", "--format=json"]`) is
+    pinned by the P3.3 source and the legacy
+    ``supply_chain.get_pip_packages`` regression test
+    (``tests/test_supply_chain.py:448``). Centralizing it here keeps any
+    future invocation-shape change in one place.
+
+    Launchd-safe: callers pass an absolute interpreter path; no PATH
+    lookup is performed. The ``safe_subprocess`` primitive enforces
+    ``shell=False``.
+
+    Args:
+        python_bin: Absolute path to the Python interpreter. The caller
+            is responsible for `validate_path`-ing this against a
+            ratified prefix BEFORE invocation — `list_pip_packages` does
+            NOT itself enforce a binary-trust boundary (see P3.3
+            Phase A §3a for the boundary contract).
+
+    Returns:
+        Parsed JSON list (e.g., ``[{"name": "...", "version": "..."}, ...]``).
+        Caller filters / normalizes downstream.
+
+    Raises:
+        RuntimeError: If pip exits non-zero (broken pip, missing module,
+            etc.). Sources catch this for per-venv isolation.
+        json.JSONDecodeError: If stdout is not valid JSON (corrupt pip,
+            unexpected output). Sources catch this for per-venv isolation.
+        subprocess.TimeoutExpired: If pip hangs (30s default; propagated
+            from `safe_subprocess`).
+        ValueError: From `safe_subprocess` if argv validation fails.
+    """
+    import json
+
+    result = safe_subprocess(
+        [str(python_bin), "-m", "pip", "list", "--format=json"],
+        timeout=30.0,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"pip list exited {result.returncode}: {(result.stderr or '')[:200]}")
+    parsed = json.loads(result.stdout)
+    if not isinstance(parsed, list):
+        raise TypeError(f"pip list returned non-list top level: got {type(parsed).__name__}")
+    return parsed
+
+
+# ---------------------------------------------------------------------------
 # redact_secrets_in_env
 # ---------------------------------------------------------------------------
 
