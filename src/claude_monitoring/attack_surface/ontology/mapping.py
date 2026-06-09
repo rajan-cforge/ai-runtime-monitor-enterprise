@@ -153,6 +153,22 @@ def map_python_dependency(asset: Asset) -> frozenset[OntologyCategory]:
     return frozenset()
 
 
+def map_node_package(asset: Asset) -> frozenset[OntologyCategory]:
+    """P3.5 placeholder per Q5 ratification (2026-06-06): STRUCTURAL completeness
+    only. P3.8 wires the real rules across all Phase 3 sources at once
+    (e.g., presence of `preinstall`/`postinstall` lifecycle scripts on a
+    self-asset → `code_execution` capability; cross-reference package names
+    against P4.1 OSV.dev CVE feed; declared-but-not-installed join with
+    package-lock.json). Until then this mapper returns ``frozenset()`` and
+    the asset lands at INFO band per spec §6.5 Q1.
+
+    The mapper EXISTS so the P2.2-gate CI gate
+    (``check_ontology_mapping_completeness``) passes — a registered
+    DiscoverySource without a registry entry would fail the build."""
+    del asset
+    return frozenset()
+
+
 # ---------------------------------------------------------------------------
 # MCP — simple keyword map + P2.1 scored config-only multi-signal layer
 # ---------------------------------------------------------------------------
@@ -440,6 +456,7 @@ _REGISTRY: dict[str, Callable[[Asset], frozenset[OntologyCategory]]] = {
     "chromium-extensions": map_chromium_extension,
     "python-packages": map_python_package,
     "python-project-deps": map_python_dependency,
+    "node-packages": map_node_package,
 }
 """Per-source mapping registry. Adding a new source REQUIRES adding
 an entry here — the structural completeness CI gate enforces this.
@@ -483,6 +500,7 @@ __all__ = [
     "map_claude_code_skill",
     "map_mcp_server_scored",
     "map_mcp_server_simple",
+    "map_node_package",
     "map_ollama_model",
     "map_openclaw_skill",
     "map_python_dependency",
