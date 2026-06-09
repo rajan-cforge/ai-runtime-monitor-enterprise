@@ -56,7 +56,7 @@ class TestRegistry:
     def test_all_merged_sources_registered(self) -> None:
         """Q5 structural-completeness contract: every registered discovery
         source has a mapping function. P2.0 shipped 6; P3.1 added
-        vscode-extensions."""
+        vscode-extensions; P3.2 added chromium-extensions."""
         expected = {
             "ollama-models",
             "ai-tool-versions",
@@ -65,6 +65,7 @@ class TestRegistry:
             "openclaw-skills",
             "mcp-servers",
             "vscode-extensions",
+            "chromium-extensions",
         }
         assert expected == REGISTERED_SOURCES
 
