@@ -413,6 +413,57 @@ def list_npm_global_packages(npm_bin: Path | str) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
+# brew_info_json — `brew info --json=v2 --installed`
+# ---------------------------------------------------------------------------
+
+
+def brew_info_json(brew_bin: Path | str) -> dict:
+    """Run ``<brew_bin> info --json=v2 --installed`` and return the parsed
+    JSON dict (``{"formulae": [...], "casks": [...]}``).
+
+    The argv shape (``[..., "info", "--json=v2", "--installed"]``) is
+    pinned by the P3.6 source. (NOTE: the directive text says
+    ``brew list --json=v2`` but ``brew list`` does not accept
+    ``--json=v2`` — verified empirically. ``brew info`` is the correct
+    command.) Centralizing here keeps the invocation shape in one place.
+
+    Launchd-safe: callers pass an absolute path; no PATH lookup. The
+    ``safe_subprocess`` primitive enforces ``shell=False``. Timeout 60s
+    (brew can be slow on cold cache or when refreshing the index).
+
+    Args:
+        brew_bin: Absolute path to the brew executable. The caller is
+            responsible for `validate_path`-ing this against a ratified
+            prefix BEFORE invocation — this helper does NOT itself enforce
+            a binary-trust boundary.
+
+    Returns:
+        Parsed JSON dict with at least ``formulae`` and ``casks`` keys
+        (either may be missing or empty on a fresh install).
+
+    Raises:
+        RuntimeError: If brew exits non-zero.
+        json.JSONDecodeError: If stdout is not valid JSON.
+        TypeError: If brew returns something other than an object at the
+            top level.
+        subprocess.TimeoutExpired: If brew hangs (60s default).
+        ValueError: From `safe_subprocess` if argv validation fails.
+    """
+    import json
+
+    result = safe_subprocess(
+        [str(brew_bin), "info", "--json=v2", "--installed"],
+        timeout=60.0,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"brew info exited {result.returncode}: {(result.stderr or '')[:200]}")
+    parsed = json.loads(result.stdout)
+    if not isinstance(parsed, dict):
+        raise TypeError(f"brew info returned non-object top level: got {type(parsed).__name__}")
+    return parsed
+
+
+# ---------------------------------------------------------------------------
 # redact_secrets_in_env
 # ---------------------------------------------------------------------------
 
