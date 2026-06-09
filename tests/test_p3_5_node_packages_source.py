@@ -664,6 +664,46 @@ class TestListNpmGlobalPackagesHelper:
         with patch.object(helpers.subprocess, "run", return_value=R()), pytest.raises(TypeError):
             helpers.list_npm_global_packages(Path("/opt/homebrew/bin/npm"))
 
+    def test_helper_returns_empty_when_no_dependencies_key(self) -> None:
+        """npm returns an object without a `dependencies` key when nothing
+        is globally installed (or under certain --depth conditions). The
+        helper must return [] rather than raise."""
+        from claude_monitoring.attack_surface.discovery import helpers
+
+        class R:
+            returncode = 0
+            stdout = '{"name": "lib", "version": "1.0.0"}'
+            stderr = ""
+
+        with patch.object(helpers.subprocess, "run", return_value=R()):
+            result = helpers.list_npm_global_packages(Path("/opt/homebrew/bin/npm"))
+        assert result == []
+
+    def test_helper_filters_malformed_dep_entries(self) -> None:
+        """Defensive filtering: dep entries with non-string names, non-dict
+        info, or missing version are dropped silently. Sibling entries emit."""
+        from claude_monitoring.attack_surface.discovery import helpers
+
+        class R:
+            returncode = 0
+            stdout = json.dumps(
+                {
+                    "dependencies": {
+                        "good": {"version": "1.0.0"},
+                        "no-version": {"overridden": False},
+                        "scalar-info": "not-a-dict",
+                        "no-version-string": {"version": 123},
+                        "also-good": {"version": "2.0.0"},
+                    }
+                }
+            )
+            stderr = ""
+
+        with patch.object(helpers.subprocess, "run", return_value=R()):
+            result = helpers.list_npm_global_packages(Path("/opt/homebrew/bin/npm"))
+        names = {p["name"] for p in result}
+        assert names == {"good", "also-good"}
+
 
 # ---------------------------------------------------------------------------
 # 12. Outcome reporting
