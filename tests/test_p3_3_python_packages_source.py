@@ -685,6 +685,20 @@ class TestListPipPackagesHelper:
             stdout = "{not json"
             stderr = ""
 
-        with patch.object(helpers.subprocess, "run", return_value=R()):
-            with pytest.raises(json.JSONDecodeError):
-                helpers.list_pip_packages(Path("/usr/bin/python3"))
+        with patch.object(helpers.subprocess, "run", return_value=R()), pytest.raises(
+            json.JSONDecodeError
+        ):
+            helpers.list_pip_packages(Path("/usr/bin/python3"))
+
+    def test_helper_raises_on_non_list_top_level(self) -> None:
+        """A corrupt pip returning a JSON object/null at the top level
+        must raise TypeError; the source catches it for per-venv isolation."""
+        from claude_monitoring.attack_surface.discovery import helpers
+
+        class R:
+            returncode = 0
+            stdout = '{"not": "a list"}'
+            stderr = ""
+
+        with patch.object(helpers.subprocess, "run", return_value=R()), pytest.raises(TypeError):
+            helpers.list_pip_packages(Path("/usr/bin/python3"))
