@@ -343,6 +343,76 @@ def list_pip_packages(python_bin: Path | str) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
+# list_npm_global_packages — `npm list -g --json --depth=0`
+# ---------------------------------------------------------------------------
+
+
+def list_npm_global_packages(npm_bin: Path | str) -> list[dict]:
+    """Run ``<npm_bin> list -g --json --depth=0`` and return a flat list of
+    ``{"name", "version"}`` dicts.
+
+    The argv shape (``[..., "list", "-g", "--json", "--depth=0"]``) is
+    pinned by the P3.5 source. ``--depth=0`` avoids npm's transitive
+    resolution (which can be huge and slow on cold cache). Centralizing
+    here keeps the invocation shape in one place.
+
+    npm's raw output shape is:
+    ``{"name": "...", "dependencies": {"<pkg>": {"version": "..."}, ...}}``
+    This helper flattens the ``dependencies`` map into the list shape every
+    other discovery helper returns, so the source can iterate uniformly.
+
+    Launchd-safe: callers pass an absolute path; no PATH lookup is performed.
+    The ``safe_subprocess`` primitive enforces ``shell=False``. Timeout is
+    60s because npm can be slow on cold cache.
+
+    Args:
+        npm_bin: Absolute path to the npm executable. The caller is
+            responsible for `validate_path`-ing this against a ratified
+            prefix BEFORE invocation — `list_npm_global_packages` does NOT
+            itself enforce a binary-trust boundary.
+
+    Returns:
+        Flat list of ``{"name": str, "version": str}`` dicts. Caller
+        filters / normalizes downstream.
+
+    Raises:
+        RuntimeError: If npm exits non-zero.
+        json.JSONDecodeError: If stdout is not valid JSON.
+        TypeError: If npm returns something other than an object at the
+            top level.
+        subprocess.TimeoutExpired: If npm hangs (60s default).
+        ValueError: From `safe_subprocess` if argv validation fails.
+    """
+    import json
+
+    result = safe_subprocess(
+        [str(npm_bin), "list", "-g", "--json", "--depth=0"],
+        timeout=60.0,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"npm list exited {result.returncode}: {(result.stderr or '')[:200]}")
+    parsed = json.loads(result.stdout)
+    if not isinstance(parsed, dict):
+        raise TypeError(f"npm list returned non-object top level: got {type(parsed).__name__}")
+    deps = parsed.get("dependencies")
+    if not isinstance(deps, dict):
+        return []
+    out: list[dict] = []
+    for name, info in deps.items():
+        if not isinstance(name, str):
+            continue
+        version: str | None = None
+        if isinstance(info, dict):
+            v = info.get("version")
+            if isinstance(v, str):
+                version = v
+        if version is None:
+            continue
+        out.append({"name": name, "version": version})
+    return out
+
+
+# ---------------------------------------------------------------------------
 # redact_secrets_in_env
 # ---------------------------------------------------------------------------
 
