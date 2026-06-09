@@ -57,7 +57,8 @@ class TestRegistry:
         """Q5 structural-completeness contract: every registered discovery
         source has a mapping function. P2.0 shipped 6; P3.1-P3.5 added
         vscode-extensions, chromium-extensions, python-packages,
-        python-project-deps, node-packages; P3.6 added homebrew-ai-tools."""
+        python-project-deps, node-packages; P3.6 added homebrew-ai-tools;
+        P3.7 added claude-desktop-integrations."""
         expected = {
             "ollama-models",
             "ai-tool-versions",
@@ -71,6 +72,7 @@ class TestRegistry:
             "python-project-deps",
             "node-packages",
             "homebrew-ai-tools",
+            "claude-desktop-integrations",
         }
         assert expected == REGISTERED_SOURCES
 
