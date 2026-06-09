@@ -685,9 +685,7 @@ class TestListPipPackagesHelper:
             stdout = "{not json"
             stderr = ""
 
-        with patch.object(helpers.subprocess, "run", return_value=R()), pytest.raises(
-            json.JSONDecodeError
-        ):
+        with patch.object(helpers.subprocess, "run", return_value=R()), pytest.raises(json.JSONDecodeError):
             helpers.list_pip_packages(Path("/usr/bin/python3"))
 
     def test_helper_raises_on_non_list_top_level(self) -> None:
