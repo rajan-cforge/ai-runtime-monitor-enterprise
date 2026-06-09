@@ -49,10 +49,14 @@ import hashlib
 import json
 import logging
 import re
+import sys
 import time
 from pathlib import Path
 
-import tomllib
+if sys.version_info >= (3, 11):
+    import tomllib
+else:  # pragma: no cover — exercised only on the 3.10 CI runner
+    import tomli as tomllib
 
 from claude_monitoring.attack_surface.asset import Asset
 from claude_monitoring.attack_surface.discovery.base import DiscoverySource
