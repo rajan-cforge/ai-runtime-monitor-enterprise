@@ -2028,10 +2028,16 @@ class ChromeHistoryWatcher:
 # SECTION 8: WEB DASHBOARD SERVER
 # ─────────────────────────────────────────────────────────────
 
-# `ReusableHTTPServer` (the threaded dashboard server) lives in
-# `dashboard_server.py` — see issue #98 (3rd gap). Re-exported here for
-# back-compat with consumers that import it from `monitor`.
-from claude_monitoring.dashboard_server import ReusableHTTPServer  # noqa: E402
+# `ReusableHTTPServer` (the threaded dashboard server) and the dual-stack
+# loopback wrapper both live in `dashboard_server.py` — see issue #98
+# (3rd gap) for the threading fix and the 2026-06-09 dual-stack hotfix
+# for the v4+v6 loopback bind. Re-exported here for back-compat with
+# consumers that import these names from `monitor`.
+from claude_monitoring.dashboard_server import (  # noqa: E402
+    LoopbackDualStackServer,
+    ReusableHTTPServer,
+    start_dashboard_server,
+)
 
 
 class DashboardHandler(BaseHTTPRequestHandler):
@@ -4917,16 +4923,10 @@ def start_monitoring(cp_url=None, cp_api_key=None):
     else:
         print("  Chrome AI watcher: Chrome history not found")
 
-    # Web Dashboard — `ReusableHTTPServer` lives in `dashboard_server.py`
-    # (re-exported at module top). Issue #98: now ThreadingHTTPServer-based
-    # so long-polls don't starve siblings.
-    server = bind_with_retry(
-        lambda: ReusableHTTPServer((get_bind_address(), DASHBOARD_PORT), DashboardHandler),
-        port=DASHBOARD_PORT,
-        address=get_bind_address(),
-    )
-    server_thread = threading.Thread(target=server.serve_forever, daemon=True, name="Dashboard")
-    server_thread.start()
+    # Web Dashboard — lifecycle wiring (single-server vs dual-stack-loopback)
+    # lives in `dashboard_server.start_dashboard_server` so the file-size
+    # ratchet on monitor.py stays under ceiling. See dashboard_server.py.
+    server = start_dashboard_server(get_bind_address(), DASHBOARD_PORT, DashboardHandler, bind_with_retry)
     if dashboard_token:
         print(f"\n  Dashboard: http://localhost:{DASHBOARD_PORT}?token={dashboard_token}")
         print("  (Bookmark this URL — the token is remembered by the browser.)")
