@@ -106,6 +106,22 @@ def map_vscode_extension(asset: Asset) -> frozenset[OntologyCategory]:
     return frozenset()
 
 
+def map_chromium_extension(asset: Asset) -> frozenset[OntologyCategory]:
+    """P3.2 placeholder per Q5 ratification (2026-06-06): STRUCTURAL completeness
+    only. P3.8 wires the real rules across all Phase 3 sources at once
+    (e.g., ``permissions: ["nativeMessaging"]`` → ``shell_execute`` +
+    ``inter_tool_communication``, ``host_permissions: ["<all_urls>"]`` →
+    ``network_unrestricted``, ``has_background_service_worker = True`` →
+    ``code_execution``, etc.). Until then this mapper returns ``frozenset()``
+    and the asset lands at INFO band per spec §6.5 Q1.
+
+    The mapper EXISTS so the P2.2-gate CI gate
+    (``check_ontology_mapping_completeness``) passes — a registered
+    DiscoverySource without a registry entry would fail the build."""
+    del asset
+    return frozenset()
+
+
 # ---------------------------------------------------------------------------
 # MCP — simple keyword map + P2.1 scored config-only multi-signal layer
 # ---------------------------------------------------------------------------
@@ -390,6 +406,7 @@ _REGISTRY: dict[str, Callable[[Asset], frozenset[OntologyCategory]]] = {
     "openclaw-skills": map_openclaw_skill,
     "mcp-servers": map_mcp_server_scored,
     "vscode-extensions": map_vscode_extension,
+    "chromium-extensions": map_chromium_extension,
 }
 """Per-source mapping registry. Adding a new source REQUIRES adding
 an entry here — the structural completeness CI gate enforces this.
@@ -429,6 +446,7 @@ __all__ = [
     "map_ai_app_info_plist",
     "map_ai_tool_version",
     "map_asset",
+    "map_chromium_extension",
     "map_claude_code_skill",
     "map_mcp_server_scored",
     "map_mcp_server_simple",
