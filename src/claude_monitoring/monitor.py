@@ -4756,7 +4756,7 @@ def backfill_existing_sessions(watcher):
 # ─────────────────────────────────────────────────────────────
 
 
-def start_monitoring(cp_url=None, cp_api_key=None):
+def start_monitoring():
     """Start all monitoring layers and the web dashboard."""
     print("=" * 62)
     print("  AI Runtime Monitor — CrowdStrike-Style Full Visibility")
@@ -4934,18 +4934,6 @@ def start_monitoring(cp_url=None, cp_api_key=None):
         print(f"\n  Dashboard: http://localhost:{DASHBOARD_PORT}")
     print("\n  Press Ctrl+C to stop")
     print("=" * 62)
-
-    # Control plane sync agent (optional)
-    sync_agent = None
-    if cp_url and cp_api_key:
-        try:
-            from claude_monitoring.sync import SyncAgent
-
-            sync_agent = SyncAgent(cp_url, cp_api_key)
-            sync_agent.start()
-            print(f"  Control Plane sync: {cp_url} (every 30s)")
-        except ImportError:
-            print("  WARNING: requests library needed for control plane sync (pip install requests)")
 
     # Initial process scan
     procs = proc_scanner.scan_once()
@@ -5227,8 +5215,6 @@ def main():
     parser.add_argument("--dry-run", action="store_true", help="Modifier for --cleanup: preview without changes")
     parser.add_argument("--purge", action="store_true", help="Permanently uninstall and delete all monitoring data")
     parser.add_argument("--stop", action="store_true", help="Stop a running monitor + proxy cleanly (uses PID file)")
-    parser.add_argument("--control-plane", type=str, default="", help="Control plane URL (e.g. http://localhost:9090)")
-    parser.add_argument("--cp-api-key", type=str, default="", help="Control plane API key")
     parser.add_argument("--logs", action="store_true", help="Tail the monitor log file (Ctrl+C to exit)")
     parser.add_argument("--daemon", action="store_true", help="Run in daemon mode (no prompts, stdout→log)")
     parser.add_argument("--install-service", action="store_true", help="Install as a macOS LaunchAgent (runs at login)")
@@ -5489,7 +5475,7 @@ def main():
             print(f"Proxy started on port {get_proxy_port()} (AI domains only — selective SSL inspection)")
             print(f"To enable: export HTTPS_PROXY=http://127.0.0.1:{get_proxy_port()}")
             print("For desktop apps: ai-monitor --enable-system-proxy")
-        start_monitoring(cp_url=args.control_plane or None, cp_api_key=args.cp_api_key or None)
+        start_monitoring()
     else:
         parser.print_help()
         print("\n  Quick start: python3 ai_monitor.py --start")

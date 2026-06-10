@@ -37,7 +37,7 @@ The runtime dependency surface (from `pyproject.toml` `[project] dependencies`) 
 
 Tools the team or community has surfaced as "should we add this?" and the documented reasoning for declining. Listed here so the next person asking the same question gets the same answer without re-litigation.
 
-- **Trivy.** Not adopted. Trivy is a container image scanner; Vigil ships no container image. Python-specific tooling (`pip-audit` for CVE scanning, `bandit` for SAST) covers the relevant surface for our distribution model (PyPI sdist + wheel). Reconsider when the v1.0 control plane ships a Docker image — at that point Trivy becomes meaningful for the image, but should be a CI step on the control-plane repo, not a runtime dep of Vigil.
+- **Trivy.** Not adopted. Trivy is a container image scanner; Vigil ships no container image. Python-specific tooling (`pip-audit` for CVE scanning, `bandit` for SAST) covers the relevant surface for our distribution model (PyPI sdist + wheel). Reconsider only when Vigil itself starts shipping container images (not in the current roadmap).
 
 - **Codecov.** Not adopted. The per-file coverage ratchet shipped in PR #27 enforces coverage discipline more strictly than Codecov's soft warnings, keeps the test-execution data in-tree (no SaaS dependency), and explicitly avoids the third-party SaaS exposure that Codecov itself demonstrated in CVE-2021-32699 (the 2021 supply-chain incident where a malicious bash uploader was injected into Codecov's CI uploader for ~2 months and exfiltrated CI secrets from thousands of repos). The PR-#27 ratchet covers the same product surface (don't let coverage drift down) with strictly less attack surface.
 
@@ -45,7 +45,7 @@ Tools the team or community has surfaced as "should we add this?" and the docume
 
 - **`tomli` / `tomllib` (manual install).** Not adopted as an explicit dependency. Python 3.11+ ships `tomllib` in stdlib; earlier versions can fall back to the small `tomli` package, but the codebase currently doesn't parse TOML at runtime (only `pyproject.toml` at build time, handled by `setuptools`). When `config.py` grows runtime TOML support, the conditional `tomllib` (3.11+) / `tomli` (<=3.10) shim will be added with rationale here.
 
-- **`requests` / `httpx` (runtime).** Not adopted at the base runtime layer. Vigil's network code uses `urllib.request` from stdlib for the few outbound HTTP calls (threat-intel feeds, OSV, PyPI metadata) — sufficient for the request volumes Vigil generates and avoids a dependency for a feature that doesn't need its convenience. The `[watch]` extra pulls in `tornado` transitively via mitmproxy, but that's mitmproxy's runtime, not ours. Adopt `httpx` if/when the control-plane sync agent needs streaming or HTTP/2 in v0.3+.
+- **`requests` / `httpx` (runtime).** Not adopted at the base runtime layer. Vigil's network code uses `urllib.request` from stdlib for the few outbound HTTP calls (threat-intel feeds, OSV, PyPI metadata) — sufficient for the request volumes Vigil generates and avoids a dependency for a feature that doesn't need its convenience. The `[watch]` extra pulls in `tornado` transitively via mitmproxy, but that's mitmproxy's runtime, not ours. Adopt `httpx` if/when a future feature needs streaming or HTTP/2.
 
 ## 4. Rules for adding a new dependency
 
