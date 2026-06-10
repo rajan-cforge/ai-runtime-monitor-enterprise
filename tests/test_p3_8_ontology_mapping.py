@@ -344,6 +344,27 @@ class TestChromiumExtensionMapping:
         result = map_chromium_extension(asset)
         assert isinstance(result, frozenset)
 
+    def test_unmapped_permission_logged_once_per_invocation(self, caplog) -> None:
+        """AP-5 dedup contract: a manifest listing the same unmapped
+        permission twice logs ONCE, not twice. Within-invocation dedup;
+        the orchestrator's once-per-asset-per-scan call pattern carries
+        the rest (no module-level state, per CLAUDE.md)."""
+        import logging as _logging
+
+        asset = _asset(
+            source="chromium-extensions",
+            asset_type="extension",
+            current_state={
+                "permissions": ["someFutureUnmappedPermission", "someFutureUnmappedPermission"],
+                "extension_id": "abcd1234",
+                "browser": "chrome",
+            },
+        )
+        with caplog.at_level(_logging.INFO, logger="ai-runtime-monitor.ontology.mapping"):
+            map_chromium_extension(asset)
+        unmapped_lines = [r for r in caplog.records if "unmapped_chrome_permission" in r.getMessage()]
+        assert len(unmapped_lines) == 1
+
     def test_empty_state_is_empty_tag_set(self) -> None:
         asset = _asset(source="chromium-extensions", asset_type="extension", current_state={})
         assert map_chromium_extension(asset) == frozenset()

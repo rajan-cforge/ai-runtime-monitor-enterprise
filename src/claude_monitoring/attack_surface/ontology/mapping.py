@@ -269,13 +269,19 @@ def map_chromium_extension(asset: Asset) -> frozenset[OntologyCategory]:
 
     permissions = state.get("permissions") or []
     if isinstance(permissions, list):
+        # Per AP-5: log unmapped permissions ONCE per (extension_id, permission)
+        # per scan. Local set scoped to this invocation; the orchestrator's
+        # once-per-asset-per-scan call pattern carries the rest. Module-level
+        # state is forbidden by CLAUDE.md.
+        logged_unmapped: set[str] = set()
         for perm in permissions:
             if not isinstance(perm, str):
                 continue
             mapped = _CHROME_PERMISSION_MAP.get(perm)
             if mapped is not None:
                 tags |= mapped
-            else:
+            elif perm not in logged_unmapped:
+                logged_unmapped.add(perm)
                 logger.info(
                     "unmapped_chrome_permission permission=%s extension_id=%s browser=%s",
                     perm,
