@@ -1133,7 +1133,7 @@ function shortPath(cwd) {
   return p;
 }
 
-// Context-aware escape helpers — see docs/AUDIT_2026-05-21.md C2.
+// Context-aware escape helpers (per docs/SSDLC_ENFORCEMENT.md Layer 1).
 // `esc` is kept as an alias for HTML-body context so any straggler caller
 // still escapes &/</>. Prefer migrating callers to the explicit name that
 // matches the sink: HTML body → escHtml; HTML attribute → escAttr;

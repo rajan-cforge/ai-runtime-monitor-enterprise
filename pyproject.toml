@@ -99,7 +99,8 @@ line-length = 120
 # Aggressive rule set per CLAUDE.md mandatory/forbidden patterns. The
 # enumeration here is the authoritative list — adding a rule family means
 # the new rule is desired across the codebase, with any existing
-# violations either fixed immediately or tracked in docs/RUFF_WARMUP.md.
+# violations either fixed immediately or tracked inline in the warmup
+# ignores below.
 select = [
     "E",        # pycodestyle errors
     "F",        # pyflakes
@@ -126,7 +127,7 @@ ignore = [
     "PERF203",  # try/except in loop (sometimes necessary)
     "PLR0913",  # too many arguments (judgment call)
 
-    # ── Warmup ignores — see docs/RUFF_WARMUP.md ────────────────────
+    # ── Warmup ignores ──────────────────────────────────────────────
     # These rule codes have existing violations on the day the
     # aggressive ruleset landed. Each entry has a documented audit
     # plan (Category A genuine cleanup or Category B likely

@@ -81,15 +81,13 @@ docs/
 │   └── agent-detection.md         # v0.3 capability design
 ├── SSDLC_ENFORCEMENT.md           # Engineering process and controls catalog
 ├── BRANCHING.md                   # Git workflow and merge strategy
-├── RUNBOOK.md                     # Operational procedures
-├── PROBE_DESIGN.md                # Lessons from the C1-FOLLOWUP probe
-├── TOOLING.md                     # Dev environment setup
-├── RUFF_WARMUP.md                 # Aggressive ruff ruleset warmup plan
-├── architecture-baseline-suggestions.md   # Architect agent output (one-shot)
-└── ARCHITECTURE.md               # Technical architecture (separate from spec/)
+├── CLAUDE-WATCH.md                # claude-watch user/operator guide
+├── SSL_INSPECTION.md              # HTTPS proxy + CA setup
+├── SUPPLY_CHAIN_DESIGN.md         # Supply-chain attack surface design
+└── ARCHITECTURE.md                # Technical architecture (separate from spec/)
 ```
 
-Project-level docs (BRANCHING, RUNBOOK, SSDLC_ENFORCEMENT, etc.) describe **how** we work. Spec docs (this directory) describe **what** the product is.
+Project-level docs (BRANCHING, SSDLC_ENFORCEMENT, etc.) describe **how** we work. Spec docs (this directory) describe **what** the product is.
 
 The product-level README.md at the repo root is the entry point for new users. It links to the spec docs for those who want more depth.
 

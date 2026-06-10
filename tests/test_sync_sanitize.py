@@ -81,8 +81,8 @@ class TestSanitizePayloadCallerHandlesEmptySentinel:
     return as a rejection — i.e. doesn't re-introduce the raw input,
     doesn't crash, and the masked field is empty in the outgoing payload.
 
-    This is the gate from docs/CC_DISPATCH_phase_3_continuous_antfooding.md
-    Step 5 — every caller must be HANDLES_EMPTY.
+    Sanitizer contract: every caller of ``_sanitize_payload`` must treat
+    an empty-string return as a rejection sentinel (HANDLES_EMPTY).
     """
 
     def test_payload_caller_handles_empty_sentinel_for_bytes(self):

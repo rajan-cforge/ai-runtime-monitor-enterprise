@@ -74,7 +74,7 @@ The rules live in `.github/spec-requirements.yaml` as a versioned table. `script
 
 Four companion files implement the rest of the layer:
 
-- **`CLAUDE.md`** (project constitution at the repo root) — defines the mandatory and forbidden patterns ruff and the AST checker enforce. The rationale lives here so future contributors see *why* each pattern matters rather than only seeing the gate fire.
+- **This document (`SSDLC_ENFORCEMENT.md`)** — defines the mandatory and forbidden patterns ruff and the AST checker enforce. The rationale lives here so future contributors see *why* each pattern matters rather than only seeing the gate fire.
 - **`.github/pull_request_template.md`** — every PR declares its C0–C4 criticality, checks off touched specs, and discloses known limitations or deferred work. C3 and C4 require human diff review regardless of agent verdicts (Layer 8).
 - **`scripts/check_design_patterns.py`** + `scripts/check_design_patterns_baseline.txt` — AST-walker for project-specific patterns. Some checks (DashboardHandler routes must call `verify_token`) are unique to this layer because ruff cannot express them; others (no `subprocess(shell=True)`, no `requests(verify=False)`) are intentional defense-in-depth against ruff's `S602`/`S501` — two independent enforcement paths on zero-tolerance forbiddens so a config drift in one doesn't disable both. New violations not in the baseline file fail the build.
 - **`pyproject.toml` `[tool.ruff]`** — language-level enforcement for everything ruff can express (17 rule families: bugbear, pyupgrade, pathlib, blind-except, datetimez, tryceratops, perflint, pylint, simplify, bandit-via-ruff, etc.).
@@ -82,7 +82,7 @@ Four companion files implement the rest of the layer:
 Two operational disciplines keep the layer maintainable:
 
 - **Baselines shrink, never grow.** `check_design_patterns_baseline.txt` records existing violations on the day a rule lands; new violations fail the gate, cleanup PRs remove rows. The same discipline applies to the per-file coverage ratchet (Layer 5).
-- **Warmup graduates to enforced.** New ruff rules that surface more than 20 violations land in `docs/RUFF_WARMUP.md` rather than blocking immediately. Each entry tracks current count, audit hypothesis, and a Phase 3F sprint target. Rules graduate to fully enforced when count reaches zero or the audit confirms a permanent ignore.
+- **Warmup graduates to enforced.** New ruff rules that surface more than 20 violations land as warmup ignores in `pyproject.toml` rather than blocking immediately. Each entry tracks current count, audit hypothesis, and a sprint target. Rules graduate to fully enforced when count reaches zero or the audit confirms a permanent ignore.
 
 Three known validator limitations are documented inline in the YAML (search the file for `KNOWN LIMITATION`): `new-external-dependency` fires on version bumps as well as new deps (fix: adjacency-aware diff parsing in Phase 3F); `workflow-changes` is WARN-severity for v0.2 ergonomic reasons but is a candidate for escalation to BLOCK after architect-reviewer feedback; `hot-path-changes` requires a PR label the validator can't read from the diff alone (Phase 3F: add a `--pr-labels` argument sourced from `${{ toJson(github.event.pull_request.labels) }}` in the workflow).
 
@@ -308,14 +308,14 @@ This layer is **procedural**, not mechanical — it relies on the orchestrator f
   - Post-edit hook in `.claude/hooks/post-edit.sh` runs `ruff format`
     immediately after any Claude Code Edit tool call
 - *Bypass path*: `--no-verify` skips local. CI catches.
-- *Warmup*: rules with >20 existing violations land in
-  `docs/RUFF_WARMUP.md` rather than blocking immediately; the warmup
-  list shrinks over time as Phase 3F sprints clean up.
+- *Warmup*: rules with >20 existing violations land as warmup
+  ignores in `pyproject.toml` rather than blocking immediately;
+  the warmup list shrinks over time as sprints clean up.
 
 **Rule: project-specific design patterns enforced by AST checker.**
 
 - *Why*: ruff covers what's expressible as static lint. Some
-  CLAUDE.md mandatory and forbidden patterns aren't — e.g.,
+  mandatory and forbidden patterns aren't — e.g.,
   "DashboardHandler routes must call `verify_token`",
   `subprocess(shell=True)`, `requests(verify=False)`. A custom AST
   walker enforces these directly.
@@ -501,7 +501,7 @@ This layer is **procedural**, not mechanical — it relies on the orchestrator f
   own proxy interferes with pip install), refuses to run on Python
   3.13+ with a clear remediation message, uses state-file rollback
   rather than a hardcoded tag.
-- *Documented in*: `docs/RUNBOOK.md`
+- *Documented in*: internal operational notes (not in public repo).
 
 **Rule: every antfooding observation logs to `docs/ANTFOODING_LOG.md`.**
 
@@ -518,12 +518,11 @@ This layer is **procedural**, not mechanical — it relies on the orchestrator f
 - *Why*: a single reviewer (human or agent) is anchored by their
   initial framing. Two waves with the explicit job of falsifying
   the first wave's findings catches what a single pass misses.
-- *Mechanism*: `docs/CC_PROMPT_AUDIT_adversarial_self_audit.md`
-  dispatches 3 finders in wave 1 and 5 falsifiers in wave 2. The
-  pattern has been validated: 25% of wave 1 findings were falsified
-  in wave 2, and 2 of 4 final criticals were net-new from the wave 2
-  completeness check.
-- *Documented in*: `docs/AUDIT_2026-05-21.md` (the first run)
+- *Mechanism*: dispatches 3 finders in wave 1 and 5 falsifiers in
+  wave 2 (audit prompt-pack lives in internal operational notes).
+  The pattern has been validated: 25% of wave 1 findings were
+  falsified in wave 2, and 2 of 4 final criticals were net-new from
+  the wave 2 completeness check.
 
 **Rule: probe credential-inheritance discipline.**
 
@@ -531,7 +530,8 @@ This layer is **procedural**, not mechanical — it relies on the orchestrator f
   from the app they're testing. The Day 1 Claude-in-Chrome probe
   reported a false C1-FOLLOWUP critical because the dashboard's
   monkey-patched `fetch` injected the auth token automatically.
-- *Mechanism*: `docs/PROBE_DESIGN.md` documents required practice:
+- *Mechanism*: probe design discipline (documented in internal
+  operational notes) requires:
   - Out-of-browser HTTP client (curl) for auth verification
   - Or fresh tab on different origin with `credentials: 'omit'`
   - Or strip the monkey patch before testing
@@ -635,12 +635,11 @@ Honesty about gaps. Each is on the roadmap.
 | Branch name enforcement | Convention only, not blocked | Q2 |
 | Architectural fitness functions (coupling metrics) | Not started | Q3 |
 | TDD verification automation (stash-and-rerun) | Convention only | Manual |
-| Probe credential-inheritance check | Manual practice via docs/PROBE_DESIGN.md | Manual |
+| Probe credential-inheritance check | Manual practice (see internal probe-design notes) | Manual |
 | SBOM attestation on releases | Workflow defined, no releases yet | Phase 3G |
 
-The roadmap is committed. Each item has a phase tag in
-`docs/SPRINT_ONE_WEEK.md` and a corresponding GitHub issue when work
-begins.
+The roadmap is committed. Each item ships with a corresponding
+GitHub issue when work begins.
 
 ## Validation: does this actually work?
 
@@ -659,9 +658,8 @@ the system catching what would otherwise have slipped through.
 
 3. **PR #16 closed the antfood-loop FATAL.** Loop died when HTTPS_PROXY
    leaked from the user's shell. The robustness PR documented the
-   failure mode, added the fix, added 6 smoke tests, updated the
-   RUNBOOK. No fix-and-forget — the fix included tests so the same
-   regression cannot recur.
+   failure mode, added the fix, added 6 smoke tests. No fix-and-forget
+   — the fix included tests so the same regression cannot recur.
 
 4. **Claude-in-Chrome probe found 3 real credential exposures.**
    The structured probe (Day 1 antfooding) traced sensitive-data
@@ -703,15 +701,10 @@ IS the code.
 
 ## References
 
-- `docs/AUDIT_2026-05-21.md` — adversarial self-audit findings
-- `docs/CC_PROMPT_AUDIT_adversarial_self_audit.md` — audit pattern
 - `docs/BRANCHING.md` — branching and commit conventions
-- `docs/TOOLING.md` — MCP servers and plugin capability map
-- `docs/PROBE_DESIGN.md` — antfooding probe design discipline
-- `docs/RUNBOOK.md` — operational procedures and emergency rollback
-- `docs/SPRINT_ONE_WEEK.md` — current sprint state and phase plan
-- `docs/COMMIT_HISTORY_EXCEPTIONS.md` — historical exceptions to
-  current policy
+- `docs/ARCHITECTURE.md` — system architecture and module layout
+- `docs/spec/` — functional specs and threat model
+- `docs/design/` — feature design docs
 - `docs/incidents/` — public-safe incident records (CI breaks, build
   regressions). Real-credential incidents live in private notes at
   `~/Documents/vigil-notes/incidents/` outside the repo.
@@ -727,8 +720,8 @@ Maintained as a living document. Updated whenever a new control is
 added or an existing control changes scope.
 
 Last reviewed: 2026-05-25 (Layer 6.5 added — spec-driven enforcement
-via .github/spec-requirements.yaml, CLAUDE.md as constitution,
-custom AST checker with baseline, aggressive ruff ruleset with
-RUFF_WARMUP.md graduation discipline).
+via .github/spec-requirements.yaml, custom AST checker with
+baseline, aggressive ruff ruleset with inline warmup-ignore
+graduation discipline).
 Next review trigger: at the close of Phase 3B (Quality Gates Q1)
 when new controls are added.

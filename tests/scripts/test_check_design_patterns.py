@@ -1,7 +1,8 @@
 """Tests for scripts/check_design_patterns.py.
 
-The real-repo smoke test runs the script as a subprocess (per
-docs/RUNBOOK.md "Test isolation"). The per-rule detection tests
+The real-repo smoke test runs the script as a subprocess (process
+isolation keeps the gate-script's own warnings from contaminating
+pytest's session state). The per-rule detection tests
 load the script as a module so the AST helpers can be exercised
 directly without scaffolding a fake `src/claude_monitoring/` tree
 for every case.

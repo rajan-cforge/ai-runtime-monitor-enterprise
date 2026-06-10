@@ -1,7 +1,8 @@
 """Tests for scripts/coverage_ratchet.py.
 
 Each test invokes the script via ``subprocess.run`` so the script
-executes in its own process. See docs/RUNBOOK.md "Test isolation".
+executes in its own process — keeps pytest's coverage tracker
+from interfering with the script's own coverage measurements.
 """
 
 from __future__ import annotations

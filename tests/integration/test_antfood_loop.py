@@ -4,7 +4,7 @@ These don't run the full loop (it polls indefinitely). They verify the
 script syntax is valid and that the critical guardrails are present:
 proxy-unset, Python version check, state-file rollback, SIGTERM trap.
 
-Per docs/CC_DEBUG_antfood_loop_recovery.md Phase B.2.
+Smoke-level guardrails only; the loop itself runs out-of-band.
 """
 
 import stat

@@ -12,8 +12,8 @@
 # distinct from any editing clone — the antfooded copy is what's
 # running, not your work-in-progress.
 #
-# Per docs/CC_DISPATCH_phase_3_continuous_antfooding.md Step 4
-# + docs/CC_DEBUG_antfood_loop_recovery.md Phase B.
+# Loop discipline: poll → check CI green → pull → restart → on boot
+# failure, rollback to the last known-good SHA from state-file.
 
 set -uo pipefail
 

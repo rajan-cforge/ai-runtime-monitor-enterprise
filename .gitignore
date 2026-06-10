@@ -44,18 +44,12 @@ MANIFEST
 # Ruff
 .ruff_cache/
 
-# Claude
-.claude/*
-# But track checked-in agent definitions and rubrics — the project's
-# review-intelligence configuration (Layer 8 in docs/SSDLC_ENFORCEMENT.md).
-# Local state (settings.local.json, worktrees, scheduled_tasks.lock,
-# etc.) stays ignored.
-!.claude/agents/
-!.claude/agents/**
-!.claude/rubrics/
-!.claude/rubrics/**
-!.claude/workflows/
-!.claude/workflows/**
+# Claude — the entire .claude/ folder + CLAUDE.md are operator-local
+# AI-workflow files, not part of the product. Untracked from the public
+# repo but Claude Code reads them from disk unchanged.
+.claude/
+CLAUDE.md
+CLAUDE.local.md
 ai-runtime-monitor/
 
 # Environment files
@@ -79,3 +73,23 @@ docs/internal/
 # (local launch-prep notes). A working-tree copy at this path keeps getting
 # swept in by `git add -A`; ignore it so it stops without forcing deletion.
 docs/brand-site-copy.md
+
+# Internal/operational docs — live in ~/Documents/vigil-notes, never in the repo.
+# Re-asserting after the 2026-06 cleanup so accidental re-commit is blocked.
+docs/TOOLING.md
+docs/RUNBOOK.md
+docs/AUDIT_*.md
+docs/SPRINT_*.md
+docs/EXECUTION_PLAYBOOK*.md
+docs/RUFF_WARMUP.md
+docs/architecture-baseline-suggestions.md
+docs/ENTERPRISE_ROADMAP.md
+docs/CONTROL_PLANE_*.md
+docs/PROBE_DESIGN.md
+docs/HOW_THE_CODE_WORKS.md
+docs/CLAUDE-archive-*.md
+docs/roadmap/
+docs/CC_*.md
+CC_PROMPT*.md
+CC_DISPATCH*.md
+control-plane/
