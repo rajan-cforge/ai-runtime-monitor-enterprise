@@ -33,8 +33,11 @@ Lives in its own module so the file-size ratchet on :mod:`monitor` stays under t
 from __future__ import annotations
 
 import logging
+import socket
 import sys
-from http.server import ThreadingHTTPServer
+from collections.abc import Callable
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from typing import Any
 
 logger = logging.getLogger("ai-runtime-monitor.dashboard_server")
 
@@ -65,9 +68,7 @@ class _IPv6ReusableHTTPServer(ReusableHTTPServer):
     without binding all interfaces.
     """
 
-    import socket as _socket  # avoid leaking the import name at class level
-
-    address_family = _socket.AF_INET6
+    address_family = socket.AF_INET6
 
 
 class LoopbackDualStackServer:
@@ -99,7 +100,7 @@ class LoopbackDualStackServer:
             single-server case).
     """
 
-    def __init__(self, port: int, handler) -> None:
+    def __init__(self, port: int, handler: type[BaseHTTPRequestHandler]) -> None:
         self.servers: list[ReusableHTTPServer] = []
         # v4 loopback first — this is the always-required bind. If THIS
         # fails, the caller's bind_with_retry handles it (port collision).
@@ -130,7 +131,12 @@ class LoopbackDualStackServer:
             srv.server_close()
 
 
-def start_dashboard_server(bind_addr: str, port: int, handler, bind_with_retry):
+def start_dashboard_server(
+    bind_addr: str,
+    port: int,
+    handler: type[BaseHTTPRequestHandler],
+    bind_with_retry: Callable[..., Any],
+) -> LoopbackDualStackServer | ReusableHTTPServer:
     """Build and start the dashboard HTTP server.
 
     When ``bind_addr`` is the loopback default (``"127.0.0.1"``), this
