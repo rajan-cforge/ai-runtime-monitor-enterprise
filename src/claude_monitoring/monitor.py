@@ -2033,7 +2033,7 @@ class ChromeHistoryWatcher:
 # (3rd gap) for the threading fix and the 2026-06-09 dual-stack hotfix
 # for the v4+v6 loopback bind. Re-exported here for back-compat with
 # consumers that import these names from `monitor`.
-from claude_monitoring.dashboard_server import (  # noqa: E402
+from claude_monitoring.dashboard_server import (  # noqa: E402, F401
     LoopbackDualStackServer,
     ReusableHTTPServer,
     start_dashboard_server,
