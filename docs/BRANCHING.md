@@ -1,8 +1,7 @@
 # Branching policy
 
-Mirrors Phase -1B of `docs/CC_PROMPT_MASTER_orchestrator.md` so
-contributors and tooling can find the policy without reading the
-orchestrator prompt.
+The authoritative branching policy for this repo. Contributors and
+tooling find the policy here; no other doc supersedes this one.
 
 ## Rule of thumb
 
@@ -55,9 +54,9 @@ Rules:
 - Subject under 72 chars. Body wraps at 80.
 - **No** `Co-Authored-By: Claude` trailers. Authored by the human
   signing the commit (env vars, never `git config`).
-- For audit fixes, reference the section:
-  `security(C1): bcrypt.checkpw constant-time comparison`
-  with `Refs docs/AUDIT_2026-05-21.md#C1` in the body.
+- For audit fixes, reference the relevant audit ID in the commit
+  body when one applies (e.g.
+  `security(C1): bcrypt.checkpw constant-time comparison`).
 
 ## Merge strategy
 

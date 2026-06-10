@@ -1,7 +1,8 @@
 """Tests for scripts/check_file_size.py.
 
 Each test invokes the script as a subprocess for isolation
-(see docs/RUNBOOK.md "Test isolation").
+(process isolation keeps the gate-script's own warnings from
+contaminating pytest's session state).
 """
 
 from __future__ import annotations

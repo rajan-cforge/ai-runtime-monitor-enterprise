@@ -198,6 +198,25 @@ _check_sensitive() [monitor.py]
 Store sensitive_data event in DB
 ```
 
+**Validator-level detail** (`validators.py`). Each pattern type has a validator
+that returns `{valid, confidence, details, live}`:
+
+| Validator | Key Check | Rejects |
+|---|---|---|
+| `validate_credit_card` | Luhn checksum + digit count | Numbers near JSON metadata keys, all-same-digit, failed Luhn |
+| `validate_phone_number` | Proximity to ID keywords | Numbers within 50 chars of `sender_id`, `message_id`, `chat_id`, `telegram` |
+| `validate_ssn` | Area/group/serial rules | `000-xx-xxxx`, `666-xx-xxxx`, `9xx-xx-xxxx`, `xxx-00-xxxx`, `xxx-xx-0000`, known test SSNs |
+| `validate_password` | Shannon entropy | Placeholders (`changeme`, `password`), entropy < 2.0, comments |
+| `validate_jwt` | Header/payload base64 decode | Invalid base64, missing `alg` in header, non-JSON payload |
+| `validate_aws_key` | Prefix + length + charset | Wrong prefix, not 20 chars, lowercase chars |
+| `validate_db_connection` | URI parse + password entropy | No password, placeholder password, low entropy |
+
+**Shannon entropy** measures randomness: `H = -sum(p * log2(p))`. Real passwords
+score > 3.0; placeholders like "changeme" score ~2.5.
+
+**Luhn algorithm** validates credit-card check digits. Catches token counts and
+request IDs that happen to match the card regex pattern.
+
 ## 4. Module dependency graph
 
 ```
