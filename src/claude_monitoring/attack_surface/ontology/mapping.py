@@ -133,10 +133,15 @@ def map_vscode_extension(asset: Asset) -> frozenset[OntologyCategory]:
 
 
 _CHROME_PERMISSION_MAP: dict[str, frozenset[OntologyCategory]] = {
+    # `tabs` grants chrome.tabs.* metadata (URL/title/favicon of open tabs);
+    # framed here as file_system_read because it reads user navigation state.
+    # It does NOT grant page DOM access — that requires a host permission.
     "tabs": frozenset({OntologyCategory.FILE_SYSTEM_READ}),
     "cookies": frozenset({OntologyCategory.SECRETS_ACCESS}),
     "history": frozenset({OntologyCategory.FILE_SYSTEM_READ}),
     "downloads": frozenset({OntologyCategory.FILE_SYSTEM_WRITE}),
+    # `storage` is the extension's own sandboxed key-value store — not cross-
+    # origin, not filesystem. Intentionally empty; do NOT "fix" to emit FS tags.
     "storage": frozenset(),
     "webRequest": frozenset({OntologyCategory.NETWORK_UNRESTRICTED}),
     "webRequestBlocking": frozenset({OntologyCategory.NETWORK_UNRESTRICTED}),
@@ -163,30 +168,81 @@ non-MCP IPC coverage."""
 
 
 _WILDCARD_HOST_PATTERNS: frozenset[str] = frozenset({"<all_urls>", "https://*/*", "http://*/*", "*://*/*"})
-"""Host patterns that grant access to ANY origin — emit ``NETWORK_UNRESTRICTED``.
-Specific origins (``https://api.github.com/*``) emit ``NETWORK_SCOPED`` instead."""
+"""Literal host patterns that unambiguously grant any-origin access."""
+
+
+def _classify_host_pattern(entry: str) -> frozenset[OntologyCategory]:
+    """Classify a single host-permission pattern.
+
+    Returns the tag set the pattern contributes. Empty set means "did
+    not classify" (caller continues looking at other entries).
+
+    Rules:
+
+    - ``<all_urls>``, ``https://*/*``, ``http://*/*``, ``*://*/*`` →
+      ``NETWORK_UNRESTRICTED`` (any origin).
+    - ``file://*`` and any ``file://`` pattern → ``FILE_SYSTEM_READ``.
+      These grant local-filesystem access via the extension; they are
+      NOT a network capability and the network classifier must not
+      claim them.
+    - Privileged browser-internal schemes (``chrome://``, ``edge://``,
+      ``brave://``, ``about:``) → empty. These are not user-routable
+      origins; they grant access to internal browser pages, which the
+      P3.8 base ontology does not model. Phase 4 may add a category.
+    - Patterns where the host portion is a bare wildcard (``host == "*"``
+      or ``host == "*.*"``) → ``NETWORK_UNRESTRICTED``. Catches the
+      ``https://*.*/*`` case the literal set misses.
+    - Patterns matching a multi-subdomain wildcard on a specific
+      registrable domain (e.g., ``https://*.google.com/*``) →
+      ``NETWORK_SCOPED``. Broad but bounded.
+    - Any other URL-shaped pattern → ``NETWORK_SCOPED``.
+    """
+    if entry in _WILDCARD_HOST_PATTERNS:
+        return frozenset({OntologyCategory.NETWORK_UNRESTRICTED})
+
+    if entry.startswith("file:"):
+        return frozenset({OntologyCategory.FILE_SYSTEM_READ})
+
+    if entry.startswith(("chrome://", "edge://", "brave://", "about:")):
+        return frozenset()
+
+    # Extract scheme + host from match patterns like
+    # `scheme://host/path` (the Chrome host-permission shape).
+    if "://" in entry:
+        rest = entry.split("://", 1)[1]
+        host = rest.split("/", 1)[0]
+        # Bare host wildcards: "*" or "*.*" cover any origin.
+        if host in {"*", "*.*"}:
+            return frozenset({OntologyCategory.NETWORK_UNRESTRICTED})
+        return frozenset({OntologyCategory.NETWORK_SCOPED})
+
+    # Plain "/*" path patterns without a scheme — defensive: treat as
+    # scoped (the source-side validator should have rejected these).
+    if entry.endswith("/*"):
+        return frozenset({OntologyCategory.NETWORK_SCOPED})
+
+    return frozenset()
 
 
 def _classify_host_permissions(hosts: list) -> frozenset[OntologyCategory]:
-    """Walk a list of host-permission patterns. Wildcards → unrestricted;
-    other URL-shaped patterns → scoped. Empty input → empty result.
-    Defensive against non-string entries."""
+    """Walk a list of host-permission patterns and union the classifications.
+    Empty input → empty result. Defensive against non-string entries.
+
+    Precedence: ``NETWORK_UNRESTRICTED`` SUPPRESSES ``NETWORK_SCOPED`` (a
+    list with one wildcard + one specific origin is effectively
+    unrestricted; emitting both tags would double-count permission
+    breadth). ``FILE_SYSTEM_READ`` from a ``file://`` pattern is
+    independent and additive.
+    """
     if not isinstance(hosts, list) or not hosts:
         return frozenset()
-    has_wildcard = False
-    has_scoped = False
+    tags: set[OntologyCategory] = set()
     for entry in hosts:
         if not isinstance(entry, str):
             continue
-        if entry in _WILDCARD_HOST_PATTERNS:
-            has_wildcard = True
-        elif "://" in entry or entry.endswith("/*"):
-            has_scoped = True
-    tags: set[OntologyCategory] = set()
-    if has_wildcard:
-        tags.add(OntologyCategory.NETWORK_UNRESTRICTED)
-    elif has_scoped:
-        tags.add(OntologyCategory.NETWORK_SCOPED)
+        tags |= _classify_host_pattern(entry)
+    if OntologyCategory.NETWORK_UNRESTRICTED in tags:
+        tags.discard(OntologyCategory.NETWORK_SCOPED)
     return frozenset(tags)
 
 

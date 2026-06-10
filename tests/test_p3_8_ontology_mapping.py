@@ -233,6 +233,71 @@ class TestChromiumExtensionMapping:
         assert OntologyCategory.NETWORK_SCOPED in result
         assert OntologyCategory.NETWORK_UNRESTRICTED not in result
 
+    def test_file_url_pattern_emits_filesystem_read(self) -> None:
+        """``file://*`` host permissions grant local filesystem access via
+        the extension — NOT a network capability. Caught by the host
+        classifier's special-cased ``file:`` scheme handler."""
+        asset = _asset(
+            source="chromium-extensions",
+            asset_type="extension",
+            current_state={"host_permissions": ["file:///*"]},
+        )
+        result = map_chromium_extension(asset)
+        assert OntologyCategory.FILE_SYSTEM_READ in result
+        assert OntologyCategory.NETWORK_SCOPED not in result
+        assert OntologyCategory.NETWORK_UNRESTRICTED not in result
+
+    def test_chrome_internal_scheme_emits_nothing(self) -> None:
+        """``chrome://`` and similar privileged-internal schemes don't map
+        to a P3.8 ontology category (they aren't routable web origins).
+        Must NOT be misclassified as ``NETWORK_SCOPED``."""
+        asset = _asset(
+            source="chromium-extensions",
+            asset_type="extension",
+            current_state={"host_permissions": ["chrome://*/*"]},
+        )
+        result = map_chromium_extension(asset)
+        assert OntologyCategory.NETWORK_SCOPED not in result
+        assert OntologyCategory.NETWORK_UNRESTRICTED not in result
+
+    def test_any_domain_wildcard_emits_network_unrestricted(self) -> None:
+        """``https://*.*/*`` (any-domain any-TLD) is effectively unrestricted.
+        The literal pattern isn't in ``_WILDCARD_HOST_PATTERNS`` but the
+        host-portion classifier catches ``host == "*.*"``."""
+        asset = _asset(
+            source="chromium-extensions",
+            asset_type="extension",
+            current_state={"host_permissions": ["https://*.*/*"]},
+        )
+        result = map_chromium_extension(asset)
+        assert OntologyCategory.NETWORK_UNRESTRICTED in result
+
+    def test_subdomain_wildcard_on_specific_domain_is_scoped(self) -> None:
+        """``https://*.google.com/*`` is broad but bounded to one
+        registrable domain → ``NETWORK_SCOPED``, not unrestricted."""
+        asset = _asset(
+            source="chromium-extensions",
+            asset_type="extension",
+            current_state={"host_permissions": ["https://*.google.com/*"]},
+        )
+        result = map_chromium_extension(asset)
+        assert OntologyCategory.NETWORK_SCOPED in result
+        assert OntologyCategory.NETWORK_UNRESTRICTED not in result
+
+    def test_unrestricted_suppresses_scoped(self) -> None:
+        """A list containing both a wildcard and a specific origin should
+        emit only ``NETWORK_UNRESTRICTED`` — the scoped entry is
+        functionally subsumed and emitting both would double-count
+        permission breadth."""
+        asset = _asset(
+            source="chromium-extensions",
+            asset_type="extension",
+            current_state={"host_permissions": ["<all_urls>", "https://api.github.com/*"]},
+        )
+        result = map_chromium_extension(asset)
+        assert OntologyCategory.NETWORK_UNRESTRICTED in result
+        assert OntologyCategory.NETWORK_SCOPED not in result
+
     def test_background_service_worker_emits_code_execution(self) -> None:
         asset = _asset(
             source="chromium-extensions",
