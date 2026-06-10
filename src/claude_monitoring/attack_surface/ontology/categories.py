@@ -43,8 +43,10 @@ class OntologyCategory(str, enum.Enum):
     """Network requests to arbitrary hosts."""
 
     NETWORK_SCOPED = "network_scoped"
-    """Network requests to a declared host allow-list. Dormant in
-    Phase 2 — no Phase-1 source declares scoped hosts."""
+    """Network requests to a declared host allow-list. Wired in P3.8:
+    Chrome host permissions naming a specific origin (e.g.,
+    ``https://api.github.com/*``) emit this tag; wildcard origins
+    (``<all_urls>``, ``https://*/*``) emit :attr:`NETWORK_UNRESTRICTED`."""
 
     SECRETS_ACCESS = "secrets_access"
     """Read credentials, tokens, cookies, or other named secrets."""
@@ -60,13 +62,18 @@ class OntologyCategory(str, enum.Enum):
 
     SYSTEM_MODIFICATION = "system_modification"
     """Change system settings, install software, modify privileged
-    state. Dormant in Phase 2 — no Phase-1 source declares system
-    modification permissions."""
+    state. Wired in P3.8: Chrome ``management`` and ``contentSettings``
+    permissions emit this tag."""
 
     INTER_TOOL_COMMUNICATION = "inter_tool_communication"
-    """Talk to other AI tools / services. The MCP protocol is itself
-    this category by definition; every discovered MCP server is
-    tagged with this category."""
+    """Talk to other tools / services via IPC, native messaging, or a
+    structured protocol. Covers (a) the MCP protocol — every discovered
+    MCP server gets this tag by definition; and (b) **non-MCP IPC** —
+    R6 ratification (2026-06-09) added Chrome ``nativeMessaging``
+    extensions, which talk to native host programs over a JSON-RPC
+    channel and so co-emit ``{SHELL_EXECUTE, INTER_TOOL_COMMUNICATION}``.
+    Future per-source mappers MAY emit this tag for any analogous IPC
+    capability."""
 
 
 CATEGORIES: frozenset[OntologyCategory] = frozenset(OntologyCategory)

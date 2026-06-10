@@ -30,10 +30,13 @@ P2.0 mapper-contract tests pin this property across every mapper.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 
 from claude_monitoring.attack_surface.asset import Asset
 from claude_monitoring.attack_surface.ontology.categories import OntologyCategory
+
+logger = logging.getLogger("ai-runtime-monitor.ontology.mapping")
 
 # ---------------------------------------------------------------------------
 # Identity-only sources — empty result is the structurally-correct answer
@@ -92,111 +95,428 @@ def map_openclaw_skill(asset: Asset) -> frozenset[OntologyCategory]:
 
 
 def map_vscode_extension(asset: Asset) -> frozenset[OntologyCategory]:
-    """P3.1 placeholder per Q5 ratification (2026-06-06): STRUCTURAL completeness
-    only. P3.8 wires the real rules across all Phase 3 sources at once
-    (e.g., ``contributes.debuggers`` → ``shell_execute``, ``extensionKind``
-    ``["workspace"]`` → ``file_system_read`` + ``file_system_write``, ``main``
-    non-null → ``code_execution``). Until then this mapper returns
-    ``frozenset()`` and the asset lands at INFO band per spec §6.5 Q1.
+    """VSCode/Cursor extension rules (P3.8).
 
-    The mapper EXISTS so the P2.2-gate CI gate
-    (``check_ontology_mapping_completeness``) passes — a registered
-    DiscoverySource without a registry entry would fail the build."""
-    del asset
+    Field → tag mapping:
+
+    - ``main`` non-null → ``CODE_EXECUTION`` (Node.js entry point runs
+      in the extension host process).
+    - ``main`` null AND ``browser`` non-null → web-only extension; no
+      host process executes user code; ``CODE_EXECUTION`` NOT emitted.
+    - ``contributes_debug``/``contributes_terminal``/``contributes_tasks``
+      → ``SHELL_EXECUTE``.
+    - ``extension_kind`` contains ``"workspace"`` →
+      ``{FILE_SYSTEM_READ, FILE_SYSTEM_WRITE}``.
+
+    Wildcard ``activation_events`` (``"*"``) is a scope-broadener
+    modifier, NOT a base ontology category. Per AP-1 ratification it is
+    NOT mapped to any tag and is NOT half-wired in ``risk-rules.yaml``;
+    if a wildcard-activation rule is wanted later, the predicate +
+    dispatch + LIVE_PREDICATES move land in the SAME PR.
+    """
+    state = asset.current_state
+    tags: set[OntologyCategory] = set()
+
+    main = state.get("main")
+    if main:
+        tags.add(OntologyCategory.CODE_EXECUTION)
+
+    if state.get("contributes_debug") or state.get("contributes_terminal") or state.get("contributes_tasks"):
+        tags.add(OntologyCategory.SHELL_EXECUTE)
+
+    extension_kind = state.get("extension_kind") or []
+    if isinstance(extension_kind, list) and "workspace" in extension_kind:
+        tags.add(OntologyCategory.FILE_SYSTEM_READ)
+        tags.add(OntologyCategory.FILE_SYSTEM_WRITE)
+
+    return frozenset(tags)
+
+
+_CHROME_PERMISSION_MAP: dict[str, frozenset[OntologyCategory]] = {
+    # `tabs` grants chrome.tabs.* metadata (URL/title/favicon of open tabs);
+    # framed here as file_system_read because it reads user navigation state.
+    # It does NOT grant page DOM access — that requires a host permission.
+    "tabs": frozenset({OntologyCategory.FILE_SYSTEM_READ}),
+    "cookies": frozenset({OntologyCategory.SECRETS_ACCESS}),
+    "history": frozenset({OntologyCategory.FILE_SYSTEM_READ}),
+    "downloads": frozenset({OntologyCategory.FILE_SYSTEM_WRITE}),
+    # `storage` is the extension's own sandboxed key-value store — not cross-
+    # origin, not filesystem. Intentionally empty; do NOT "fix" to emit FS tags.
+    "storage": frozenset(),
+    "webRequest": frozenset({OntologyCategory.NETWORK_UNRESTRICTED}),
+    "webRequestBlocking": frozenset({OntologyCategory.NETWORK_UNRESTRICTED}),
+    "nativeMessaging": frozenset({OntologyCategory.SHELL_EXECUTE, OntologyCategory.INTER_TOOL_COMMUNICATION}),
+    "debugger": frozenset({OntologyCategory.SHELL_EXECUTE}),
+    "identity": frozenset({OntologyCategory.SECRETS_ACCESS}),
+    "management": frozenset({OntologyCategory.SYSTEM_MODIFICATION}),
+    "browsingData": frozenset({OntologyCategory.SECRETS_ACCESS}),
+    "topSites": frozenset({OntologyCategory.FILE_SYSTEM_READ}),
+    "bookmarks": frozenset({OntologyCategory.FILE_SYSTEM_READ}),
+    "contentSettings": frozenset({OntologyCategory.SYSTEM_MODIFICATION}),
+}
+"""Chrome API permission → capability map. Inline per AP-3 ratification
+(authorized deferral of directive §7.3.3 YAML externalization).
+
+**R6 ratification (2026-06-09):** ``nativeMessaging`` co-emits
+``{SHELL_EXECUTE, INTER_TOOL_COMMUNICATION}`` (not just ``SHELL_EXECUTE``).
+Reason: native messaging is the IPC channel Chrome extensions use to
+talk to non-browser host programs over JSON-RPC; that channel both
+shells out (SHELL_EXECUTE) and is an inter-tool protocol
+(INTER_TOOL_COMMUNICATION). The ``categories.py`` docstring for
+``INTER_TOOL_COMMUNICATION`` was updated in the same PR to reflect
+non-MCP IPC coverage."""
+
+
+_WILDCARD_HOST_PATTERNS: frozenset[str] = frozenset({"<all_urls>", "https://*/*", "http://*/*", "*://*/*"})
+"""Literal host patterns that unambiguously grant any-origin access."""
+
+
+def _classify_host_pattern(entry: str) -> frozenset[OntologyCategory]:
+    """Classify a single host-permission pattern.
+
+    Returns the tag set the pattern contributes. Empty set means "did
+    not classify" (caller continues looking at other entries).
+
+    Rules:
+
+    - ``<all_urls>``, ``https://*/*``, ``http://*/*``, ``*://*/*`` →
+      ``NETWORK_UNRESTRICTED`` (any origin).
+    - ``file://*`` and any ``file://`` pattern → ``FILE_SYSTEM_READ``.
+      These grant local-filesystem access via the extension; they are
+      NOT a network capability and the network classifier must not
+      claim them.
+    - Privileged browser-internal schemes (``chrome://``, ``edge://``,
+      ``brave://``, ``about:``) → empty. These are not user-routable
+      origins; they grant access to internal browser pages, which the
+      P3.8 base ontology does not model. Phase 4 may add a category.
+    - Patterns where the host portion is a bare wildcard (``host == "*"``
+      or ``host == "*.*"``) → ``NETWORK_UNRESTRICTED``. Catches the
+      ``https://*.*/*`` case the literal set misses.
+    - Patterns matching a multi-subdomain wildcard on a specific
+      registrable domain (e.g., ``https://*.google.com/*``) →
+      ``NETWORK_SCOPED``. Broad but bounded.
+    - Any other URL-shaped pattern → ``NETWORK_SCOPED``.
+    """
+    if entry in _WILDCARD_HOST_PATTERNS:
+        return frozenset({OntologyCategory.NETWORK_UNRESTRICTED})
+
+    if entry.startswith("file:"):
+        return frozenset({OntologyCategory.FILE_SYSTEM_READ})
+
+    if entry.startswith(("chrome://", "edge://", "brave://", "about:")):
+        return frozenset()
+
+    # Extract scheme + host from match patterns like
+    # `scheme://host/path` (the Chrome host-permission shape).
+    if "://" in entry:
+        rest = entry.split("://", 1)[1]
+        host = rest.split("/", 1)[0]
+        # Bare host wildcards: "*" or "*.*" cover any origin.
+        if host in {"*", "*.*"}:
+            return frozenset({OntologyCategory.NETWORK_UNRESTRICTED})
+        return frozenset({OntologyCategory.NETWORK_SCOPED})
+
+    # Plain "/*" path patterns without a scheme — defensive: treat as
+    # scoped (the source-side validator should have rejected these).
+    if entry.endswith("/*"):
+        return frozenset({OntologyCategory.NETWORK_SCOPED})
+
     return frozenset()
+
+
+def _classify_host_permissions(hosts: list) -> frozenset[OntologyCategory]:
+    """Walk a list of host-permission patterns and union the classifications.
+    Empty input → empty result. Defensive against non-string entries.
+
+    Precedence: ``NETWORK_UNRESTRICTED`` SUPPRESSES ``NETWORK_SCOPED`` (a
+    list with one wildcard + one specific origin is effectively
+    unrestricted; emitting both tags would double-count permission
+    breadth). ``FILE_SYSTEM_READ`` from a ``file://`` pattern is
+    independent and additive.
+    """
+    if not isinstance(hosts, list) or not hosts:
+        return frozenset()
+    tags: set[OntologyCategory] = set()
+    for entry in hosts:
+        if not isinstance(entry, str):
+            continue
+        tags |= _classify_host_pattern(entry)
+    if OntologyCategory.NETWORK_UNRESTRICTED in tags:
+        tags.discard(OntologyCategory.NETWORK_SCOPED)
+    return frozenset(tags)
 
 
 def map_chromium_extension(asset: Asset) -> frozenset[OntologyCategory]:
-    """P3.2 placeholder per Q5 ratification (2026-06-06): STRUCTURAL completeness
-    only. P3.8 wires the real rules across all Phase 3 sources at once
-    (e.g., ``permissions: ["nativeMessaging"]`` → ``shell_execute`` +
-    ``inter_tool_communication``, ``host_permissions: ["<all_urls>"]`` →
-    ``network_unrestricted``, ``has_background_service_worker = True`` →
-    ``code_execution``, etc.). Until then this mapper returns ``frozenset()``
-    and the asset lands at INFO band per spec §6.5 Q1.
+    """Chromium-family extension rules (P3.8). Five rule chains:
 
-    The mapper EXISTS so the P2.2-gate CI gate
-    (``check_ontology_mapping_completeness``) passes — a registered
-    DiscoverySource without a registry entry would fail the build."""
-    del asset
-    return frozenset()
+    1. ``permissions`` lookup against :data:`_CHROME_PERMISSION_MAP`.
+       Unmapped permission strings log at INFO and emit no tag (AP-5
+       ratification + authorized deferral of directive §5.6 — UI
+       renders these as "not yet classified", never "safe", via the
+       memory rider ``project_unrecognized_is_not_low_risk.md``).
+    2. Host permissions (``host_permissions`` ∪ ``mv2_host_permissions``):
+       wildcard → ``NETWORK_UNRESTRICTED``; scoped origin → ``NETWORK_SCOPED``.
+    3. Background presence (``has_background_service_worker`` OR
+       ``has_background_scripts``) → ``CODE_EXECUTION``.
+    4. Content-script ``<all_urls>`` match → ``FILE_SYSTEM_READ`` (the
+       extension reads page DOMs across all sites).
+    5. Optional-permissions are NOT mapped at this tier (they are
+       inactive until the user grants them; surfacing as base tags
+       would over-tag).
+    """
+    state = asset.current_state
+    tags: set[OntologyCategory] = set()
+
+    permissions = state.get("permissions") or []
+    if isinstance(permissions, list):
+        # Per AP-5: log unmapped permissions ONCE per (extension_id, permission)
+        # per scan. Local set scoped to this invocation; the orchestrator's
+        # once-per-asset-per-scan call pattern carries the rest. Module-level
+        # state is forbidden by CLAUDE.md.
+        logged_unmapped: set[str] = set()
+        for perm in permissions:
+            if not isinstance(perm, str):
+                continue
+            mapped = _CHROME_PERMISSION_MAP.get(perm)
+            if mapped is not None:
+                tags |= mapped
+            elif perm not in logged_unmapped:
+                logged_unmapped.add(perm)
+                logger.info(
+                    "unmapped_chrome_permission permission=%s extension_id=%s browser=%s",
+                    perm,
+                    state.get("extension_id", "?"),
+                    state.get("browser", "?"),
+                )
+
+    hosts_union: list = []
+    for key in ("host_permissions", "mv2_host_permissions"):
+        h = state.get(key)
+        if isinstance(h, list):
+            hosts_union.extend(h)
+    tags |= _classify_host_permissions(hosts_union)
+
+    if state.get("has_background_service_worker") or state.get("has_background_scripts"):
+        tags.add(OntologyCategory.CODE_EXECUTION)
+
+    content_matches = state.get("content_scripts_matches") or []
+    if isinstance(content_matches, list) and "<all_urls>" in content_matches:
+        tags.add(OntologyCategory.FILE_SYSTEM_READ)
+
+    return frozenset(tags)
+
+
+_PYTHON_PACKAGE_CAPABILITY_HINTS: dict[str, frozenset[OntologyCategory]] = {
+    "boto3": frozenset({OntologyCategory.NETWORK_UNRESTRICTED}),
+    "botocore": frozenset({OntologyCategory.NETWORK_UNRESTRICTED}),
+    "paramiko": frozenset({OntologyCategory.SHELL_EXECUTE, OntologyCategory.NETWORK_UNRESTRICTED}),
+    "fabric": frozenset({OntologyCategory.SHELL_EXECUTE, OntologyCategory.NETWORK_UNRESTRICTED}),
+    "requests": frozenset({OntologyCategory.NETWORK_UNRESTRICTED}),
+    "httpx": frozenset({OntologyCategory.NETWORK_UNRESTRICTED}),
+    "aiohttp": frozenset({OntologyCategory.NETWORK_UNRESTRICTED}),
+    "urllib3": frozenset({OntologyCategory.NETWORK_UNRESTRICTED}),
+    "cryptography": frozenset({OntologyCategory.SECRETS_ACCESS}),
+    "keyring": frozenset({OntologyCategory.SECRETS_ACCESS}),
+    "openai": frozenset({OntologyCategory.NETWORK_UNRESTRICTED}),
+    "anthropic": frozenset({OntologyCategory.NETWORK_UNRESTRICTED}),
+}
+"""Narrow hand-curated package-name → capability map. Keys are PEP 503
+normalized lowercase. Most packages return ``frozenset()`` by design —
+Python packages do not declare permissions in metadata, so the hint
+table covers only well-known-class libraries whose name reliably
+predicts capability.
+
+**Authorized deferral of directive §7.3.3** (2026-06-09): the directive
+calls for ``config/package-capability-hints.yaml`` to externalize this
+table. Per AP-3 ratification, P3.8 inlines the map following the
+``_MCP_SCORED_KEYWORDS`` precedent above; YAML externalization is a
+follow-up when the list grows beyond curatable-in-source size.
+Logged in ``v022/directive-gap-log.md``.
+"""
 
 
 def map_python_package(asset: Asset) -> frozenset[OntologyCategory]:
-    """P3.3 placeholder per Q5 ratification (2026-06-06): STRUCTURAL completeness
-    only. P3.8 wires the real rules across all Phase 3 sources at once
-    (e.g., known-malicious package name → composite floor; package depends on
-    `requests` or `urllib3` with capability to reach external hosts;
-    cross-reference against P4.1 OSV.dev CVE feed for active vulnerabilities).
-    Until then this mapper returns ``frozenset()`` and the asset lands at INFO
-    band per spec §6.5 Q1.
+    """Installed Python package rules (P3.8).
 
-    The mapper EXISTS so the P2.2-gate CI gate
-    (``check_ontology_mapping_completeness``) passes — a registered
-    DiscoverySource without a registry entry would fail the build."""
-    del asset
-    return frozenset()
+    Look up ``package_name_normalized`` (PEP 503 lowercase, normalized
+    source-side) in :data:`_PYTHON_PACKAGE_CAPABILITY_HINTS`. Unrecognized
+    packages legitimately return ``frozenset()`` (INFO band) — risk for
+    them emerges from CVE severity + repository activity in Phase 4,
+    not from name-based capability inference.
+    """
+    name = str(asset.current_state.get("package_name_normalized") or "").lower()
+    return _PYTHON_PACKAGE_CAPABILITY_HINTS.get(name, frozenset())
 
 
 def map_python_dependency(asset: Asset) -> frozenset[OntologyCategory]:
-    """P3.4 placeholder per Q5 ratification (2026-06-06): STRUCTURAL completeness
-    only. P3.8 wires the real rules across all Phase 3 sources at once
-    (e.g., join project-declared deps against the installed-packages source to
-    surface declared-but-not-installed supply-chain drift; cross-reference
-    package names against P4.1 OSV.dev CVE feed). Until then this mapper
-    returns ``frozenset()`` and the asset lands at INFO band per spec §6.5 Q1.
+    """Declared Python dependency rules (P3.8).
 
-    The mapper EXISTS so the P2.2-gate CI gate
-    (``check_ontology_mapping_completeness``) passes — a registered
-    DiscoverySource without a registry entry would fail the build."""
-    del asset
-    return frozenset()
+    Identical lookup to :func:`map_python_package` (shared
+    :data:`_PYTHON_PACKAGE_CAPABILITY_HINTS` table). The
+    declared-vs-installed cross-source join is a pipeline / P4.x
+    concern, not a per-asset mapper concern — this function tags the
+    single asset based on its package name.
+    """
+    name = str(asset.current_state.get("package_name_normalized") or "").lower()
+    return _PYTHON_PACKAGE_CAPABILITY_HINTS.get(name, frozenset())
+
+
+_NODE_PACKAGE_CAPABILITY_HINTS: dict[str, frozenset[OntologyCategory]] = {
+    "axios": frozenset({OntologyCategory.NETWORK_UNRESTRICTED}),
+    "node-fetch": frozenset({OntologyCategory.NETWORK_UNRESTRICTED}),
+    "got": frozenset({OntologyCategory.NETWORK_UNRESTRICTED}),
+    "superagent": frozenset({OntologyCategory.NETWORK_UNRESTRICTED}),
+    "shelljs": frozenset({OntologyCategory.SHELL_EXECUTE, OntologyCategory.FILE_SYSTEM_WRITE}),
+    "execa": frozenset({OntologyCategory.SHELL_EXECUTE}),
+    "cross-spawn": frozenset({OntologyCategory.SHELL_EXECUTE}),
+    "openai": frozenset({OntologyCategory.NETWORK_UNRESTRICTED}),
+    "@anthropic-ai/sdk": frozenset({OntologyCategory.NETWORK_UNRESTRICTED}),
+    "@aws-sdk/client-s3": frozenset({OntologyCategory.NETWORK_UNRESTRICTED}),
+}
+"""Narrow hand-curated npm package-name → capability map. Keys are
+lowercased (npm names are case-insensitive in normalized form). Same
+authorized-deferral disposition as the Python table — inline now,
+externalize later when curatable-in-source size is exceeded."""
 
 
 def map_node_package(asset: Asset) -> frozenset[OntologyCategory]:
-    """P3.5 placeholder per Q5 ratification (2026-06-06): STRUCTURAL completeness
-    only. P3.8 wires the real rules across all Phase 3 sources at once
-    (e.g., presence of `preinstall`/`postinstall` lifecycle scripts on a
-    self-asset → `code_execution` capability; cross-reference package names
-    against P4.1 OSV.dev CVE feed; declared-but-not-installed join with
-    package-lock.json). Until then this mapper returns ``frozenset()`` and
-    the asset lands at INFO band per spec §6.5 Q1.
+    """Node package rules (P3.8).
 
-    The mapper EXISTS so the P2.2-gate CI gate
-    (``check_ontology_mapping_completeness``) passes — a registered
-    DiscoverySource without a registry entry would fail the build."""
-    del asset
-    return frozenset()
+    Two rule chains:
+
+    1. **Self-asset only** (``dep_kind == "self"``):
+       ``lifecycle_scripts`` non-empty OR ``bin_entries`` non-empty
+       → ``CODE_EXECUTION``. Lifecycle scripts run automatically on
+       ``npm install``; bin entries add executable commands to PATH.
+
+       **R3 ratification (2026-06-09):** ``bin_entries`` is restricted
+       to the user's own project package (``dep_kind == "self"``), NOT
+       every ``prettier`` in node_modules — the source already enforces
+       this asymmetry by only collecting ``bin_entries`` on the self-asset.
+       The mapper double-guards via the ``dep_kind == "self"`` check.
+
+    2. **All assets** (self or dependency): look up
+       ``package_name_normalized`` in
+       :data:`_NODE_PACKAGE_CAPABILITY_HINTS`.
+
+    The two chains union.
+    """
+    state = asset.current_state
+    tags: set[OntologyCategory] = set()
+
+    if state.get("dep_kind") == "self":
+        lifecycle = state.get("lifecycle_scripts") or []
+        bins = state.get("bin_entries") or []
+        if (isinstance(lifecycle, list) and lifecycle) or (isinstance(bins, list) and bins):
+            tags.add(OntologyCategory.CODE_EXECUTION)
+
+    name = str(state.get("package_name_normalized") or "").lower()
+    tags |= _NODE_PACKAGE_CAPABILITY_HINTS.get(name, frozenset())
+
+    return frozenset(tags)
+
+
+_HOMEBREW_LLM_HTTP_KEYWORDS: frozenset[str] = frozenset({"ollama", "llama", "llama-cpp", "vllm", "gguf", "gpt4all"})
+"""AP-4 taxonomy: LLM HTTP servers. Locally-installed LLM runners that
+expose a network listener (Ollama's REST API on 11434, llama.cpp's
+``--host`` server) AND execute model inference. Tag with both
+``CODE_EXECUTION`` and ``NETWORK_UNRESTRICTED`` per spec §6.6
+declared-capability (R4 ratification 2026-06-09: capability is declared
+by presence, not runtime observation)."""
+
+
+_HOMEBREW_GPU_KEYWORDS: frozenset[str] = frozenset({"cuda", "cudnn", "rocm", "openvino"})
+"""AP-4 taxonomy: GPU runtimes. Execute compute kernels but do not
+themselves serve network — tag with ``CODE_EXECUTION`` only."""
+
+
+_HOMEBREW_ML_FRAMEWORK_KEYWORDS: frozenset[str] = frozenset(
+    {"pytorch", "tensorflow", "jax", "mlx", "onnx", "onnxruntime"}
+)
+"""AP-4 taxonomy: ML frameworks. Compute pipelines; no network listener.
+Tag with ``CODE_EXECUTION`` only."""
+
+
+_HOMEBREW_API_CLIENT_KEYWORDS: frozenset[str] = frozenset({"openai", "anthropic"})
+"""AP-4 taxonomy: API client CLIs. Network-only — the installed CLI
+makes outbound calls; no local code execution beyond the CLI binary's
+own (which doesn't qualify as ``CODE_EXECUTION`` on its own)."""
 
 
 def map_homebrew_ai_tool(asset: Asset) -> frozenset[OntologyCategory]:
-    """P3.6 placeholder per Q5 ratification (2026-06-06): STRUCTURAL completeness
-    only. P3.8 wires the real rules across all Phase 3 sources at once (e.g.,
-    local LLM runners like Ollama → `code_execution` + `network_unrestricted`
-    capability; GPU runtimes → `code_execution`; cross-reference formula
-    names against P4.1 OSV.dev CVE feed). Until then this mapper returns
-    ``frozenset()`` and the asset lands at INFO band per spec §6.5 Q1.
+    """Homebrew AI tool rules (P3.8). Tagging is keyword-driven on
+    ``match_reason.keyword`` — the source already classified the formula
+    by AI-keyword family; this mapper translates that classification to
+    ontology tags via the AP-4 taxonomy split:
 
-    The mapper EXISTS so the P2.2-gate CI gate
-    (``check_ontology_mapping_completeness``) passes — a registered
-    DiscoverySource without a registry entry would fail the build."""
-    del asset
+    - LLM HTTP servers (``ollama``, ``llama``, …) → ``CODE_EXECUTION``
+      + ``NETWORK_UNRESTRICTED``
+    - GPU runtimes (``cuda``, ``rocm``, …) → ``CODE_EXECUTION`` only
+    - ML frameworks (``pytorch``, ``tensorflow``, …) → ``CODE_EXECUTION``
+      only
+    - API client CLIs (``openai``, ``anthropic``) → ``NETWORK_UNRESTRICTED``
+    - Other (unrecognized keyword, ambiguous) → ``frozenset()`` (INFO).
+
+    R4 ratification: brew Ollama tags the capability *potential* per
+    spec §6.6 declared-capability — the static install IS the
+    capability declaration; the running daemon's behavior is a Phase 4
+    runtime-correlation concern.
+    """
+    state = asset.current_state
+    match_reason = state.get("match_reason") or {}
+    keyword = ""
+    if isinstance(match_reason, dict):
+        keyword = str(match_reason.get("keyword") or "").lower()
+    if not keyword:
+        return frozenset()
+    if keyword in _HOMEBREW_LLM_HTTP_KEYWORDS:
+        return frozenset({OntologyCategory.CODE_EXECUTION, OntologyCategory.NETWORK_UNRESTRICTED})
+    if keyword in _HOMEBREW_GPU_KEYWORDS or keyword in _HOMEBREW_ML_FRAMEWORK_KEYWORDS:
+        return frozenset({OntologyCategory.CODE_EXECUTION})
+    if keyword in _HOMEBREW_API_CLIENT_KEYWORDS:
+        return frozenset({OntologyCategory.NETWORK_UNRESTRICTED})
     return frozenset()
 
 
-def map_claude_desktop_integration(asset: Asset) -> frozenset[OntologyCategory]:
-    """P3.7 placeholder per Q5 ratification (2026-06-06): STRUCTURAL completeness
-    only. P3.8 wires the real rules across all Phase 3 sources at once (e.g.,
-    `coworkWebSearchEnabled=True` → `network_unrestricted` capability;
-    filesystem_access integrations → `file_system_read` + `file_system_write`;
-    unknown_top_level integration discovered → INFO band by default until
-    classified). Until then this mapper returns ``frozenset()`` and the
-    asset lands at INFO band per spec §6.5 Q1.
+_CLAUDE_DESKTOP_TOGGLE_TAGS: dict[str, frozenset[OntologyCategory]] = {
+    "coworkwebsearchenabled": frozenset({OntologyCategory.NETWORK_UNRESTRICTED}),
+    "coworkscheduledtasksenabled": frozenset({OntologyCategory.CODE_EXECUTION}),
+    "ccdscheduledtasksenabled": frozenset({OntologyCategory.CODE_EXECUTION}),
+}
+"""Toggle-name → capability map. R5 ratification (2026-06-09):
+``coworkScheduledTasksEnabled`` and ``ccdScheduledTasksEnabled`` enable
+scheduled execution of Claude-Desktop-side code, which is squarely
+``CODE_EXECUTION`` per spec §5.2. Web-search enables outbound HTTP to
+arbitrary search providers → ``NETWORK_UNRESTRICTED``.
 
-    The mapper EXISTS so the P2.2-gate CI gate
-    (``check_ontology_mapping_completeness``) passes — a registered
-    DiscoverySource without a registry entry would fail the build."""
-    del asset
+Names are lowercased to match the source-side normalization in
+:mod:`claude_monitoring.attack_surface.discovery.sources.claude_desktop_integrations`."""
+
+
+def map_claude_desktop_integration(asset: Asset) -> frozenset[OntologyCategory]:
+    """Claude Desktop integration rules (P3.8). Three integration kinds:
+
+    - ``toggle`` — Look up ``integration_name_normalized`` in
+      :data:`_CLAUDE_DESKTOP_TOGGLE_TAGS`. Unknown toggles emit
+      ``frozenset()`` (INFO band).
+    - ``filesystem_access`` — Emit
+      ``{FILE_SYSTEM_READ, FILE_SYSTEM_WRITE}``. The integration grants
+      Claude Desktop both directions on the configured path.
+    - ``unknown_top_level`` — Emit ``frozenset()`` (forward-compat
+      capture). UI renders these as "Not yet classified", never "safe"
+      (memory rider ``project_unrecognized_is_not_low_risk.md``; the
+      §6.8 unknown-capable-floor does NOT extend to this source).
+
+    Defensive against missing fields: unrecognized ``integration_kind``
+    or missing ``current_state`` defaults to ``frozenset()`` (fail-closed).
+    """
+    state = asset.current_state
+    kind = state.get("integration_kind")
+    if kind == "toggle":
+        name = state.get("integration_name_normalized") or ""
+        return _CLAUDE_DESKTOP_TOGGLE_TAGS.get(str(name).lower(), frozenset())
+    if kind == "filesystem_access":
+        return frozenset({OntologyCategory.FILE_SYSTEM_READ, OntologyCategory.FILE_SYSTEM_WRITE})
     return frozenset()
 
 
