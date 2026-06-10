@@ -500,7 +500,7 @@ class TestOrphanMitmproxyCleanup:
             patch("claude_monitoring.lifecycle.subprocess.run", return_value=completed),
             patch("claude_monitoring.lifecycle.is_mitmproxy_process", return_value=True),
         ):
-            pids = lifecycle.find_orphan_mitmproxy_on_port(9080)
+            pids = lifecycle.find_orphan_mitmproxy_on_port(9080, exclude_pid=None)
         assert pids == [4682]
 
     def test_find_orphan_excludes_our_pid(self, tmp_output_dir):
@@ -528,12 +528,12 @@ class TestOrphanMitmproxyCleanup:
             patch("claude_monitoring.lifecycle.subprocess.run", return_value=completed),
             patch("claude_monitoring.lifecycle.is_mitmproxy_process", return_value=False),
         ):
-            pids = lifecycle.find_orphan_mitmproxy_on_port(9080)
+            pids = lifecycle.find_orphan_mitmproxy_on_port(9080, exclude_pid=None)
         assert pids == []
 
     def test_find_orphan_returns_empty_on_lsof_error(self, tmp_output_dir):
         with patch("claude_monitoring.lifecycle.subprocess.run", side_effect=OSError("boom")):
-            assert lifecycle.find_orphan_mitmproxy_on_port(9080) == []
+            assert lifecycle.find_orphan_mitmproxy_on_port(9080, exclude_pid=None) == []
 
     def test_kill_orphan_signals_victims_and_waits(self, tmp_output_dir):
         victims_killed: list[tuple[int, int]] = []
@@ -553,7 +553,7 @@ class TestOrphanMitmproxyCleanup:
             patch("claude_monitoring.lifecycle.is_pid_alive", side_effect=fake_alive),
             patch("claude_monitoring.lifecycle.time.sleep"),
         ):
-            killed = lifecycle.kill_orphan_mitmproxy(9080, timeout=0.5)
+            killed = lifecycle.kill_orphan_mitmproxy(9080, exclude_pid=None, timeout=0.5)
 
         assert killed == [4682]
         assert (4682, signal.SIGTERM) in victims_killed
@@ -572,14 +572,14 @@ class TestOrphanMitmproxyCleanup:
             patch("claude_monitoring.lifecycle.time.sleep"),
             patch("claude_monitoring.lifecycle.time.time", side_effect=[0, 0, 999, 999]),
         ):
-            lifecycle.kill_orphan_mitmproxy(9080, timeout=0.1)
+            lifecycle.kill_orphan_mitmproxy(9080, exclude_pid=None, timeout=0.1)
 
         assert signal.SIGTERM in kill_signals
         assert signal.SIGKILL in kill_signals
 
     def test_kill_orphan_returns_empty_when_no_victims(self, tmp_output_dir):
         with patch("claude_monitoring.lifecycle.find_orphan_mitmproxy_on_port", return_value=[]):
-            assert lifecycle.kill_orphan_mitmproxy(9080) == []
+            assert lifecycle.kill_orphan_mitmproxy(9080, exclude_pid=None) == []
 
 
 # ─────────────────────────────────────────────────────────────
@@ -980,3 +980,466 @@ class TestMitmdumpDualStackOnMacOS:
                     proc.wait(timeout=1)
                 except subprocess.TimeoutExpired:
                     pass
+
+
+# ─────────────────────────────────────────────────────────────
+# Issue #98 follow-up — task #181
+# (1) holder identification: kill_orphan_mitmproxy MUST NOT kill a
+#     mitmdump whose parent is an alive monitor process. The empirical
+#     regression: on 2026-06-10, four pytest invocations sequentially
+#     SIGTERMed the user's running daemon's healthy mitmdump children
+#     because the orphan-kill heuristic only checked "is it mitmdump"
+#     and not "is its parent a live monitor."
+# (2) watchdog symmetry: re-enable system proxy on successful restart
+#     iff the user originally had it on.
+# (3) single-instance guard: `--start` against a running daemon must
+#     refuse BEFORE detect_stale_state runs.
+# (4) watchdog UX: ≥2 consecutive restarts → print actual exit reason.
+# ─────────────────────────────────────────────────────────────
+
+
+class TestParentMonitorOwnedMitmdumpIsNotOrphan:
+    """Leg 1 — parent-PID liveness check.
+
+    `is_child_of_running_monitor(pid)` returns True iff the given pid's
+    parent is an alive process whose cmdline contains `ai-monitor` AND
+    `--start`. Used by `find_orphan_mitmproxy_on_port` to skip mitmdumps
+    that belong to another running monitor (not orphans)."""
+
+    def test_returns_true_when_parent_is_running_monitor(self, tmp_output_dir):
+        """ps -o ppid= returns a parent pid; ps -o command= on the parent
+        shows `ai-monitor --start --with-proxy`. Expect True."""
+
+        def fake_run(cmd, *args, **kwargs):
+            joined = " ".join(cmd)
+            result = MagicMock()
+            if "ppid=" in joined:
+                result.stdout = "39939\n"
+            elif "command=" in joined:
+                result.stdout = "/path/to/python /Users/x/.venv/bin/ai-monitor --start --with-proxy\n"
+            return result
+
+        with (
+            patch("claude_monitoring.lifecycle.subprocess.run", side_effect=fake_run),
+            patch("claude_monitoring.lifecycle.is_pid_alive", return_value=True),
+        ):
+            assert lifecycle.is_child_of_running_monitor(55324) is True
+
+    def test_returns_false_when_parent_is_dead(self, tmp_output_dir):
+        """Parent pid no longer alive → orphan, not a child of a running monitor."""
+
+        def fake_run(cmd, *args, **kwargs):
+            result = MagicMock()
+            if "ppid=" in " ".join(cmd):
+                result.stdout = "12345\n"
+            else:
+                result.stdout = "ai-monitor --start --with-proxy\n"
+            return result
+
+        with (
+            patch("claude_monitoring.lifecycle.subprocess.run", side_effect=fake_run),
+            patch("claude_monitoring.lifecycle.is_pid_alive", return_value=False),
+        ):
+            assert lifecycle.is_child_of_running_monitor(55324) is False
+
+    def test_returns_false_when_parent_is_not_ai_monitor(self, tmp_output_dir):
+        """Parent alive but not `ai-monitor --start` — likely a stray mitmdump
+        spawned manually or by another tool. Treat as orphan."""
+
+        def fake_run(cmd, *args, **kwargs):
+            result = MagicMock()
+            if "ppid=" in " ".join(cmd):
+                result.stdout = "12345\n"
+            else:
+                result.stdout = "/bin/bash\n"
+            return result
+
+        with (
+            patch("claude_monitoring.lifecycle.subprocess.run", side_effect=fake_run),
+            patch("claude_monitoring.lifecycle.is_pid_alive", return_value=True),
+        ):
+            assert lifecycle.is_child_of_running_monitor(55324) is False
+
+    def test_returns_true_when_ppid_lookup_fails_uncertainty_skips_kill(self, tmp_output_dir):
+        """Task #181 a2 finding 3 (judge 2026-06-10): on ps/subprocess failure,
+        we cannot prove the pid is an orphan. The HARMFUL outcome is killing a
+        live child (today's regression). The benign outcome is leaving a
+        true orphan to hold the port until next start (loud EADDRINUSE).
+        Therefore: on uncertainty, return True so the caller does NOT kill."""
+        with (
+            patch("claude_monitoring.lifecycle.is_pid_alive", return_value=True),
+            patch("claude_monitoring.lifecycle.subprocess.run", side_effect=OSError("ps gone")),
+        ):
+            assert lifecycle.is_child_of_running_monitor(55324) is True
+
+    def test_returns_true_when_cmdline_lookup_fails(self, tmp_output_dir):
+        """Same fail-direction: cmdline lookup failure → uncertain → True."""
+        call_count = [0]
+
+        def fake_run(cmd, *args, **kwargs):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                # First call: ppid= succeeds
+                return MagicMock(stdout="12345\n")
+            # Second call: command= raises
+            raise OSError("ps cmdline gone")
+
+        with (
+            patch("claude_monitoring.lifecycle.is_pid_alive", return_value=True),
+            patch("claude_monitoring.lifecycle.subprocess.run", side_effect=fake_run),
+        ):
+            assert lifecycle.is_child_of_running_monitor(55324) is True
+
+    def test_returns_true_when_ppid_unparseable(self, tmp_output_dir):
+        """Malformed ppid output → uncertain → True."""
+        with (
+            patch("claude_monitoring.lifecycle.is_pid_alive", return_value=True),
+            patch(
+                "claude_monitoring.lifecycle.subprocess.run",
+                return_value=MagicMock(stdout="not-a-number\n"),
+            ),
+        ):
+            assert lifecycle.is_child_of_running_monitor(55324) is True
+
+
+class TestFindOrphanSkipsLiveMonitorChildren:
+    """Leg 1 wiring — `find_orphan_mitmproxy_on_port` must skip pids whose
+    parent is a running monitor, in addition to the existing exclude_pid
+    + is_mitmproxy_process gates."""
+
+    def test_skips_child_of_live_monitor(self, tmp_output_dir):
+        sample = (
+            "COMMAND  PID       USER   FD   TYPE             DEVICE SIZE/OFF NODE NAME\n"
+            "Python  55324 rajanyadav    7u  IPv6 0xcf851315a5526bc9      0t0  TCP *:9080 (LISTEN)\n"
+        )
+        completed = MagicMock()
+        completed.stdout = sample
+        with (
+            patch("claude_monitoring.lifecycle.subprocess.run", return_value=completed),
+            patch("claude_monitoring.lifecycle.is_mitmproxy_process", return_value=True),
+            patch("claude_monitoring.lifecycle.is_child_of_running_monitor", return_value=True),
+        ):
+            pids = lifecycle.find_orphan_mitmproxy_on_port(9080, exclude_pid=None)
+        assert pids == [], "mitmdump child of a live monitor MUST NOT be returned as orphan"
+
+    def test_returns_true_orphan_when_parent_monitor_is_dead(self, tmp_output_dir):
+        sample = (
+            "COMMAND  PID       USER   FD   TYPE             DEVICE SIZE/OFF NODE NAME\n"
+            "Python  55324 rajanyadav    7u  IPv6 0xcf851315a5526bc9      0t0  TCP *:9080 (LISTEN)\n"
+        )
+        completed = MagicMock()
+        completed.stdout = sample
+        with (
+            patch("claude_monitoring.lifecycle.subprocess.run", return_value=completed),
+            patch("claude_monitoring.lifecycle.is_mitmproxy_process", return_value=True),
+            patch("claude_monitoring.lifecycle.is_child_of_running_monitor", return_value=False),
+        ):
+            pids = lifecycle.find_orphan_mitmproxy_on_port(9080, exclude_pid=None)
+        assert pids == [55324]
+
+
+class TestStartRefusesWhenDaemonAlreadyRunning:
+    """Leg 3 — `--start` early refusal.
+
+    Single-instance guard at the top of the `--start` branch in monitor.py.
+    Must run BEFORE `detect_stale_state` so the cleanup path never executes
+    when a healthy daemon is already running."""
+
+    def test_already_running_check_helper_returns_true_when_pid_alive_and_heartbeat_fresh(self, tmp_output_dir):
+        from claude_monitoring.lifecycle import (
+            get_monitor_pid_file,
+            is_monitor_already_running,
+            write_pid_file,
+        )
+
+        write_pid_file(get_monitor_pid_file(), 12345)
+        # Heartbeat: now
+        (tmp_output_dir / ".heartbeat").write_text("2099-01-01T00:00:00+00:00")
+        with patch("claude_monitoring.lifecycle.is_pid_alive", return_value=True):
+            assert is_monitor_already_running() is True
+
+    def test_helper_returns_false_when_pid_missing(self, tmp_output_dir):
+        from claude_monitoring.lifecycle import is_monitor_already_running
+
+        assert is_monitor_already_running() is False
+
+    def test_helper_returns_false_when_heartbeat_stale(self, tmp_output_dir):
+        from claude_monitoring.lifecycle import (
+            get_monitor_pid_file,
+            is_monitor_already_running,
+            write_pid_file,
+        )
+
+        write_pid_file(get_monitor_pid_file(), 12345)
+        (tmp_output_dir / ".heartbeat").write_text("1900-01-01T00:00:00+00:00")
+        with patch("claude_monitoring.lifecycle.is_pid_alive", return_value=True):
+            assert is_monitor_already_running() is False
+
+    def test_helper_returns_false_when_pid_not_alive(self, tmp_output_dir):
+        from claude_monitoring.lifecycle import (
+            get_monitor_pid_file,
+            is_monitor_already_running,
+            write_pid_file,
+        )
+
+        write_pid_file(get_monitor_pid_file(), 12345)
+        (tmp_output_dir / ".heartbeat").write_text("2099-01-01T00:00:00+00:00")
+        with patch("claude_monitoring.lifecycle.is_pid_alive", return_value=False):
+            assert is_monitor_already_running() is False
+
+
+class TestProxyManagerExitReasonAfterRepeatedRestarts:
+    """Leg 4 — watchdog UX surface the actual mitmdump exit reason.
+
+    ProxyManager must capture the most recent mitmdump exit code and last
+    stderr line. The watchdog reads these via `pm.last_exit_summary()` when
+    `pm.consecutive_restart_count >= 2` and includes them in the printed
+    'died' message."""
+
+    def test_consecutive_restart_count_increments_on_restart(self, tmp_output_dir):
+        pm = lifecycle.ProxyManager(log_path=None)
+        assert pm.consecutive_restart_count == 0
+        with (
+            patch.object(pm, "start", return_value=True),
+            patch("claude_monitoring.lifecycle.time.sleep"),
+        ):
+            pm.restart()
+            assert pm.consecutive_restart_count == 1
+            pm.restart()
+            assert pm.consecutive_restart_count == 2
+
+    def test_consecutive_restart_count_resets_on_reset_call(self, tmp_output_dir):
+        pm = lifecycle.ProxyManager(log_path=None)
+        with (
+            patch.object(pm, "start", return_value=True),
+            patch("claude_monitoring.lifecycle.time.sleep"),
+        ):
+            pm.restart()
+            pm.restart()
+            assert pm.consecutive_restart_count == 2
+        pm.reset_consecutive_restart_count()
+        assert pm.consecutive_restart_count == 0
+
+    def test_last_exit_summary_returns_exit_code_and_tail(self, tmp_path, tmp_output_dir):
+        """When the previous mitmdump wrote a stderr line and exited non-zero,
+        last_exit_summary() returns it in a structured format."""
+        log_path = tmp_path / "mitmproxy.log"
+        log_path.write_text("starting\nbinding 9080\nERROR: address already in use\n")
+        pm = lifecycle.ProxyManager(log_path=log_path)
+        # Simulate a recorded exit
+        pm._last_exit_code = 1
+        summary = pm.last_exit_summary()
+        assert summary is not None
+        assert "exit=1" in summary
+        assert "address already in use" in summary
+
+    def test_last_exit_summary_returns_none_when_no_exit_recorded(self, tmp_output_dir):
+        pm = lifecycle.ProxyManager(log_path=None)
+        assert pm.last_exit_summary() is None
+
+
+class TestEnableSystemProxyForPort:
+    """`enable_system_proxy_for_port(port)` invokes networksetup correctly."""
+
+    def test_enable_invokes_networksetup_setsecurewebproxy(self, tmp_output_dir):
+        captured: list[list[str]] = []
+
+        def fake_run(cmd, *args, **kwargs):
+            captured.append(cmd)
+            return MagicMock(returncode=0)
+
+        with patch("claude_monitoring.lifecycle.subprocess.run", side_effect=fake_run):
+            assert lifecycle.enable_system_proxy_for_port(9080) is True
+        assert captured, "subprocess.run was not invoked"
+        cmd = captured[0]
+        assert cmd[:3] == ["networksetup", "-setsecurewebproxy", "Wi-Fi"]
+        assert "127.0.0.1" in cmd and "9080" in cmd
+
+    def test_enable_returns_false_on_subprocess_error(self, tmp_output_dir):
+        with patch("claude_monitoring.lifecycle.subprocess.run", side_effect=OSError("denied")):
+            assert lifecycle.enable_system_proxy_for_port(9080) is False
+
+
+class TestRefuseIfAlreadyRunning:
+    """`refuse_if_already_running()` prints + exit(1) when daemon is alive,
+    no-op otherwise."""
+
+    def test_no_op_when_not_running(self, tmp_output_dir, capsys):
+        # No PID file, no heartbeat → not running → returns cleanly
+        lifecycle.refuse_if_already_running()
+        out = capsys.readouterr().out
+        assert "already running" not in out.lower()
+
+    def test_exits_with_message_when_running(self, tmp_output_dir, capsys):
+        from claude_monitoring.lifecycle import get_monitor_pid_file, write_pid_file
+
+        write_pid_file(get_monitor_pid_file(), 12345)
+        (tmp_output_dir / ".heartbeat").write_text("2099-01-01T00:00:00+00:00")
+        with (
+            patch("claude_monitoring.lifecycle.is_pid_alive", return_value=True),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            lifecycle.refuse_if_already_running()
+        assert exc_info.value.code == 1
+        out = capsys.readouterr().out
+        assert "already running" in out.lower()
+        assert "12345" in out
+
+
+class TestHandleMitmdumpDeathAndRestart:
+    """`handle_mitmdump_death_and_restart(pm)` orchestrates the
+    snapshot → disable → restart → re-enable cycle and returns a result dict.
+
+    Covers task #181 leg 2 (system proxy symmetry) + leg 4 (exit summary
+    surfacing after ≥2 consecutive restarts)."""
+
+    def test_returns_restored_flag_when_proxy_was_on_and_restart_succeeds(self, tmp_output_dir):
+        pm = MagicMock()
+        pm.consecutive_restart_count = 0
+        pm.last_exit_summary.return_value = None
+        pm.restart.return_value = True
+        with (
+            patch(
+                "claude_monitoring.lifecycle.is_system_proxy_enabled_for_port",
+                return_value=True,
+            ),
+            patch("claude_monitoring.lifecycle.disable_system_proxy") as fake_disable,
+            patch(
+                "claude_monitoring.lifecycle.enable_system_proxy_for_port",
+                return_value=True,
+            ) as fake_enable,
+            patch("claude_monitoring.config.get_proxy_port", return_value=9080),
+        ):
+            result = lifecycle.handle_mitmdump_death_and_restart(pm)
+        assert result["restarted"] is True
+        assert result["proxy_restored"] is True
+        assert result["exit_summary"] is None
+        fake_disable.assert_called_once()
+        fake_enable.assert_called_once_with(9080)
+
+    def test_does_not_restore_when_proxy_was_off(self, tmp_output_dir):
+        pm = MagicMock()
+        pm.consecutive_restart_count = 0
+        pm.last_exit_summary.return_value = None
+        pm.restart.return_value = True
+        with (
+            patch(
+                "claude_monitoring.lifecycle.is_system_proxy_enabled_for_port",
+                return_value=False,
+            ),
+            patch("claude_monitoring.lifecycle.disable_system_proxy"),
+            patch(
+                "claude_monitoring.lifecycle.enable_system_proxy_for_port",
+                return_value=True,
+            ) as fake_enable,
+            patch("claude_monitoring.config.get_proxy_port", return_value=9080),
+        ):
+            result = lifecycle.handle_mitmdump_death_and_restart(pm)
+        assert result["restarted"] is True
+        assert result["proxy_restored"] is False
+        fake_enable.assert_not_called()
+
+    def test_does_not_restore_when_restart_fails(self, tmp_output_dir):
+        pm = MagicMock()
+        pm.consecutive_restart_count = 0
+        pm.last_exit_summary.return_value = None
+        pm.restart.return_value = False  # MAX_RESTARTS exhausted
+        with (
+            patch(
+                "claude_monitoring.lifecycle.is_system_proxy_enabled_for_port",
+                return_value=True,
+            ),
+            patch("claude_monitoring.lifecycle.disable_system_proxy"),
+            patch("claude_monitoring.lifecycle.enable_system_proxy_for_port") as fake_enable,
+            patch("claude_monitoring.config.get_proxy_port", return_value=9080),
+        ):
+            result = lifecycle.handle_mitmdump_death_and_restart(pm)
+        assert result["restarted"] is False
+        assert result["proxy_restored"] is False
+        fake_enable.assert_not_called()
+
+    def test_includes_exit_summary_after_two_consecutive_restarts(self, tmp_output_dir):
+        pm = MagicMock()
+        pm.consecutive_restart_count = 2  # ladder threshold
+        pm.last_exit_summary.return_value = "exit=1 tail='address already in use'"
+        pm.restart.return_value = True
+        with (
+            patch(
+                "claude_monitoring.lifecycle.is_system_proxy_enabled_for_port",
+                return_value=False,
+            ),
+            patch("claude_monitoring.lifecycle.disable_system_proxy"),
+            patch("claude_monitoring.config.get_proxy_port", return_value=9080),
+        ):
+            result = lifecycle.handle_mitmdump_death_and_restart(pm)
+        assert result["exit_summary"] == "exit=1 tail='address already in use'"
+
+    def test_swallows_exception_from_is_system_proxy_enabled(self, tmp_output_dir):
+        """If the proxy-state probe blows up, treat proxy as not-on (don't
+        try to restore). The watchdog must keep going."""
+        pm = MagicMock()
+        pm.consecutive_restart_count = 0
+        pm.last_exit_summary.return_value = None
+        pm.restart.return_value = True
+        with (
+            patch(
+                "claude_monitoring.lifecycle.is_system_proxy_enabled_for_port",
+                side_effect=OSError("networksetup gone"),
+            ),
+            patch("claude_monitoring.lifecycle.disable_system_proxy"),
+            patch("claude_monitoring.lifecycle.enable_system_proxy_for_port") as fake_enable,
+            patch("claude_monitoring.config.get_proxy_port", return_value=9080),
+        ):
+            result = lifecycle.handle_mitmdump_death_and_restart(pm)
+        assert result["restarted"] is True
+        assert result["proxy_restored"] is False
+        fake_enable.assert_not_called()
+
+
+# ─────────────────────────────────────────────────────────────
+# Task #181 a2 — leg 5 (test-isolation guard, conftest)
+# Judge 2026-06-10 finding 1: tests must not be able to SIGTERM real
+# processes or touch the production proxy port. The conftest installs
+# autouse fixtures; these tests confirm they fire.
+# ─────────────────────────────────────────────────────────────
+
+
+class TestConftestSignalGuard:
+    """The autouse `_guard_no_real_signals` fixture rejects SIGTERM /
+    SIGKILL against any PID outside the test process group."""
+
+    def test_sigterm_against_outside_pid_is_rejected(self):
+        """Calling lifecycle.os.kill with SIGTERM on a PID owned by another
+        process group (here: PID 1, init/launchd) must raise immediately.
+        Without this guard, any test that mistakenly invokes
+        kill_orphan_mitmproxy against the production port could SIGTERM
+        the user's real running daemon's mitmdump child — exactly the
+        2026-06-10 regression."""
+        from claude_monitoring import lifecycle as _lc
+
+        with pytest.raises(RuntimeError, match="test isolation guard"):
+            _lc.os.kill(1, signal.SIGTERM)
+
+    def test_signal_zero_is_allowed_for_liveness_probes(self):
+        """`os.kill(pid, 0)` is the canonical Unix liveness probe — no
+        signal is delivered. The guard must allow it so is_pid_alive
+        continues to work in tests."""
+        from claude_monitoring import lifecycle as _lc
+
+        try:
+            _lc.os.kill(1, 0)
+        except (PermissionError, OSError):
+            pass  # acceptable: signal 0 may be denied; the guard didn't block
+
+    def test_sigterm_against_own_process_is_allowed(self):
+        """The guard checks process group. Signaling our own process
+        with signal 0 (liveness only) must work."""
+        from claude_monitoring import lifecycle as _lc
+
+        _lc.os.kill(os.getpid(), 0)  # must not raise
+
+
+# (Port-isolation autouse fixture was considered + rejected for a2 —
+# it collided with legitimate test_config.py tests. The signal guard
+# alone is sufficient: any SIGTERM toward the user's daemon is blocked
+# at the test boundary regardless of which port the test uses.)

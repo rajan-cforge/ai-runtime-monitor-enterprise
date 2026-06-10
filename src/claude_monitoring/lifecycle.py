@@ -187,6 +187,84 @@ def is_pid_alive(pid: int) -> bool:
         return True  # EPERM — process exists, just not ours
 
 
+def is_child_of_running_monitor(pid: int) -> bool:
+    """Return True if ``pid`` is owned by a live ``ai-monitor --start``
+    process — OR if we cannot determine the answer.
+
+    Used by :func:`find_orphan_mitmproxy_on_port` as an additional gate
+    BEFORE the SIGTERM path: returning True means "do NOT kill this pid."
+
+    Fail-direction (task #181 a2, finding 3 — judge 2026-06-10):
+    on any ``ps``/subprocess failure we CANNOT prove the pid is an orphan,
+    so we MUST NOT kill it. The benign failure is a true orphan held in
+    place (it surfaces loudly as EADDRINUSE on next monitor start). The
+    HARMFUL failure is killing a healthy live child — which is exactly
+    today's regression. Uncertainty therefore returns True, with a
+    WARNING log so the operator sees the unclassified pid.
+
+    Note on cmdline forgeability: the parent-cmdline gate is overrideable
+    by a local-user-space attacker. Acceptable for v0.2.2 — out of scope
+    per B6 (see THREAT-MODEL.md §1.2).
+    """
+    if not is_pid_alive(pid):
+        return False  # dead pid → caller will not actually kill anything
+    log = get_logger()
+    try:
+        ppid_result = subprocess.run(
+            ["ps", "-p", str(pid), "-o", "ppid="],
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        log.warning("orphan classify pid=%d: ppid lookup failed (%s) — refusing to kill", pid, exc)
+        return True  # uncertain → refuse to kill
+    try:
+        ppid = int(ppid_result.stdout.strip())
+    except (ValueError, AttributeError):
+        log.warning("orphan classify pid=%d: malformed ppid output — refusing to kill", pid)
+        return True
+    if ppid <= 1:  # init / launchd reparent — pid is a true orphan
+        return False
+    if not is_pid_alive(ppid):
+        return False  # parent gone → true orphan
+    try:
+        cmd_result = subprocess.run(
+            ["ps", "-p", str(ppid), "-o", "command="],
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        log.warning(
+            "orphan classify pid=%d ppid=%d: cmdline lookup failed (%s) — refusing to kill",
+            pid,
+            ppid,
+            exc,
+        )
+        return True  # uncertain → refuse to kill
+    parent_cmd = cmd_result.stdout.lower()
+    return "ai-monitor" in parent_cmd and "--start" in parent_cmd
+
+
+def is_monitor_already_running() -> bool:
+    """Return True iff a live monitor daemon owns the PID file AND its heartbeat
+    is fresh.
+
+    Single-instance guard for ``--start`` (task #181 leg 3): a second
+    ``ai-monitor --start`` against a running daemon must refuse early —
+    BEFORE :func:`detect_stale_state` runs — so the orphan-cleanup path
+    (which SIGTERMs sibling mitmdumps) never executes.
+    """
+    monitor_pid = read_pid_file(get_monitor_pid_file())
+    if not monitor_pid or not is_pid_alive(monitor_pid):
+        return False
+    hb_age = heartbeat_age_seconds()
+    if hb_age is None or hb_age > HEARTBEAT_STALE_SECONDS:
+        return False
+    return True
+
+
 def is_mitmproxy_process(pid: int) -> bool:
     """Best-effort check that a PID belongs to mitmdump and not some
     recycled PID belonging to another program.
@@ -210,14 +288,20 @@ def is_mitmproxy_process(pid: int) -> bool:
         return False
 
 
-def find_orphan_mitmproxy_on_port(port: int, *, exclude_pid: int | None = None) -> list[int]:
+def find_orphan_mitmproxy_on_port(port: int, *, exclude_pid: int | None) -> list[int]:
     """Return PIDs of mitmproxy-like processes LISTENing on ``port``.
 
-    Excludes ``exclude_pid`` (our own mitmdump) so the watchdog doesn't
-    kill its own child. Used to clean up zombies from previous runs
-    that outlived their parent monitor and are still holding the proxy
-    port — the failure mode that caused the 30-second watchdog flap
-    (EADDRINUSE every restart attempt).
+    ``exclude_pid`` is **required, no default** (task #181 a2, finding 2,
+    judge 2026-06-10). Callers must affirmatively decide whether they
+    own a mitmdump on this port. Pass ``None`` only when invoking from
+    a fresh-install / stale-cleanup context (no prior process to
+    exclude). The accident this guards against: a bare call from a test
+    or future caller, which is exactly how today's regression happened.
+
+    Used to clean up zombies from previous runs that outlived their
+    parent monitor and are still holding the proxy port — the failure
+    mode that caused the 30-second watchdog flap (EADDRINUSE every
+    restart attempt).
 
     Fail-closed: returns empty list on any error.
     """
@@ -241,13 +325,24 @@ def find_orphan_mitmproxy_on_port(port: int, *, exclude_pid: int | None = None) 
             continue
         if exclude_pid is not None and pid == exclude_pid:
             continue
-        if is_mitmproxy_process(pid):
-            pids.append(pid)
+        if not is_mitmproxy_process(pid):
+            continue
+        # Task #181 leg 1: skip mitmdumps owned by a live monitor process.
+        # The regression that motivated this: a concurrent `ai-monitor --start`
+        # (or a pytest fixture running against the production port) would
+        # SIGTERM another running monitor's healthy child. Parent-PID
+        # liveness is the discriminator.
+        if is_child_of_running_monitor(pid):
+            continue
+        pids.append(pid)
     return pids
 
 
-def kill_orphan_mitmproxy(port: int, *, exclude_pid: int | None = None, timeout: float = 3.0) -> list[int]:
+def kill_orphan_mitmproxy(port: int, *, exclude_pid: int | None, timeout: float = 3.0) -> list[int]:
     """SIGTERM (then SIGKILL) any orphan mitmproxy bound to ``port``.
+
+    ``exclude_pid`` is **required, no default** (task #181 a2, finding 2).
+    See :func:`find_orphan_mitmproxy_on_port` for the rationale.
 
     Returns the list of PIDs that were killed — useful for logging
     and tests. Waits up to ``timeout`` seconds for graceful shutdown
@@ -322,6 +417,78 @@ def disable_system_proxy() -> bool:
         subprocess.run(
             ["networksetup", "-setsecurewebproxystate", "Wi-Fi", "off"],
             capture_output=True,
+            timeout=5,
+        )
+        return True
+    except Exception:
+        return False
+
+
+def refuse_if_already_running() -> None:
+    """CLI helper: print the "already running" message and exit(1) if a
+    healthy daemon owns the PID file. No-op otherwise. Task #181 leg 3."""
+    if not is_monitor_already_running():
+        return
+    pid = read_pid_file(get_monitor_pid_file())
+    print(
+        f"ai-monitor is already running (PID {pid}). Use `ai-monitor --status` "
+        "to inspect, or `ai-monitor --stop` followed by `ai-monitor --start` to restart."
+    )
+    sys.exit(1)
+
+
+def handle_mitmdump_death_and_restart(pm: ProxyManager) -> dict:
+    """Watchdog body for "mitmdump died, restart it" (task #181 legs 2 + 4).
+
+    Snapshots system-proxy state, disables the proxy, asks ProxyManager
+    to restart, and re-enables the proxy iff it was on before. Surfaces
+    mitmdump's actual exit reason after ≥2 consecutive restarts.
+
+    Returns a dict: {restarted: bool, exit_summary: str|None, proxy_restored: bool}.
+    monitor._watchdog_loop calls this and only prints the user-facing
+    messages — keeps monitor.py thin (it sits at the file-size ceiling).
+    """
+    from claude_monitoring.config import get_proxy_port
+
+    port = get_proxy_port()
+    try:
+        proxy_was_on = is_system_proxy_enabled_for_port(port)
+    except Exception:
+        proxy_was_on = False
+    exit_summary: str | None = None
+    try:
+        if pm.consecutive_restart_count >= 2:
+            exit_summary = pm.last_exit_summary()
+    except Exception:
+        exit_summary = None
+    try:
+        disable_system_proxy()
+    except Exception:
+        pass
+    restarted = pm.restart()
+    proxy_restored = False
+    if restarted and proxy_was_on:
+        try:
+            enable_system_proxy_for_port(port)
+            proxy_restored = True
+        except Exception:
+            proxy_restored = False
+    return {"restarted": restarted, "exit_summary": exit_summary, "proxy_restored": proxy_restored}
+
+
+def enable_system_proxy_for_port(port: int) -> bool:
+    """Enable the macOS system HTTPS proxy on Wi-Fi pointing at ``127.0.0.1:port``.
+
+    Counterpart to :func:`disable_system_proxy`. Used by the watchdog
+    (task #181 leg 2) to restore the system proxy after a successful
+    mitmdump restart, so the operator's ``--enable-system-proxy`` state
+    is not silently lost across restart cycles.
+    """
+    try:
+        subprocess.run(
+            ["networksetup", "-setsecurewebproxy", "Wi-Fi", "127.0.0.1", str(port)],
+            capture_output=True,
+            check=False,
             timeout=5,
         )
         return True
@@ -643,6 +810,13 @@ class ProxyManager:
     def __init__(self, log_path: Path | None = None):
         self._proc: subprocess.Popen | None = None
         self._restart_count = 0
+        # Task #181 leg 4: track consecutive successful restarts so the
+        # watchdog can decide when to surface mitmdump's actual exit
+        # reason (≥2 consecutive → something is structurally wrong, log
+        # the exit code + last stderr line rather than the generic
+        # "died — restarted" message).
+        self._consecutive_restart_count = 0
+        self._last_exit_code: int | None = None
         # Default log path: ~/claude_watch_output/logs/mitmproxy.log
         # Capturing mitmdump's stderr is essential for debugging crash loops
         # like the one we hit under launchd (where mitmdump can fail to find
@@ -656,6 +830,39 @@ class ProxyManager:
                 pass
         self._log_path = log_path
         self._stopped = False  # set True by explicit stop()
+
+    @property
+    def consecutive_restart_count(self) -> int:
+        return self._consecutive_restart_count
+
+    def reset_consecutive_restart_count(self) -> None:
+        self._consecutive_restart_count = 0
+
+    def last_exit_summary(self) -> str | None:
+        """Return a short ``exit=N tail=...`` string describing how the
+        most recent mitmdump child died, or None if no exit recorded.
+
+        Used by the watchdog (monitor.py) after ≥2 consecutive restarts so
+        the operator sees the actual root cause (`address already in use`,
+        `confdir missing`, etc.) rather than the generic "died — restarted"
+        message that has historically masked real issues.
+        """
+        if self._last_exit_code is None:
+            return None
+        tail_line = ""
+        if self._log_path is not None:
+            try:
+                with open(self._log_path, encoding="utf-8", errors="replace") as fh:
+                    lines = fh.readlines()
+                for line in reversed(lines):
+                    if line.strip():
+                        tail_line = line.strip()
+                        break
+            except OSError:
+                tail_line = ""
+        if tail_line:
+            return f"exit={self._last_exit_code} tail={tail_line!r}"
+        return f"exit={self._last_exit_code}"
 
     def start(self) -> bool:
         """Spawn mitmdump. Returns True on apparent success.
@@ -784,13 +991,27 @@ class ProxyManager:
         if self._restart_count >= self.MAX_RESTARTS:
             return False
         backoff = self.RESTART_BACKOFF_SECONDS[min(self._restart_count, len(self.RESTART_BACKOFF_SECONDS) - 1)]
+        # Capture exit code of the previous proc so last_exit_summary()
+        # has something to report. self._proc.poll() returns the exit
+        # code when the child has died.
+        if self._proc is not None:
+            try:
+                code = self._proc.poll()
+                if code is not None:
+                    self._last_exit_code = code
+            except Exception:
+                pass
         time.sleep(backoff)
         self._restart_count += 1
-        return self.start()
+        started = self.start()
+        if started:
+            self._consecutive_restart_count += 1
+        return started
 
     def reset_restart_count(self) -> None:
         """Call periodically from a healthy state to allow future recovery."""
         self._restart_count = 0
+        self._consecutive_restart_count = 0
 
 
 # ─────────────────────────────────────────────────────────────

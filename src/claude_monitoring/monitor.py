@@ -4968,17 +4968,20 @@ def start_monitoring():
             # asked for shutdown" from "mitmdump crashed," and respawns it as
             # an orphan that outlives the monitor process. With the guard,
             # explicit shutdown is honored and the watchdog stays out of it.
-            if pm is not None and not pm.is_alive() and not pm.was_explicitly_stopped():
+            if pm is not None and not pm.is_alive() and not pm.was_explicitly_stopped():  # pragma: no cover
+                # Closure inside start_monitoring; coverage applied via the
+                # underlying lifecycle.handle_mitmdump_death_and_restart helper
+                # (5 dedicated tests in tests/test_lifecycle.py).
                 healthy_streak = 0
-                print("\n  ⚠ Watchdog: mitmdump died — disabling system proxy")
-                try:
-                    from claude_monitoring.lifecycle import disable_system_proxy
+                from claude_monitoring.lifecycle import handle_mitmdump_death_and_restart
 
-                    disable_system_proxy()
-                except Exception:
-                    pass
-                if pm.restart():
+                result = handle_mitmdump_death_and_restart(pm)
+                exit_suffix = f" ({result['exit_summary']})" if result["exit_summary"] else ""
+                print(f"\n  ⚠ Watchdog: mitmdump died{exit_suffix} — disabling system proxy")
+                if result["restarted"]:
                     print("  ✅ Watchdog: mitmdump restarted")
+                    if result["proxy_restored"]:
+                        print("  ✅ Watchdog: system proxy restored")
                 else:
                     print("  ❌ Watchdog: max restart attempts reached — giving up")
             elif pm is not None and not pm.was_explicitly_stopped():
@@ -5392,6 +5395,13 @@ def main():
             pass
         sys.exit(0)
     elif args.start:
+        # Task #181 leg 3: refuse early if a healthy daemon is already
+        # running (BEFORE detect_stale_state — which would SIGTERM the
+        # running daemon's mitmdump as an "orphan"). 2026-06-10 regression.
+        from claude_monitoring.lifecycle import refuse_if_already_running as _refuse
+
+        _refuse()
+
         # Phase 2: in --daemon mode, redirect stdout/stderr to the log
         # file BEFORE anything else so every print() below lands in the
         # log rather than a detached TTY.
