@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.2.2] — unreleased
+
+### Added
+
+- **P3.8 — Ontology mapping bodies wired for all 8 Phase-3 sources.** Replaces the structural-only `frozenset()` placeholders with real rule bodies for VSCode/Cursor extensions, Chromium extensions, Python packages + project deps, Node packages, Homebrew AI tools, and Claude Desktop integrations. The identity-only sources (`ollama-models`, `ai-tool-versions`, `ai-apps-info-plist`), skill sources (`claude-code-skills`, `openclaw-skills`), and the already-complete `mcp-servers` scored mapper are unchanged.
+  - Chrome extension permission map now emits `SECRETS_ACCESS` (cookies/identity/browsingData), `SHELL_EXECUTE` (debugger/nativeMessaging), `NETWORK_UNRESTRICTED` (webRequest, wildcard host permissions), `NETWORK_SCOPED` (specific-origin host permissions — first wiring of this category), `SYSTEM_MODIFICATION` (management/contentSettings — first wiring), `CODE_EXECUTION` (background service worker / scripts), `FILE_SYSTEM_READ` (tabs/history/bookmarks/`<all_urls>` content scripts), and `FILE_SYSTEM_WRITE` (downloads). **R6 ratification (2026-06-09):** `nativeMessaging` co-emits `{SHELL_EXECUTE, INTER_TOOL_COMMUNICATION}` because the IPC channel to native host programs is itself an inter-tool protocol; `INTER_TOOL_COMMUNICATION`'s docstring is updated to cover non-MCP IPC.
+  - VSCode/Cursor: `main` non-null → `CODE_EXECUTION`; `contributes_debug/terminal/tasks` → `SHELL_EXECUTE`; `extension_kind` contains `"workspace"` → `{FILE_SYSTEM_READ, FILE_SYSTEM_WRITE}`. Web-only extensions (browser-set, main-null) do NOT emit `CODE_EXECUTION`.
+  - Python (installed + project-deps) and Node packages: narrow hand-curated package-name → capability hint tables (`requests`/`boto3`/`paramiko`/`cryptography`/`openai`/`anthropic`; `axios`/`shelljs`/`execa`/`@anthropic-ai/sdk`/etc.).
+  - Node: lifecycle scripts OR bin entries on a self-asset (R3 — `dep_kind == "self"`) → `CODE_EXECUTION`.
+  - Homebrew AP-4 taxonomy split: LLM HTTP servers (`ollama`/`llama`) → `{CODE_EXECUTION, NETWORK_UNRESTRICTED}`; GPU runtimes (`cuda`/`rocm`) → `CODE_EXECUTION` only; ML frameworks (`pytorch`/`tensorflow`/`jax`) → `CODE_EXECUTION` only; API client CLIs (`openai`/`anthropic`) → `NETWORK_UNRESTRICTED`. R4 ratification: declared capability per spec §6.6.
+  - Claude Desktop integrations: `coworkWebSearchEnabled` → `NETWORK_UNRESTRICTED`; `coworkScheduledTasksEnabled` and `ccdScheduledTasksEnabled` → `CODE_EXECUTION` (R5 ratification); `filesystem_access` kind → `{FILE_SYSTEM_READ, FILE_SYSTEM_WRITE}`; `unknown_top_level` kind → empty (forward-compat capture, UI renders as "Not yet classified").
+  - `categories.py` docstrings updated: `NETWORK_SCOPED` and `SYSTEM_MODIFICATION` are no longer "Dormant in Phase 2".
+  - **Authorized deferral of directive §7.3.3** (`config/package-capability-hints.yaml` inlined instead per AP-3) and **§5.6** (unmapped Chrome permissions log at INFO instead of carrying an `unknown_permission` tag, per AP-5) — both logged in `~/Documents/vigil-notes/v022/directive-gap-log.md`.
+  - `TestDerivedTagProhibition` parametric test gains 12 positive-case fixtures (AP-2 architect-pass condition) so the derived-tag prohibition is no longer pinned trivially by empty-`current_state` fixtures.
+  - End-to-end integration: `cookies + <all_urls>` on a Chrome extension correctly derives `DATA_EXFILTRATION_CAPABLE` via `derived.py`.
+  - **Operator-surprise expectations on first post-merge scan:** the Anthropic Claude browser extension on developer machines will jump to HIGH/CRITICAL (it has `nativeMessaging + debugger + <all_urls> + content_scripts(<all_urls>)`); any Chrome extension with `cookies + <all_urls>` will derive `DATA_EXFILTRATION_CAPABLE`; locally-installed Ollama formula jumps to HIGH on the supply-chain side (`{CODE_EXECUTION, NETWORK_UNRESTRICTED}`). All accurate, not regressions.
+
+- **Dashboard dual-stack loopback hotfix (PR #108).** Fixes Chrome's `localhost` → `::1` Happy Eyeballs resolution returning `ERR_CONNECTION_REFUSED` against the IPv4-only dashboard listener. `LoopbackDualStackServer` wraps two `ReusableHTTPServer` instances — one on `127.0.0.1`, one on `[::1]` — preserving the localhost-only security invariant (no all-interfaces binding). Same class of bug as issue #75 (mitmproxy IPv4-only) — dashboard-side counterpart to PR #76.
+
 ## [0.2.1] — 2026-06-03
 
 ### Fixed
