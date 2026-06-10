@@ -525,9 +525,17 @@ class TestMainArgumentParsing:
         and these dispatch tests now hit the exit-1 path. The dispatch
         tests are about argument routing, not the wizard itself — wizard
         behavior is covered in tests/test_cleanup_wizard_purge.py."""
+        from claude_monitoring import lifecycle
         from claude_monitoring import wizard as wizard_mod
 
         monkeypatch.setattr(wizard_mod, "is_first_run", lambda: False)
+        # Task #181 a2 leg 5: --start tests must not reach detect_stale_state
+        # against the real ~/claude_watch_output, which would scan for orphan
+        # mitmdumps on port 9080 and SIGTERM the user's running daemon's child.
+        # Stub the stale-state cleanup so the dispatch tests stay scoped to
+        # argument routing only.
+        monkeypatch.setattr(lifecycle, "detect_stale_state", lambda: [])
+        monkeypatch.setattr(lifecycle, "refuse_if_already_running", lambda: None)
 
     def test_start_calls_start_monitoring(self):
         """--start should call start_monitoring(). Pass --no-proxy so the

@@ -75,13 +75,7 @@ def _added_text_for_scope(
     if file_patterns is None:
         relevant = files
     else:
-        relevant = {
-            f
-            for f in files
-            if any(
-                PurePath(f).match(pat.split(":", 1)[0]) for pat in file_patterns
-            )
-        }
+        relevant = {f for f in files if any(PurePath(f).match(pat.split(":", 1)[0]) for pat in file_patterns)}
     return "\n".join(line for f in relevant for line in added_by_file.get(f, []))
 
 
@@ -106,9 +100,7 @@ def _file_matches_any(files: set[str], patterns: list[str]) -> bool:
     return False
 
 
-def rule_applies(
-    rule: dict, files: set[str], added_by_file: dict[str, list[str]]
-) -> bool:
+def rule_applies(rule: dict, files: set[str], added_by_file: dict[str, list[str]]) -> bool:
     """Determine if the rule's `when_*` conditions match this PR.
 
     Pattern matching is scoped to files satisfying ``when_file_matches``.
@@ -133,17 +125,13 @@ def rule_applies(
     pattern_match = True
     if "when_diff_contains_pattern" in rule:
         try:
-            pattern_match = any(
-                re.search(pat, scoped_text) for pat in rule["when_diff_contains_pattern"]
-            )
+            pattern_match = any(re.search(pat, scoped_text) for pat in rule["when_diff_contains_pattern"])
         except re.error:
             # Malformed pattern in the rule; treat as non-matching and log.
             print(f"warning: rule '{rule.get('id')}' has malformed regex; skipping", file=sys.stderr)
             return False
     if "when_change_touches_pattern" in rule:
-        pattern_match = pattern_match and any(
-            pat in scoped_text for pat in rule["when_change_touches_pattern"]
-        )
+        pattern_match = pattern_match and any(pat in scoped_text for pat in rule["when_change_touches_pattern"])
 
     if has_file_cond and has_pattern_cond:
         return file_match and pattern_match
@@ -174,9 +162,7 @@ def rule_satisfied(rule: dict, files: set[str]) -> tuple[bool, list[str]]:
     reviewers but the validator skips them.
     """
     missing: list[str] = [
-        f"doc not updated: {doc}"
-        for doc in (rule.get("requires_doc_update") or [])
-        if doc not in files
+        f"doc not updated: {doc}" for doc in (rule.get("requires_doc_update") or []) if doc not in files
     ]
     missing.extend(
         f"required doc missing: {doc}"

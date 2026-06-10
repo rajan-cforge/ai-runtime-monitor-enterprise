@@ -188,26 +188,27 @@ def is_pid_alive(pid: int) -> bool:
 
 
 def is_child_of_running_monitor(pid: int) -> bool:
-    """Return True iff ``pid``'s parent is an alive ``ai-monitor --start`` process.
+    """Return True if ``pid`` is owned by a live ``ai-monitor --start``
+    process — OR if we cannot determine the answer.
 
-    Empirical regression (2026-06-10, task #181 leg 1): pytest invocations
-    that mock ``get_proxy_port()`` to 9080 ran ``kill_orphan_mitmproxy``
-    against the user's actually-running daemon's mitmdump child, because
-    the existing orphan-kill heuristic only checked "is this pid a
-    mitmdump-like process" — never "is its parent a live monitor."
+    Used by :func:`find_orphan_mitmproxy_on_port` as an additional gate
+    BEFORE the SIGTERM path: returning True means "do NOT kill this pid."
 
-    Used by :func:`find_orphan_mitmproxy_on_port` as an additional gate:
-    a mitmdump whose parent is a live ``ai-monitor --start`` is NOT an
-    orphan and MUST NOT be killed.
+    Fail-direction (task #181 a2, finding 3 — judge 2026-06-10):
+    on any ``ps``/subprocess failure we CANNOT prove the pid is an orphan,
+    so we MUST NOT kill it. The benign failure is a true orphan held in
+    place (it surfaces loudly as EADDRINUSE on next monitor start). The
+    HARMFUL failure is killing a healthy live child — which is exactly
+    today's regression. Uncertainty therefore returns True, with a
+    WARNING log so the operator sees the unclassified pid.
 
-    Best-effort: returns False on any subprocess failure so the caller
-    falls back to the existing cmdline gate (acceptable: orphans get
-    killed in either case; the only risk is false-positive-kill of a
-    healthy child, which is exactly what this function protects against
-    when ``ps`` works).
+    Note on cmdline forgeability: the parent-cmdline gate is overrideable
+    by a local-user-space attacker. Acceptable for v0.2.2 — out of scope
+    per B6 (see THREAT-MODEL.md §1.2).
     """
     if not is_pid_alive(pid):
-        return False
+        return False  # dead pid → caller will not actually kill anything
+    log = get_logger()
     try:
         ppid_result = subprocess.run(
             ["ps", "-p", str(pid), "-o", "ppid="],
@@ -215,16 +216,18 @@ def is_child_of_running_monitor(pid: int) -> bool:
             text=True,
             timeout=2,
         )
-    except (OSError, subprocess.SubprocessError):
-        return False
+    except (OSError, subprocess.SubprocessError) as exc:
+        log.warning("orphan classify pid=%d: ppid lookup failed (%s) — refusing to kill", pid, exc)
+        return True  # uncertain → refuse to kill
     try:
         ppid = int(ppid_result.stdout.strip())
     except (ValueError, AttributeError):
-        return False
-    if ppid <= 1:  # init / launchd
+        log.warning("orphan classify pid=%d: malformed ppid output — refusing to kill", pid)
+        return True
+    if ppid <= 1:  # init / launchd reparent — pid is a true orphan
         return False
     if not is_pid_alive(ppid):
-        return False
+        return False  # parent gone → true orphan
     try:
         cmd_result = subprocess.run(
             ["ps", "-p", str(ppid), "-o", "command="],
@@ -232,8 +235,14 @@ def is_child_of_running_monitor(pid: int) -> bool:
             text=True,
             timeout=2,
         )
-    except (OSError, subprocess.SubprocessError):
-        return False
+    except (OSError, subprocess.SubprocessError) as exc:
+        log.warning(
+            "orphan classify pid=%d ppid=%d: cmdline lookup failed (%s) — refusing to kill",
+            pid,
+            ppid,
+            exc,
+        )
+        return True  # uncertain → refuse to kill
     parent_cmd = cmd_result.stdout.lower()
     return "ai-monitor" in parent_cmd and "--start" in parent_cmd
 
@@ -279,14 +288,20 @@ def is_mitmproxy_process(pid: int) -> bool:
         return False
 
 
-def find_orphan_mitmproxy_on_port(port: int, *, exclude_pid: int | None = None) -> list[int]:
+def find_orphan_mitmproxy_on_port(port: int, *, exclude_pid: int | None) -> list[int]:
     """Return PIDs of mitmproxy-like processes LISTENing on ``port``.
 
-    Excludes ``exclude_pid`` (our own mitmdump) so the watchdog doesn't
-    kill its own child. Used to clean up zombies from previous runs
-    that outlived their parent monitor and are still holding the proxy
-    port — the failure mode that caused the 30-second watchdog flap
-    (EADDRINUSE every restart attempt).
+    ``exclude_pid`` is **required, no default** (task #181 a2, finding 2,
+    judge 2026-06-10). Callers must affirmatively decide whether they
+    own a mitmdump on this port. Pass ``None`` only when invoking from
+    a fresh-install / stale-cleanup context (no prior process to
+    exclude). The accident this guards against: a bare call from a test
+    or future caller, which is exactly how today's regression happened.
+
+    Used to clean up zombies from previous runs that outlived their
+    parent monitor and are still holding the proxy port — the failure
+    mode that caused the 30-second watchdog flap (EADDRINUSE every
+    restart attempt).
 
     Fail-closed: returns empty list on any error.
     """
@@ -323,8 +338,11 @@ def find_orphan_mitmproxy_on_port(port: int, *, exclude_pid: int | None = None) 
     return pids
 
 
-def kill_orphan_mitmproxy(port: int, *, exclude_pid: int | None = None, timeout: float = 3.0) -> list[int]:
+def kill_orphan_mitmproxy(port: int, *, exclude_pid: int | None, timeout: float = 3.0) -> list[int]:
     """SIGTERM (then SIGKILL) any orphan mitmproxy bound to ``port``.
+
+    ``exclude_pid`` is **required, no default** (task #181 a2, finding 2).
+    See :func:`find_orphan_mitmproxy_on_port` for the rationale.
 
     Returns the list of PIDs that were killed — useful for logging
     and tests. Waits up to ``timeout`` seconds for graceful shutdown

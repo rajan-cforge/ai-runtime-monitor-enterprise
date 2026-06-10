@@ -500,7 +500,7 @@ class TestOrphanMitmproxyCleanup:
             patch("claude_monitoring.lifecycle.subprocess.run", return_value=completed),
             patch("claude_monitoring.lifecycle.is_mitmproxy_process", return_value=True),
         ):
-            pids = lifecycle.find_orphan_mitmproxy_on_port(9080)
+            pids = lifecycle.find_orphan_mitmproxy_on_port(9080, exclude_pid=None)
         assert pids == [4682]
 
     def test_find_orphan_excludes_our_pid(self, tmp_output_dir):
@@ -528,12 +528,12 @@ class TestOrphanMitmproxyCleanup:
             patch("claude_monitoring.lifecycle.subprocess.run", return_value=completed),
             patch("claude_monitoring.lifecycle.is_mitmproxy_process", return_value=False),
         ):
-            pids = lifecycle.find_orphan_mitmproxy_on_port(9080)
+            pids = lifecycle.find_orphan_mitmproxy_on_port(9080, exclude_pid=None)
         assert pids == []
 
     def test_find_orphan_returns_empty_on_lsof_error(self, tmp_output_dir):
         with patch("claude_monitoring.lifecycle.subprocess.run", side_effect=OSError("boom")):
-            assert lifecycle.find_orphan_mitmproxy_on_port(9080) == []
+            assert lifecycle.find_orphan_mitmproxy_on_port(9080, exclude_pid=None) == []
 
     def test_kill_orphan_signals_victims_and_waits(self, tmp_output_dir):
         victims_killed: list[tuple[int, int]] = []
@@ -553,7 +553,7 @@ class TestOrphanMitmproxyCleanup:
             patch("claude_monitoring.lifecycle.is_pid_alive", side_effect=fake_alive),
             patch("claude_monitoring.lifecycle.time.sleep"),
         ):
-            killed = lifecycle.kill_orphan_mitmproxy(9080, timeout=0.5)
+            killed = lifecycle.kill_orphan_mitmproxy(9080, exclude_pid=None, timeout=0.5)
 
         assert killed == [4682]
         assert (4682, signal.SIGTERM) in victims_killed
@@ -572,14 +572,14 @@ class TestOrphanMitmproxyCleanup:
             patch("claude_monitoring.lifecycle.time.sleep"),
             patch("claude_monitoring.lifecycle.time.time", side_effect=[0, 0, 999, 999]),
         ):
-            lifecycle.kill_orphan_mitmproxy(9080, timeout=0.1)
+            lifecycle.kill_orphan_mitmproxy(9080, exclude_pid=None, timeout=0.1)
 
         assert signal.SIGTERM in kill_signals
         assert signal.SIGKILL in kill_signals
 
     def test_kill_orphan_returns_empty_when_no_victims(self, tmp_output_dir):
         with patch("claude_monitoring.lifecycle.find_orphan_mitmproxy_on_port", return_value=[]):
-            assert lifecycle.kill_orphan_mitmproxy(9080) == []
+            assert lifecycle.kill_orphan_mitmproxy(9080, exclude_pid=None) == []
 
 
 # ─────────────────────────────────────────────────────────────
@@ -1060,12 +1060,46 @@ class TestParentMonitorOwnedMitmdumpIsNotOrphan:
         ):
             assert lifecycle.is_child_of_running_monitor(55324) is False
 
-    def test_returns_false_when_ppid_lookup_fails(self, tmp_output_dir):
-        """ps invocation OSError — fail-safe: not a child (so we WOULD kill).
-        Acceptable trade-off: orphans get killed, healthy children might too
-        if ps fails; but ps failing is a load-bearing tool issue, surface it."""
-        with patch("claude_monitoring.lifecycle.subprocess.run", side_effect=OSError("ps gone")):
-            assert lifecycle.is_child_of_running_monitor(55324) is False
+    def test_returns_true_when_ppid_lookup_fails_uncertainty_skips_kill(self, tmp_output_dir):
+        """Task #181 a2 finding 3 (judge 2026-06-10): on ps/subprocess failure,
+        we cannot prove the pid is an orphan. The HARMFUL outcome is killing a
+        live child (today's regression). The benign outcome is leaving a
+        true orphan to hold the port until next start (loud EADDRINUSE).
+        Therefore: on uncertainty, return True so the caller does NOT kill."""
+        with (
+            patch("claude_monitoring.lifecycle.is_pid_alive", return_value=True),
+            patch("claude_monitoring.lifecycle.subprocess.run", side_effect=OSError("ps gone")),
+        ):
+            assert lifecycle.is_child_of_running_monitor(55324) is True
+
+    def test_returns_true_when_cmdline_lookup_fails(self, tmp_output_dir):
+        """Same fail-direction: cmdline lookup failure → uncertain → True."""
+        call_count = [0]
+
+        def fake_run(cmd, *args, **kwargs):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                # First call: ppid= succeeds
+                return MagicMock(stdout="12345\n")
+            # Second call: command= raises
+            raise OSError("ps cmdline gone")
+
+        with (
+            patch("claude_monitoring.lifecycle.is_pid_alive", return_value=True),
+            patch("claude_monitoring.lifecycle.subprocess.run", side_effect=fake_run),
+        ):
+            assert lifecycle.is_child_of_running_monitor(55324) is True
+
+    def test_returns_true_when_ppid_unparseable(self, tmp_output_dir):
+        """Malformed ppid output → uncertain → True."""
+        with (
+            patch("claude_monitoring.lifecycle.is_pid_alive", return_value=True),
+            patch(
+                "claude_monitoring.lifecycle.subprocess.run",
+                return_value=MagicMock(stdout="not-a-number\n"),
+            ),
+        ):
+            assert lifecycle.is_child_of_running_monitor(55324) is True
 
 
 class TestFindOrphanSkipsLiveMonitorChildren:
@@ -1085,7 +1119,7 @@ class TestFindOrphanSkipsLiveMonitorChildren:
             patch("claude_monitoring.lifecycle.is_mitmproxy_process", return_value=True),
             patch("claude_monitoring.lifecycle.is_child_of_running_monitor", return_value=True),
         ):
-            pids = lifecycle.find_orphan_mitmproxy_on_port(9080)
+            pids = lifecycle.find_orphan_mitmproxy_on_port(9080, exclude_pid=None)
         assert pids == [], "mitmdump child of a live monitor MUST NOT be returned as orphan"
 
     def test_returns_true_orphan_when_parent_monitor_is_dead(self, tmp_output_dir):
@@ -1100,7 +1134,7 @@ class TestFindOrphanSkipsLiveMonitorChildren:
             patch("claude_monitoring.lifecycle.is_mitmproxy_process", return_value=True),
             patch("claude_monitoring.lifecycle.is_child_of_running_monitor", return_value=False),
         ):
-            pids = lifecycle.find_orphan_mitmproxy_on_port(9080)
+            pids = lifecycle.find_orphan_mitmproxy_on_port(9080, exclude_pid=None)
         assert pids == [55324]
 
 
@@ -1360,3 +1394,52 @@ class TestHandleMitmdumpDeathAndRestart:
         assert result["restarted"] is True
         assert result["proxy_restored"] is False
         fake_enable.assert_not_called()
+
+
+# ─────────────────────────────────────────────────────────────
+# Task #181 a2 — leg 5 (test-isolation guard, conftest)
+# Judge 2026-06-10 finding 1: tests must not be able to SIGTERM real
+# processes or touch the production proxy port. The conftest installs
+# autouse fixtures; these tests confirm they fire.
+# ─────────────────────────────────────────────────────────────
+
+
+class TestConftestSignalGuard:
+    """The autouse `_guard_no_real_signals` fixture rejects SIGTERM /
+    SIGKILL against any PID outside the test process group."""
+
+    def test_sigterm_against_outside_pid_is_rejected(self):
+        """Calling lifecycle.os.kill with SIGTERM on a PID owned by another
+        process group (here: PID 1, init/launchd) must raise immediately.
+        Without this guard, any test that mistakenly invokes
+        kill_orphan_mitmproxy against the production port could SIGTERM
+        the user's real running daemon's mitmdump child — exactly the
+        2026-06-10 regression."""
+        from claude_monitoring import lifecycle as _lc
+
+        with pytest.raises(RuntimeError, match="test isolation guard"):
+            _lc.os.kill(1, signal.SIGTERM)
+
+    def test_signal_zero_is_allowed_for_liveness_probes(self):
+        """`os.kill(pid, 0)` is the canonical Unix liveness probe — no
+        signal is delivered. The guard must allow it so is_pid_alive
+        continues to work in tests."""
+        from claude_monitoring import lifecycle as _lc
+
+        try:
+            _lc.os.kill(1, 0)
+        except (PermissionError, OSError):
+            pass  # acceptable: signal 0 may be denied; the guard didn't block
+
+    def test_sigterm_against_own_process_is_allowed(self):
+        """The guard checks process group. Signaling our own process
+        with signal 0 (liveness only) must work."""
+        from claude_monitoring import lifecycle as _lc
+
+        _lc.os.kill(os.getpid(), 0)  # must not raise
+
+
+# (Port-isolation autouse fixture was considered + rejected for a2 —
+# it collided with legitimate test_config.py tests. The signal guard
+# alone is sufficient: any SIGTERM toward the user's daemon is blocked
+# at the test boundary regardless of which port the test uses.)

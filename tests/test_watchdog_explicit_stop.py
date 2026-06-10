@@ -23,6 +23,15 @@ from unittest.mock import MagicMock
 from claude_monitoring.lifecycle import ProxyManager
 
 
+def _isolate_pid_file(monkeypatch, tmp_path):
+    """Point lifecycle.get_proxy_pid_file at a tmp file so ProxyManager.stop()
+    does not read the real ~/claude_watch_output/mitmproxy.pid (which would
+    SIGTERM the user's running daemon and trip the conftest signal guard)."""
+    from claude_monitoring import lifecycle
+
+    monkeypatch.setattr(lifecycle, "get_proxy_pid_file", lambda: tmp_path / "mitm.pid")
+
+
 class TestExplicitStopFlag:
     """The flag exists, defaults False, flips True after ``stop()``."""
 
@@ -30,7 +39,8 @@ class TestExplicitStopFlag:
         pm = ProxyManager(log_path=tmp_path / "mitm.log")
         assert pm.was_explicitly_stopped() is False
 
-    def test_stop_sets_the_flag(self, tmp_path) -> None:
+    def test_stop_sets_the_flag(self, tmp_path, monkeypatch) -> None:
+        _isolate_pid_file(monkeypatch, tmp_path)
         pm = ProxyManager(log_path=tmp_path / "mitm.log")
         # `stop()` with no live PID is a no-op for kill; it still latches.
         pm.stop(disable_proxy=False)
@@ -41,7 +51,7 @@ class TestWatchdogHonorsExplicitStop:
     """Simulate the watchdog tick: a ProxyManager that's been explicitly
     stopped must NOT trigger the restart branch."""
 
-    def test_explicitly_stopped_pm_skips_restart_branch(self, tmp_path) -> None:
+    def test_explicitly_stopped_pm_skips_restart_branch(self, tmp_path, monkeypatch) -> None:
         """The watchdog loop's condition is::
 
             if pm is not None and not pm.is_alive() and not pm.was_explicitly_stopped():
@@ -50,6 +60,7 @@ class TestWatchdogHonorsExplicitStop:
         When the user has invoked `--stop`, ``was_explicitly_stopped()`` is True
         AND ``is_alive()`` is False (because ``_stopped`` short-circuits it).
         The watchdog must skip the restart branch."""
+        _isolate_pid_file(monkeypatch, tmp_path)
         pm = ProxyManager(log_path=tmp_path / "mitm.log")
         pm.stop(disable_proxy=False)
 
@@ -101,6 +112,7 @@ class TestRestartSemanticsAfterStop:
     ``self._stopped = False`` in :meth:`start`.)"""
 
     def test_start_clears_explicit_stop_latch(self, tmp_path, monkeypatch) -> None:
+        _isolate_pid_file(monkeypatch, tmp_path)
         pm = ProxyManager(log_path=tmp_path / "mitm.log")
         pm.stop(disable_proxy=False)
         assert pm.was_explicitly_stopped() is True
