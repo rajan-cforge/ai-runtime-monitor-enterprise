@@ -47,6 +47,7 @@ from claude_monitoring.attack_surface.ontology.mapping import (
     map_chromium_extension,
     map_claude_desktop_integration,
     map_homebrew_ai_tool,
+    map_mcp_server_simple,
     map_node_package,
     map_python_dependency,
     map_python_package,
@@ -297,6 +298,53 @@ class TestChromiumExtensionMapping:
         result = map_chromium_extension(asset)
         assert OntologyCategory.NETWORK_UNRESTRICTED in result
         assert OntologyCategory.NETWORK_SCOPED not in result
+
+    def test_no_scheme_path_pattern_is_scoped(self) -> None:
+        """Defensive: a pattern without a scheme that ends in ``/*``
+        (e.g., a malformed host permission) classifies as scoped."""
+        asset = _asset(
+            source="chromium-extensions",
+            asset_type="extension",
+            current_state={"host_permissions": ["foo/*"]},
+        )
+        result = map_chromium_extension(asset)
+        assert OntologyCategory.NETWORK_SCOPED in result
+
+    def test_non_string_host_permission_entry_skipped(self) -> None:
+        """A non-string entry in ``host_permissions`` (corrupt input) is
+        skipped, not raised."""
+        asset = _asset(
+            source="chromium-extensions",
+            asset_type="extension",
+            current_state={"host_permissions": [123, "<all_urls>"]},
+        )
+        # Should not raise; the wildcard still classifies.
+        result = map_chromium_extension(asset)
+        assert OntologyCategory.NETWORK_UNRESTRICTED in result
+
+    def test_non_string_permission_entry_skipped(self) -> None:
+        """A non-string entry in ``permissions`` (corrupt input) is
+        skipped, not raised."""
+        asset = _asset(
+            source="chromium-extensions",
+            asset_type="extension",
+            current_state={"permissions": [None, "cookies"]},
+        )
+        result = map_chromium_extension(asset)
+        assert OntologyCategory.SECRETS_ACCESS in result
+
+    def test_bare_string_host_entry_emits_nothing(self) -> None:
+        """A bare-garbage host-permission string (no scheme, no /*) falls
+        through every classifier branch and emits nothing — defensive
+        final fallback."""
+        asset = _asset(
+            source="chromium-extensions",
+            asset_type="extension",
+            current_state={"host_permissions": ["bare-garbage-string"]},
+        )
+        result = map_chromium_extension(asset)
+        assert OntologyCategory.NETWORK_SCOPED not in result
+        assert OntologyCategory.NETWORK_UNRESTRICTED not in result
 
     def test_background_service_worker_emits_code_execution(self) -> None:
         asset = _asset(
@@ -601,6 +649,18 @@ class TestHomebrewMapping:
         assert OntologyCategory.CODE_EXECUTION in result
         assert OntologyCategory.NETWORK_UNRESTRICTED not in result
 
+    def test_openai_api_client_emits_network_only(self) -> None:
+        """AP-4: API client CLIs (openai/anthropic) → NETWORK_UNRESTRICTED only;
+        no CODE_EXECUTION (the CLI binary doesn't host arbitrary user code)."""
+        asset = _asset(
+            source="homebrew-ai-tools",
+            asset_type="homebrew_ai_tool",
+            current_state={"match_reason": {"keyword": "openai", "field": "name"}},
+        )
+        result = map_homebrew_ai_tool(asset)
+        assert OntologyCategory.NETWORK_UNRESTRICTED in result
+        assert OntologyCategory.CODE_EXECUTION not in result
+
     def test_unknown_keyword_emits_empty(self) -> None:
         asset = _asset(
             source="homebrew-ai-tools",
@@ -786,6 +846,20 @@ class TestDataExfiltrationCapableDerivation:
         # derived.py composes the derived tag from the base set.
         full = apply_derived(base)
         assert OntologyCategory.DATA_EXFILTRATION_CAPABLE in full
+
+    def test_mcp_simple_non_list_args_does_not_crash(self) -> None:
+        """Pre-existing `map_mcp_server_simple` defensive branch: non-list
+        ``args`` (corrupt input) → empty args_str fallback, no crash.
+        Coverage-ratchet companion: brings the pre-PR-3.8 uncovered line
+        up to >= the post-PR coverage threshold."""
+        asset = _asset(
+            source="mcp-servers",
+            asset_type="mcp_server",
+            current_state={"command": "node", "args": "not-a-list"},
+        )
+        result = map_mcp_server_simple(asset)
+        # No crash; baseline INTER_TOOL_COMMUNICATION still emitted.
+        assert OntologyCategory.INTER_TOOL_COMMUNICATION in result
 
     def test_filesystem_read_plus_network_derives_exfil(self) -> None:
         """The other branch of the OR: file_system_read + network_unrestricted."""
