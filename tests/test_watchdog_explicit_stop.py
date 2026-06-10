@@ -129,3 +129,58 @@ class TestRestartSemanticsAfterStop:
             "otherwise the watchdog would refuse to monitor the freshly-"
             "spawned mitmdump for crashes"
         )
+
+
+# ─────────────────────────────────────────────────────────────
+# Issue #98 follow-up — task #181 leg 2
+# Watchdog symmetry: disabling system proxy on mitmdump death MUST be
+# paired with re-enabling on a successful restart (iff the user
+# originally had it on). Regression: 2026-06-10, capture was silently
+# off for ~2 hours after pytest false-positive deaths disabled the
+# proxy and the watchdog never restored it.
+# ─────────────────────────────────────────────────────────────
+
+
+class TestWatchdogRestoresSystemProxyOnRestart:
+    """Leg 2 — symmetric proxy re-enable.
+
+    The watchdog calls ``disable_system_proxy()`` whenever pm.is_alive()
+    returns False. After ``pm.restart()`` succeeds, the watchdog MUST
+    re-enable the system proxy IF the user originally had it on for
+    this port — otherwise the daemon silently stops capturing desktop-
+    app traffic until the user notices and runs --enable-system-proxy.
+    """
+
+    def test_monitor_watchdog_calls_enable_system_proxy_on_restart(self) -> None:
+        """Static guard: the watchdog source must call the lifecycle helper
+        that owns the disable + restart + re-enable trio. Either
+        ``handle_mitmdump_death_and_restart`` (the consolidated helper used
+        today) or a direct ``enable_system_proxy`` reference proves the
+        restore path exists. Static check is enough because the actual
+        call is gated on observed pre-disable state."""
+        import inspect
+
+        from claude_monitoring import monitor
+
+        source = inspect.getsource(monitor)
+        watchdog_start = source.find("def _watchdog_loop")
+        assert watchdog_start != -1, "monitor.py must define _watchdog_loop"
+        watchdog_src = source[watchdog_start : watchdog_start + 4000]
+        # Also assert the lifecycle helper itself does the re-enable —
+        # belt-and-suspenders against someone removing the restore branch
+        # there too.
+        from claude_monitoring import lifecycle
+
+        lifecycle_src = inspect.getsource(lifecycle)
+        watchdog_calls_helper = (
+            "handle_mitmdump_death_and_restart" in watchdog_src or "enable_system_proxy" in watchdog_src
+        )
+        assert watchdog_calls_helper, (
+            "watchdog must invoke the re-enable path — task #181 leg 2. "
+            "Without this the daemon silently stops capturing desktop-app "
+            "traffic after any restart cycle."
+        )
+        assert "enable_system_proxy_for_port" in lifecycle_src, (
+            "lifecycle.handle_mitmdump_death_and_restart must call "
+            "enable_system_proxy_for_port when proxy was on pre-disable."
+        )
