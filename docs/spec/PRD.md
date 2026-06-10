@@ -122,9 +122,13 @@ Local-first dashboard on `localhost:9081` with nine tabs:
 - **System** — Process table, network connections, file activity.
 - **Insights** — Project intelligence (which projects use which models, which sessions hit credentials, which agents call which APIs).
 
-### 4.6 Fleet dashboard (v0.2 — limited; v1.0 — full)
+### 4.6 Fleet dashboard (v1.0 — planned, not yet designed)
 
-- Control plane aggregates data from every endpoint installed in the org.
+v0.2 has no fleet/control-plane capability; the daemon-to-control-plane sync
+client was removed in `control-plane-feature-removal`. A planned v1.0 enterprise
+tier will introduce:
+
+- A planned control plane that will aggregate data from every endpoint installed in the org.
 - RBAC with five roles (owner, admin, operator, member, viewer).
 - Org-scoped data isolation.
 - SSO via SAML and OIDC.
