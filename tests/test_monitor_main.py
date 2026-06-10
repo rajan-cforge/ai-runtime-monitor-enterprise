@@ -532,10 +532,10 @@ class TestMainArgumentParsing:
         # Task #181 a2 leg 5: --start tests must not reach detect_stale_state
         # against the real ~/claude_watch_output, which would scan for orphan
         # mitmdumps on port 9080 and SIGTERM the user's running daemon's child.
-        # Stub the stale-state cleanup so the dispatch tests stay scoped to
-        # argument routing only.
+        # Stub stale-state cleanup + the is_monitor_already_running probe so
+        # the dispatch tests stay scoped to argument routing only.
         monkeypatch.setattr(lifecycle, "detect_stale_state", lambda: [])
-        monkeypatch.setattr(lifecycle, "refuse_if_already_running", lambda: None)
+        monkeypatch.setattr(lifecycle, "is_monitor_already_running", lambda: False)
 
     def test_start_calls_start_monitoring(self):
         """--start should call start_monitoring(). Pass --no-proxy so the
@@ -595,6 +595,33 @@ class TestMainArgumentParsing:
                     main()
                 mock_port.assert_called_once_with(5555)
             mock_start.assert_called_once()
+
+    def test_start_refuses_when_daemon_already_running(self, monkeypatch, capsys):
+        """Task #181 leg 3 — `--start` against a running daemon must exit 1
+        BEFORE detect_stale_state runs. Without this guard, the second
+        `--start` invocation kills the running daemon's healthy mitmdump
+        as an "orphan." Covers the single-instance refusal branch in
+        monitor.py's args.start path."""
+        from claude_monitoring import lifecycle
+
+        # Override the autouse stub: is_monitor_already_running → True so
+        # the real refuse_if_already_running (called from monitor.py)
+        # enters the print + sys.exit(1) branch.
+        monkeypatch.setattr(lifecycle, "is_monitor_already_running", lambda: True)
+        monkeypatch.setattr(lifecycle, "read_pid_file", lambda _p: 99999)
+        with (
+            patch("sys.argv", ["ai-monitor", "--start", "--no-proxy"]),
+            patch("claude_monitoring.monitor.start_monitoring") as mock_start,
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            from claude_monitoring.monitor import main
+
+            main()
+        assert exc_info.value.code == 1
+        out = capsys.readouterr().out
+        assert "already running" in out.lower()
+        assert "99999" in out
+        mock_start.assert_not_called()
 
     def test_resolve_version_uses_importlib_metadata(self, monkeypatch):
         """Happy path: importlib.metadata.version() returns the
