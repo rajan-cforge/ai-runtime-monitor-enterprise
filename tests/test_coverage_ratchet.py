@@ -177,3 +177,23 @@ def test_cli_wrong_arg_count_returns_2(tmp_path):
     result = _run_ratchet()
     assert result.returncode == 2
     assert "Usage" in result.stderr
+
+
+def test_deleted_file_skipped_from_per_file_gate(tmp_path):
+    """A PR that DELETES a src/ file shouldn't fail the per-file gate.
+
+    `git diff --name-only` reports the deleted file as changed; the PR
+    cobertura has no entry for it (the file is gone); without this
+    carve-out the script reads "93% -> 0%" and fails. Regression: see
+    control-plane-feature-removal PR #112, which deleted sync.py and
+    tripped this exact mode.
+    """
+    files_base = {"src/claude_monitoring/widget.py": (0.93, 0.0)}
+    files_pr: dict[str, tuple[float, float | None]] = {}  # widget.py absent in PR coverage
+    base = _write_cobertura(tmp_path / "base.xml", 0.80, 0.0, files_base)
+    pr = _write_cobertura(tmp_path / "pr.xml", 0.79, 0.0, files_pr)  # tiny overall drop, under 5% hard limit
+    changed = _changed_list(tmp_path / "changed.txt", ["src/claude_monitoring/widget.py"])
+    result = _run_ratchet(str(base), str(pr), str(changed))
+    assert result.returncode == 0, f"deleted file should not fail the gate:\n{result.stdout}\n{result.stderr}"
+    assert "Deleted files (skipped from per-file gate, n=1):" in result.stdout
+    assert "src/claude_monitoring/widget.py" in result.stdout
