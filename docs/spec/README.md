@@ -12,7 +12,7 @@ This directory holds the formal specifications for AI Runtime Monitor (Vigil). T
 | [THREAT-MODEL.md](./THREAT-MODEL.md) | STRIDE threat model across 6 trust boundaries (B6 planned v0.3) | Security reviewers, enterprise procurement | Landed (PR #37); B6 added PR #44 |
 | [SECURITY-MANIFEST.md](./SECURITY-MANIFEST.md) | Controls mapped to OWASP ASVS, NIST SSDF, OWASP Top 10 | Security reviewers, compliance auditors | Landed (PR #37) |
 | [DATA-CLASSIFICATION.md](./DATA-CLASSIFICATION.md) | Data sensitivity tiers, retention policies, third-party transmission | Enterprise procurement, compliance auditors | Landed (PR #37) |
-| [functional/](./functional/) | Per-module functional specs (monitor, sync, security, watch, wizard, status, db, config, scanners) | Engineers maintaining the codebase | Landed (PR #38) |
+| [functional/](./functional/) | Per-module functional specs (monitor, security, watch, wizard, status, db, config, scanners) | Engineers maintaining the codebase | Landed (PR #38) |
 | [dependency-rationale.md](./dependency-rationale.md) | Justification for each runtime dependency; required by spec-requirements CI rule on `pyproject.toml` changes | Engineers proposing new dependencies, reviewers | Landed (PR #40) |
 
 Plus the technical architecture reference (lives at `docs/ARCHITECTURE.md`, consolidated in PR #35):
@@ -37,7 +37,7 @@ These specs must be reviewed and possibly updated when any of the following occu
 |---------|--------------------|
 | New AI capability added (detection rule, scanner type) | PRD, functional spec for the relevant module |
 | API endpoint added, removed, or signature changed | openapi.yaml, API-CONTRACTS.md |
-| New trust boundary introduced (e.g., cloud control plane) | THREAT-MODEL.md, SECURITY-MANIFEST.md |
+| New trust boundary introduced | THREAT-MODEL.md, SECURITY-MANIFEST.md |
 | New security control implemented or required | SECURITY-MANIFEST.md |
 | Major version bump (v0.2 → v0.3, v1.0, etc.) | All docs (full review) |
 | Customer or auditor question reveals a gap | Whichever doc the question hit |
@@ -98,7 +98,6 @@ This project aligns to the following external standards:
 - **OWASP ASVS Level 2** — primary application security standard
 - **NIST SP 800-218 SSDF** — secure software development framework
 - **OWASP Top 10 2021** — common application security risks
-- **AWS Well-Architected Security Pillar** — for control plane infrastructure (post v1.0)
 
 Mappings to specific controls are in [SECURITY-MANIFEST.md](./SECURITY-MANIFEST.md). Gaps are documented honestly with target versions.
 

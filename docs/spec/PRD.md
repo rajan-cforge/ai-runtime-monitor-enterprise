@@ -12,7 +12,7 @@
 
 AI coding agents (Claude Code, Cursor, Copilot, ChatGPT Desktop) now write a measurable fraction of code that ships to production. They install dependencies, access credentials, modify files, and call external APIs. No existing security product watches what they do on the developer's machine.
 
-AI Runtime Monitor (product name: Vigil) is endpoint security for the AI developer. It captures every action AI agents take on a developer's machine, detects supply-chain and credential-exposure risks in real time, and surfaces them through a local-first dashboard. The platform extends to fleet-scale monitoring through a control plane, enabling security teams to govern AI agent usage across their developer population.
+AI Runtime Monitor (product name: Vigil) is endpoint security for the AI developer. It captures every action AI agents take on a developer's machine, detects supply-chain and credential-exposure risks in real time, and surfaces them through a local-first dashboard. A planned v1.0 enterprise tier will extend the local product to fleet-scale monitoring via a control plane, enabling security teams to govern AI agent usage across their developer population; the v0.2 product is local-only.
 
 The long-term vision spans three stages: **detect** (visibility into AI agent actions, shipping in v0.2 — launching this week), **prevent** (block excessive OAuth scopes, malicious packages, unauthorized exfiltration — first concrete capability in v0.3 per [docs/design/agent-detection.md](../design/agent-detection.md), broader features in v1.5), and **reduce blast radius** (least-privilege execution, session isolation, credential vaulting — v2.0).
 
@@ -122,9 +122,13 @@ Local-first dashboard on `localhost:9081` with nine tabs:
 - **System** — Process table, network connections, file activity.
 - **Insights** — Project intelligence (which projects use which models, which sessions hit credentials, which agents call which APIs).
 
-### 4.6 Fleet dashboard (v0.2 — limited; v1.0 — full)
+### 4.6 Fleet dashboard (v1.0 — planned, not yet designed)
 
-- Control plane aggregates data from every endpoint installed in the org.
+v0.2 has no fleet/control-plane capability; the daemon-to-control-plane sync
+client was removed in `control-plane-feature-removal`. A planned v1.0 enterprise
+tier will introduce:
+
+- A planned control plane that will aggregate data from every endpoint installed in the org.
 - RBAC with five roles (owner, admin, operator, member, viewer).
 - Org-scoped data isolation.
 - SSO via SAML and OIDC.

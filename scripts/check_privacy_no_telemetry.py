@@ -6,8 +6,8 @@ Per the v0.2.2 implementation directive §11.2 (gate #4) and Rajan's
 ships the first outbound HTTP (the OSV.dev CVE-correlation client).
 
 **Scope** (deliberately narrow): only `src/claude_monitoring/attack_surface/`.
-The rest of the codebase has its own outbound-HTTP audit history (sync.py
-is user-opt-in control-plane sync; validators.py does credential-test
+The rest of the codebase has its own outbound-HTTP audit history
+(validators.py does credential-test
 calls; threat_intel.py downloads public feeds). This gate is the
 v0.2.2-specific guardrail that stops anyone sneaking telemetry into the
 new attack-surface code path.

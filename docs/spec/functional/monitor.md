@@ -47,7 +47,7 @@ Note: `ProcessScanner` predates the formal Scanner Protocol. The conformance tes
 ```python
 class DashboardHandler(http.server.BaseHTTPRequestHandler):
     def do_GET(self) -> None: ...
-    def do_POST(self) -> None: ...  # only for /api/v1/* control plane endpoints
+    def do_POST(self) -> None: ...  # local /api/v1/* endpoints only (no off-box delivery)
 ```
 
 Dispatches on `self.path` to specific handler methods. Each handler:
@@ -79,7 +79,7 @@ Dispatches on `self.path` to specific handler methods. Each handler:
 
 - **Process creation** — none in v0.2 (the daemon is single-process; scanners are threads)
 - **File system mutation** — only within `~/claude_watch_output/`
-- **Network I/O** — listens on `127.0.0.1:9081` (dashboard); no outbound network unless control plane sync is enabled
+- **Network I/O** — listens on `127.0.0.1:9081` (dashboard). Outbound network is limited to enrichment reads (CVE / reputation feeds — see P2.6 reputation, P4.1 OSV-CVE). No captured user data or findings are sent off-box; the prior daemon-to-control-plane sync was removed (`control-plane-feature-removal`).
 - **Database mutation** — frequent INSERT and occasional UPDATE; never DELETE (auto-purge in `security.py` handles deletion separately)
 
 ## 6. Failure modes

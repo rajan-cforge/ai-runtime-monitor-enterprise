@@ -39,7 +39,7 @@ Coverage levels:
 | V1.1.4 Trust boundaries identified | IMPLEMENTED | Threat model identifies B1-B5 boundaries with mitigations; B6 (Agent Identity) is a v0.3-planned placeholder with mitigations deferred to v0.3 |
 | V1.1.5 Threat model includes data classification | IMPLEMENTED | Threat model references plaintext sensitive data; formal data classification at [DATA-CLASSIFICATION.md](./DATA-CLASSIFICATION.md) |
 | V1.1.6 Centralized security controls | IMPLEMENTED | `security.py` centralizes CA generation, token handling, masking, hashing, permission enforcement |
-| V1.1.7 Secure-by-default architecture | IMPLEMENTED | Bind address defaults to 127.0.0.1; proxy is opt-in; control plane sync is opt-in |
+| V1.1.7 Secure-by-default architecture | IMPLEMENTED | Bind address defaults to 127.0.0.1; proxy is opt-in |
 
 ### V2: Authentication
 
@@ -48,8 +48,8 @@ Coverage levels:
 | V2.1.1 Authentication required | IMPLEMENTED | All `/api/*` endpoints require bearer token via `DashboardHandler` |
 | V2.1.5 Constant-time credential comparison | IMPLEMENTED | `security.py::verify_token` uses `hmac.compare_digest` |
 | V2.1.7 Compromised password protection | N/A | No passwords in v0.2; token-based auth only |
-| V2.4.1 Modern password hashing | IMPLEMENTED | Control plane endpoint key stored as bcrypt hash (`endpoints.api_key_hash`) |
-| V2.7.6 Authentication state never logged | IMPLEMENTED | Token values never appear in log output (verified by `sync.py::_sanitize_string` warning format) |
+| V2.4.1 Modern password hashing | N/A | No server-side key storage in v0.2 (control-plane feature removed; returns with enterprise control plane v1.0 — see CHANGELOG entry for control-plane-feature-removal) |
+| V2.7.6 Authentication state never logged | IMPLEMENTED | Token values never appear in log output; `security.py::verify_token` uses `hmac.compare_digest` and emits no token-containing log lines |
 
 ### V3: Session Management
 
@@ -77,7 +77,7 @@ Coverage levels:
 | V5.1.1 Input validation enforced | IMPLEMENTED | Query parameters validated for type and range in `DashboardHandler` |
 | V5.1.2 No unsafe deserialization | IMPLEMENTED | All deserialization via `json.loads` with try/except; no `pickle` or `yaml.unsafe_load` |
 | V5.2.1 Sanitization before output | IMPLEMENTED | Four context-aware HTML escape helpers (escHtml, escAttr, escJs, escUrl) per Phase 3A C2 fix |
-| V5.2.2 Sanitize unstructured data | IMPLEMENTED | `sync.py::_sanitize_payload` walks payloads scanning for sensitive patterns |
+| V5.2.2 Sanitize unstructured data | PARTIAL | HTML output uses context-aware escaping helpers (`escHtml`, `escAttr`, `escJs`, `escUrl`); structured payload sanitization removed with control-plane feature; returns with v1.0 enterprise control plane |
 | V5.3.1 Output encoding context-aware | IMPLEMENTED | Same as V5.2.1; helpers are context-specific |
 | V5.3.4 SQL injection prevention | IMPLEMENTED | All SQL uses parameterized queries; no string interpolation with user input |
 | V5.3.6 LDAP injection prevention | N/A | No LDAP in v0.2 |
@@ -93,7 +93,7 @@ Coverage levels:
 | V6.2.5 No hardcoded keys | IMPLEMENTED | All keys are generated at runtime |
 | V6.3.1 Random number generation uses CSPRNG | IMPLEMENTED | `secrets.token_urlsafe` (cryptographic) and `os.urandom` for purge |
 | V6.4.1 Encryption at rest | PARTIAL | SQLite + chmod 600 in v0.2; SQLCipher AES-256 planned v0.3 |
-| V6.4.2 Encryption in transit | IMPLEMENTED | HTTPS for sync to control plane; local API on loopback (HTTPS planned for remote bind) |
+| V6.4.2 Encryption in transit | PARTIAL | mitmproxy CA enforces TLS for proxy-intercepted AI API traffic; local dashboard API is loopback-only (HTTPS planned for remote bind); daemon-to-server sync removed with control-plane feature |
 
 ### V7: Error Handling and Logging
 
@@ -119,7 +119,7 @@ Coverage levels:
 
 | Control | Status | Evidence |
 |---------|--------|----------|
-| V9.1.1 TLS 1.2+ enforced | IMPLEMENTED | Sync to control plane uses HTTPS; requests library defaults to TLS 1.2+ |
+| V9.1.1 TLS 1.2+ enforced | PARTIAL | mitmproxy enforces TLS for intercepted AI API traffic; local API is loopback-only; outbound sync removed |
 | V9.1.2 Strong cipher suites | IMPLEMENTED | requests library uses system TLS config |
 | V9.1.3 Certificate validation | IMPLEMENTED | requests.post verifies certs by default; never `verify=False` |
 | V9.2.4 Certificate pinning | PARTIAL | Standard CA bundle in v0.2; certificate pinning planned for v1.0 Enterprise |
@@ -137,7 +137,7 @@ Coverage levels:
 | Control | Status | Evidence |
 |---------|--------|----------|
 | V11.1.5 Rate limiting | PARTIAL | Sync agent has exponential backoff; dashboard rate limiting planned v1.0 |
-| V11.1.6 Idempotency for sensitive ops | IMPLEMENTED | DB inserts use `INSERT OR IGNORE`; sync uses watermark-based delta sync |
+| V11.1.6 Idempotency for sensitive ops | IMPLEMENTED | DB inserts use `INSERT OR IGNORE` |
 
 ### V12: Files and Resources
 
@@ -168,7 +168,7 @@ Coverage levels:
 | V14.2.1 Dependency scanning | IMPLEMENTED | pip-audit in CI workflow on every PR |
 | V14.2.2 Patch management | IMPLEMENTED | Dependabot security updates enabled |
 | V14.4.1 Security headers (HTTPS) | N/A | HTTP-only on localhost in v0.2 |
-| V14.5.1 HTTP method restrictions | IMPLEMENTED | DashboardHandler dispatches only on GET (and POST for control plane ingest) |
+| V14.5.1 HTTP method restrictions | IMPLEMENTED | DashboardHandler dispatches only on GET for dashboard endpoints |
 
 ## 3. NIST SP 800-218 SSDF mapping
 
@@ -180,7 +180,7 @@ Coverage levels:
 | PO.2: Implement roles and responsibilities | PARTIAL | Solo founder for now; security responsibility documented as sole maintainer |
 | PO.3: Implement supporting toolchains | IMPLEMENTED | CI workflows for lint, security, supply chain; pre-commit hooks; grader + architect + performance review agents |
 | PO.4: Define and use criteria for software security checks | IMPLEMENTED | Rubrics in `.claude/rubrics/`; required CI status checks in branch protection |
-| PO.5: Implement and maintain secure environments | PARTIAL | Developer machine + GitHub Actions runners; cloud control plane environment planned v1.0 |
+| PO.5: Implement and maintain secure environments | PARTIAL | Developer machine + GitHub Actions runners |
 
 ### PS: Protect the Software
 
@@ -202,7 +202,7 @@ Coverage levels:
 | PW.6: Configure compilation and build processes | IMPLEMENTED | Standard Python build; reproducible builds planned |
 | PW.7: Review and analyze human-readable code | IMPLEMENTED | Grader + architect + performance multi-agent review pipeline |
 | PW.8: Test executable code | IMPLEMENTED | 1398+ tests passing; coverage ratchet; size ratchet; functional coverage warn |
-| PW.9: Configure software to have secure settings by default | IMPLEMENTED | Localhost bind; opt-in proxy; opt-in control plane sync; chmod 600/700 enforced |
+| PW.9: Configure software to have secure settings by default | IMPLEMENTED | Localhost bind; opt-in proxy; chmod 600/700 enforced |
 
 ### RV: Respond to Vulnerabilities
 
@@ -217,12 +217,12 @@ Coverage levels:
 | Risk | Status | Notes |
 |------|--------|-------|
 | A01: Broken Access Control | MITIGATED | Bearer token auth, centralized in DashboardHandler; tested via C1-FOLLOWUP curl verification |
-| A02: Cryptographic Failures | MITIGATED | TLS for sync; chmod 600 for at-rest; constant-time comparison; SHA-256; X.509 NameConstraints |
+| A02: Cryptographic Failures | MITIGATED | mitmproxy CA with X.509 NameConstraints; chmod 600 for at-rest; constant-time comparison via `hmac.compare_digest`; SHA-256 |
 | A03: Injection | MITIGATED | Parameterized SQL; context-aware HTML escaping (C2 fix); subprocess argv lists (C4 fix) |
 | A04: Insecure Design | MITIGATED | Threat model documented; secure-by-default config; fail-closed sanitizer |
 | A05: Security Misconfiguration | MITIGATED | Localhost default; file permission enforcement on startup; no defaults that bypass auth |
 | A06: Vulnerable and Outdated Components | MITIGATED | pip-audit in CI; Dependabot; SBOM generation |
-| A07: Identification and Authentication Failures | MITIGATED | Token-based with constant-time comparison; bcrypt for control plane keys |
+| A07: Identification and Authentication Failures | MITIGATED | Token-based with constant-time comparison via `hmac.compare_digest` |
 | A08: Software and Data Integrity Failures | PARTIAL | Branch protection prevents tampering; signed builds planned v0.3 |
 | A09: Security Logging and Monitoring Failures | PARTIAL | Authentication failures and sanitization failures logged; full audit trail planned v1.0 |
 | A10: Server-Side Request Forgery | MITIGATED | No user-controlled URL fetching in v0.2 |
@@ -239,10 +239,9 @@ Coverage levels:
 | Stable hashing for dedup | `security.py::hash_value` |
 | Auto-purge of plaintext | `security.py::purge_old_sensitive_data` |
 | HTML output encoding (4 helpers) | `dashboard.html` (escHtml, escAttr, escJs, escUrl) |
-| SQL parameterized queries | `db.py`, `monitor.py`, `sync.py` (every `execute` call) |
+| SQL parameterized queries | `db.py`, `monitor.py` (every `execute` call) |
 | Subprocess argv list (no shell=True) | `security.py::trust_ca_cert`, throughout `watch.py` |
-| Sanitization fail-closed | `sync.py::_sanitize_string`, `_sanitize_payload` |
-| bcrypt for endpoint keys | Control plane server (separate repo) |
+| Sanitization fail-closed | HTML output: context-aware escaping helpers in `dashboard.html` |
 | pip-audit CI gate | `.github/workflows/ci-security.yml` |
 | Bandit CI gate | `.github/workflows/ci.yml` (bandit job) |
 | SBOM generation | `.github/workflows/ci-supply-chain.yml` |
@@ -258,7 +257,7 @@ The following ASVS Level 2 controls are not yet IMPLEMENTED. Each has a target v
 - V3.7.1 Session lifetime limits — **v1.0** (tokens currently persist until manual rotation)
 - V4.2.1 Anti-CSRF token — **v1.0** (localhost-only mitigates; full token planned)
 - V6.4.1 Encryption at rest — **v0.3** (SQLCipher integration)
-- V7.3.1 Full audit trail — **v1.0** (control plane logging)
+- V7.3.1 Full audit trail — **v1.0**
 - V7.3.3 Tamper-evident logs — **v1.0** (signed log entries)
 - V9.2.4 Certificate pinning — **v1.0 Enterprise**
 - V11.1.5 API rate limiting — **v1.0**

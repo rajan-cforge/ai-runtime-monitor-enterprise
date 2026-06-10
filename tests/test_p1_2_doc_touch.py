@@ -25,13 +25,18 @@ class TestSpecDocsPinRatifiedDecisions:
         assert "wrap per-item work in `try/except`" in doc, "§10 core rule sentence missing — drifted"
         assert "MUST NOT zero out" in doc, "§10 invariant phrase missing — drifted"
 
-    def test_threat_model_doc_has_b7_partially_mitigated(self) -> None:
-        """`docs/spec/THREAT-MODEL.md` contains B7 section AND the literal phrase
-        'PARTIALLY mitigated'. Pins the not-closed status per Q1 ratification."""
+    def test_threat_model_doc_has_b6_partially_mitigated(self) -> None:
+        """`docs/spec/THREAT-MODEL.md` contains the Vigil Discovery boundary
+        section AND the literal phrase 'PARTIALLY mitigated'. Pins the
+        not-closed status per Q1 ratification.
+
+        Originally labelled B7; renumbered to B6 by the
+        control-plane-feature-removal PR (B3 Daemon↔Control Plane was
+        deleted; B4-B7 became B3-B6)."""
         doc = (REPO_ROOT / "docs" / "spec" / "THREAT-MODEL.md").read_text()
-        assert "B7" in doc, "B7 boundary not added — drifted"
-        assert "Vigil Discovery" in doc, "B7 boundary name missing — drifted"
-        assert "PARTIALLY mitigated" in doc, "B7 status MUST be 'PARTIALLY mitigated' per Q1"
+        assert "B6" in doc, "B6 boundary not present — drifted"
+        assert "Vigil Discovery" in doc, "Vigil Discovery boundary name missing — drifted"
+        assert "PARTIALLY mitigated" in doc, "Status MUST be 'PARTIALLY mitigated' per Q1"
 
     def test_data_classification_doc_has_attack_surface_tier_words(self) -> None:
         """`docs/spec/DATA-CLASSIFICATION.md` contains tier words (Critical AND

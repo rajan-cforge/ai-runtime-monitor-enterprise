@@ -165,33 +165,6 @@ Browser renders Alert row (matched_value not shown in UI)
 
 The dashboard's UI never renders `matched_value` or `snippet`. They are returned in the API response (a v0.3 candidate change is to strip them at the API layer too) but the HTML rendering uses only `masked_value`.
 
-### 3.3 Control plane sync path
-
-```
-Background sync thread (every 30s)
-    │
-    │ Read new rows since last watermark
-    ▼
-_sanitize_payload walks every field in _SANITIZE_TEXT_FIELDS
-    │
-    │ For each field: scan_sensitive + mask_value inline
-    │ Fail-closed: any error → "" sentinel
-    │ Oversized: truncated to 5000 chars
-    │ Control chars: stripped
-    ▼
-HTTPS POST to control plane
-    │
-    │ X-API-Key (fleet) + X-Endpoint-Key (per-endpoint, bcrypt-verified server-side)
-    ▼
-Control plane stores in its own DB (separate trust domain)
-```
-
-The sync layer is the most security-sensitive in the product because it crosses out of the user's machine. Three defense layers:
-
-1. Capture-time masking (already in `data_json`)
-2. Sync-time sanitizer (defense-in-depth against bypass at capture)
-3. Fail-closed sentinel (any error returns "" not the raw value)
-
 ### 3.4 Browser session export
 
 ```
@@ -241,13 +214,12 @@ The product is single-user and locally-hosted. The "data subject" (the developer
 - **Right to export:** `/api/export` endpoint or direct SQLite query
 - **Right to rectify:** the user can run UPDATE/DELETE against the local DB directly
 
-For the control plane (Enterprise tier), data subject rights are governed by the customer's privacy policy. GoCloudForge does not host customer data in the v0.2 Enterprise tier — the customer runs the control plane themselves.
+There is no remote data plane in v0.2. All captured data stays local.
 
 ## 6. Cross-border data transfer
 
-In v0.2, only the optional control plane sync involves cross-border data flow, and only if the customer's control plane is hosted in a different jurisdiction from the developer.
 
-For the v1.0+ managed cloud control plane (planned):
+For a future v1.0+ managed enterprise control plane (planned, not yet designed):
 - Regional deployment (US, EU) to honor data residency
 - Customer chooses region at signup
 - No cross-region replication without explicit opt-in
@@ -257,11 +229,10 @@ For the v1.0+ managed cloud control plane (planned):
 The product is not designed for use with PHI, PCI-DSS scope data, or government-classified information. Customers in these regulated industries should:
 
 - Configure auto-purge to 7 days (the planned minimum in v0.3)
-- Disable the control plane sync entirely
 - Run only the local daemon
 - Treat the daemon's database with the same care as other regulated data stores
 
-A future Enterprise tier may add specific certifications (HIPAA-compliant managed control plane, PCI-DSS scope segmentation) but these are not in the v0.2 or v1.0 roadmap.
+A future Enterprise tier may add specific certifications (HIPAA-compliant managed plane, PCI-DSS scope segmentation) but these are not in the v0.2 roadmap.
 
 ## 8. Logging and metrics
 
@@ -269,7 +240,7 @@ The product's own logs are at `~/claude_watch_output/monitor.log`. Log entries a
 
 | Log content | Tier | Example |
 |-------------|------|---------|
-| Module names, function names | Public | `[SyncAgent] Sync failed` |
+| Module names, function names | Public | `[VulnScanner] OSV query failed` |
 | Error type names (without values) | Internal | `sanitize failed: ValueError` |
 | File paths, hostnames, port numbers | Internal | `Listening on 127.0.0.1:9081` |
 | User prompts, credentials, message bodies | **NEVER LOGGED** | (would be a bug if it appeared) |
@@ -281,7 +252,7 @@ logger.warning("sanitize failed: %s", type(e).__name__)
 # NOT: logger.warning("sanitize failed for value %s", value)
 ```
 
-This is verified by the unit tests in `tests/test_sync.py` which assert log lines do not contain canary plaintext.
+This is verified by per-handler logger configuration; no log line emits a redacted/sensitive value.
 
 ## 9. Third-party data transmission
 
@@ -293,10 +264,9 @@ The product transmits data to:
 | OSV.dev API | Vulnerability lookup for installed packages | Package names + versions (no credentials, no user data) | Implicit (vulnerability scanning is core functionality) |
 | abuse.ch ThreatFox API | Threat intel feed | None (we only pull from them) | Implicit |
 | abuse.ch URLhaus API | Threat intel feed | None (we only pull from them) | Implicit |
-| Customer's control plane (Enterprise) | Fleet visibility | Sanitized event data | Opt-in only |
 | GoCloudForge servers | Telemetry (planned v0.3, opt-in) | None in v0.2 | n/a (not active) |
 
-The OSV.dev calls send package names but no credentials. The threat intel feeds are pull-only. The control plane is opt-in. There is no analytics, no telemetry, no "phone home" in v0.2.
+The OSV.dev calls send package names but no credentials. The threat intel feeds are pull-only. There is no analytics, no telemetry, no "phone home" in v0.2.
 
 ## 10. Verification
 
@@ -305,6 +275,6 @@ For procurement reviewers who want to verify these claims:
 - Open the source code at github.com/rajan-cforge/ai-runtime-monitor-enterprise
 - Search for `requests.post`, `urllib.request`, `socket.connect` — these are every outbound network call
 - Search for `logger.` and `print(` — these are every log line
-- The test suite in `tests/test_sync.py` includes adversarial assertions that plaintext never reaches logs or network
+
 
 For deeper verification, contact security@gocloudforge.com.

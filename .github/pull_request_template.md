@@ -62,14 +62,9 @@ Trust boundaries this change crosses (from `docs/spec/THREAT-MODEL.md`):
 
 ---
 
-## C3-specific: caller audit (required if this PR touches `_sanitize_string`)
-
-<!-- Delete this section if the PR doesn't touch sync.py::_sanitize_string. -->
-
-Per the C3 fail-closed sanitization discipline (see `docs/spec/functional/sync.md`). Use codebase-memory-mcp `trace_call_path` with `function_name=_sanitize_string` (direction = callers) to enumerate every caller. For each, record how the return value is used and verdict.
-
-| File:line | How return value is used                 | Verdict |
-|-----------|------------------------------------------|---------|
-|           |                                          | HANDLES_EMPTY / PASSES_THROUGH |
-
-If any caller is `PASSES_THROUGH`, fix it in this same PR. Do not merge until every caller is `HANDLES_EMPTY`.
+<!--
+The C3 sanitization caller-audit template was removed alongside the
+control-plane feature (control-plane-feature-removal). When the
+enterprise control plane returns in v1.0, re-add this section keyed
+to the then-current sanitization symbol and spec doc.
+-->

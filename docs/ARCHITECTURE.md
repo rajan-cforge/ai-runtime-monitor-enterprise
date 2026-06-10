@@ -32,16 +32,13 @@ This document is the technical architecture reference for AI Runtime Monitor (Vi
                                                     ▼           └──────────┘
                                               CSV session
                                               files (primary)
-
-                                              ┌─────────────────┐  HTTPS + dual auth
-                                              │   sync.py       │ ──────────────→  Control Plane
-                                              │   (background)  │                  (Enterprise)
-                                              └─────────────────┘
 ```
+
+All captured data stays local. There is no daemon-side outbound sync surface.
 
 ## 2. Trust boundaries
 
-The system crosses five trust boundaries today, with a sixth (B6: Agent Identity) planned for v0.3 — see `docs/spec/THREAT-MODEL.md` §8 and `docs/design/agent-detection.md`. The threat model document analyzes each in detail; this section is the diagram.
+The system crosses four trust boundaries today, with a fifth (B5: Agent Identity) planned for v0.3 — see `docs/spec/THREAT-MODEL.md` §7 and `docs/design/agent-detection.md`. The threat model document analyzes each in detail; this section is the diagram.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
@@ -55,24 +52,15 @@ The system crosses five trust boundaries today, with a sixth (B6: Agent Identity
 │   │   injected)     │         │                 │        │             │    │
 │   └─────────────────┘         └────┬────────────┘        └─────────────┘    │
 │                                    │                                        │
-│   ┌─────────────────┐         B5   │   B1            ┌─────────────────┐    │
+│   ┌─────────────────┐         B4   │   B1            ┌─────────────────┐    │
 │   │  Browser ext    │  ──────→     ▼  ←─────────     │  Dashboard UI   │    │
 │   │  (UNTRUSTED)    │         ┌─────────────────┐    │  (UNTRUSTED:    │    │
 │   └─────────────────┘         │ DashboardHandler│ ←──│   could be      │    │
 │                               │ (HTTP + token)  │    │   spoofed)      │    │
-│                               └────┬────────────┘    └─────────────────┘    │
-│                                    │                                        │
-│                                    │ B3: HTTPS + bearer tokens              │
-└────────────────────────────────────┼────────────────────────────────────────┘
-                                     ▼
-                          ┌─────────────────────┐
-                          │  Control Plane      │
-                          │  (separate trust    │
-                          │   domain — even     │
-                          │   from us)          │
-                          └─────────────────────┘
+│                               └─────────────────┘    └─────────────────┘    │
+└─────────────────────────────────────────────────────────────────────────────┘
 
-                          B4: Proxy ↔ AI APIs
+                          B3: Proxy ↔ AI APIs
                           ──────────────────────────
                           Cryptographically constrained via X.509 NameConstraints
                           Can only sign leaf certs for ~10 AI domains
@@ -80,9 +68,8 @@ The system crosses five trust boundaries today, with a sixth (B6: Agent Identity
 
 - **B1 — User/Agents ↔ Daemon (HTTP API):** Token-authenticated, constant-time compared, bound to 127.0.0.1 by default
 - **B2 — Daemon ↔ Database (file system):** Chmod 600/700 enforcement, WAL mode, planned SQLCipher in v0.3
-- **B3 — Daemon ↔ Control Plane (HTTPS):** Bearer token + per-endpoint key (bcrypt verified server-side), sanitized payloads
-- **B4 — Proxy ↔ AI APIs (TLS termination):** Cryptographic enforcement via X.509 NameConstraints, addon-level host filter
-- **B5 — Browser Extension ↔ Daemon (HTTP):** Same bearer token model as B1, treats extension data as untrusted
+- **B3 — Proxy ↔ AI APIs (TLS termination):** Cryptographic enforcement via X.509 NameConstraints, addon-level host filter
+- **B4 — Browser Extension ↔ Daemon (HTTP):** Same bearer token model as B1, treats extension data as untrusted
 
 Each boundary's STRIDE analysis is in [spec/THREAT-MODEL.md](./spec/THREAT-MODEL.md).
 
@@ -123,34 +110,7 @@ through proxy        with CA cert           Capture body
 
 The CSV is the source of truth. The DB write is best-effort and used by the dashboard for fast queries. If the DB write fails, the data is still in the CSV and recoverable.
 
-### 3.3 Control plane sync flow
-
-```
-SyncAgent           monitor.db          Sanitizer            Control Plane
-─────────           ──────────          ─────────            ──────────────
-Every 30s
-Read watermarks ───→ SELECT from
-                     sync_state
-SELECT new rows ───→ Events, sessions,
-                     api_calls
-                                        _sanitize_payload
-                                        (fail-closed)
-                                        Mask sensitive
-                                        Truncate oversized
-                                        Strip control chars
-                                                              POST /api/v1/ingest
-                                                              X-API-Key: <fleet>
-                                                              X-Endpoint-Key: <ep>
-                                                              ────────────────→
-                                        Receive response
-                                        Get endpoint_id
-Update watermarks ←── UPDATE sync_state
-                     last_synced_id = max_id_seen
-```
-
-On error: exponential backoff 1s → 2s → 4s → ... → 60s cap. Watermarks are never advanced if the POST fails (at-least-once semantics).
-
-### 3.4 Dashboard request flow
+### 3.3 Dashboard request flow
 
 ```
 Browser              DashboardHandler         security.py            monitor.db
@@ -171,7 +131,7 @@ Render in tab
 
 Hot path: every dashboard refresh hits 3-5 endpoints. Round-trip latency < 50ms on a developer machine.
 
-### 3.5 Sensitive Data Detection Pipeline
+### 3.4 Sensitive Data Detection Pipeline
 
 The data-flow walkthrough for sensitive-pattern matching as text moves from a captured event into the database. Preserved from the prior architecture revision because the per-stage filter chain doesn't appear elsewhere and reviewers ask about it.
 
@@ -240,9 +200,9 @@ request IDs that happen to match the card regex pattern.
                       │               │
         ┌─────────────┼───────────────┼─────────────┐
         │             │               │             │
-   ┌──────────┐  ┌──────────┐    ┌──────────┐  ┌──────────┐
-   │  watch   │  │ monitor  │    │  sync    │  │  status  │
-   └──────────┘  └──────────┘    └──────────┘  └──────────┘
+   ┌──────────┐  ┌──────────┐                 ┌──────────┐
+   │  watch   │  │ monitor  │                 │  status  │
+   └──────────┘  └──────────┘                 └──────────┘
                       ▲                              ▲
                       │                              │
               ┌──────────┐                     ┌──────────┐
@@ -263,7 +223,7 @@ Layer rules (enforced via planned import-linter):
 - **Foundation layer** (`config`, `constants`, `utils`) — no project imports
 - **Primitives layer** (`security`, `db`, `validators`) — depends only on foundation
 - **Scanners layer** (`supply_chain`, `threat_intel`, `vuln_scanner`, `report`) — depends on foundation + primitives
-- **Application layer** (`monitor`, `watch`, `sync`, `status`, `wizard`, `lifecycle`) — depends on everything below
+- **Application layer** (`monitor`, `watch`, `status`, `wizard`, `lifecycle`) — depends on everything below
 
 Forbidden imports (enforced post-Phase-3F):
 
@@ -285,7 +245,6 @@ src/claude_monitoring/
 ├── lifecycle.py          Heartbeat, crash tracking, LaunchAgent integration
 ├── monitor.py            Main entry point: scanners, dashboard HTTP server, API
 ├── watch.py              mitmproxy addon, CLI analysis tools, proxy setup/verify
-├── sync.py               Control plane sync agent (background thread)
 ├── status.py             ai-monitor --status diagnostic
 ├── wizard.py             First-run setup + secure uninstall
 ├── supply_chain.py       Package inventory across 19 managers
@@ -318,29 +277,18 @@ Everything runs in one Python process on the developer's machine:
 - Main thread: HTTP dashboard server
 - Scanner threads: one per scanner (JSONL, process, network, filesystem, browser history)
 - Watchdog thread: heartbeat updater
-- Optional sync thread: control plane delivery
 - Optional mitmproxy subprocess: HTTPS interception (when `--with-proxy`)
 
 The process is started by the user (`ai-monitor --start`) or by a macOS LaunchAgent on login.
 
-### 6.2 v0.2 — control plane (Enterprise tier)
-
-Customer-hosted server (single Docker container in v0.2, scaling out in v1.0). Receives ingest from N endpoints. Stores in PostgreSQL. Exposes a fleet dashboard.
-
-Authentication: bearer fleet API key (org-scoped) + bcrypt-verified per-endpoint key.
-
-### 6.3 v0.3+ — packaged distributions
+### 6.2 v0.3+ — packaged distributions
 
 - Homebrew formula: `brew install vigil`
 - macOS .dmg with signed installer
 - Linux: Debian and RPM packages (best-effort; macOS is primary)
 - Windows: planned v0.3 (process and network monitoring); proxy in v0.4
 
-### 6.4 v1.0+ — cloud control plane (optional)
-
-A managed control plane SaaS for customers who don't want to self-host. Same API, same data model. Customer chooses self-hosted or cloud at procurement time.
-
-### 6.5 Startup Sequence
+### 6.3 Startup Sequence
 
 The `start_monitoring()` entry point in `monitor.py` wires the daemon together. All scanner classes referenced below live in `monitor.py` — see Section 5 for the module inventory. Preserved from the prior architecture revision because the dependency order between watchers, scanners, and the HTTP server matters for operators debugging stuck startups.
 
@@ -636,13 +584,6 @@ All tables live in `~/claude_watch_output/monitor.db` (SQLite, WAL mode).
 | tab_id | INTEGER | Chrome tab ID |
 | window_id | INTEGER | Chrome window ID |
 
-### sync_state (control plane integration)
-| Column | Type | Description |
-|--------|------|-------------|
-| table_name | TEXT PK | Source table name (sessions, events, api_calls) |
-| last_synced_id | INTEGER | Highest rowid synced to control plane |
-| last_sync_time | TEXT | ISO 8601 of last successful sync |
-
 ### Indexes
 
 - `idx_events_ts` — events(timestamp)
@@ -776,7 +717,7 @@ Post-Phase-3F (M6 split), this becomes a clean path:
 ### 12.4 Adding a new API endpoint
 
 - Add the route handler method to `DashboardHandler`
-- Dispatch from `do_GET` (or `do_POST` for control plane)
+- Dispatch from `do_GET`
 - Add to `docs/spec/openapi.yaml` (CI enforces this)
 - Add to `docs/spec/API-CONTRACTS.md` if the contract has design rationale
 

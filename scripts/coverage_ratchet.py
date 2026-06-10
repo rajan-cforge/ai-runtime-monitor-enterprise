@@ -90,6 +90,22 @@ def ratchet(base_path: Path, pr_path: Path, changed: set[str]) -> int:
     print(f"Overall delta:  line={-overall_line_drop:+.2f}%  branch={-overall_branch_drop:+.2f}%")
     print()
 
+    pr_files_for_filter = parse_file_coverage(pr_path)
+    # `git diff --name-only` includes deleted files. A deleted file has no PR
+    # coverage entry AND is absent from disk, so the per-file gate would read
+    # "93% -> 0%" and fail — but the file is gone, so there is nothing to
+    # test. Drop deletions from the per-file gate; deletion-induced
+    # overall-coverage drift is still caught by OVERALL_DROP_HARD_LIMIT
+    # below. Both conditions are required so fake-path test fixtures
+    # (file absent on disk but present in the PR cobertura) still gate.
+    deleted = {f for f in changed if (not Path(f).exists()) and f not in pr_files_for_filter}
+    if deleted:
+        print(f"Deleted files (skipped from per-file gate, n={len(deleted)}):")
+        for f in sorted(deleted):
+            print(f"  - {f}")
+        print()
+        changed = changed - deleted
+
     if not changed:
         print("No PR-modified files under src/. Per-file gate skipped.")
         if overall_line_drop > OVERALL_DROP_HARD_LIMIT:

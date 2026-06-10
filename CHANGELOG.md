@@ -2,6 +2,21 @@
 
 ## [0.2.2] — unreleased
 
+### Removed
+
+- **`sync.py` + control-plane client surface.** The control plane (server half) was removed from the public repo in PR #110 (2026-06-09); this PR removes the corresponding client half. Removed: `src/claude_monitoring/sync.py` (365 lines: SyncAgent thread + _sanitize_payload sanitizer + watermark logic), `tests/test_sync.py`, `tests/test_sync_sanitize.py`, `monitor.py` sync-agent startup block, `--control-plane` + `--cp-api-key` CLI flags + their `start_monitoring()` params. **All captured data stays local. No daemon-side outbound sync surface.** The feature returns later as a properly-designed enterprise control plane with its own design doc and PRs.
+  - **Trust-boundary B3 (Daemon ↔ Control Plane) deleted.** Threat model renumbered: old B4→new B3, old B5→new B4, old B6→new B5, old B7→new B6. `docs/spec/THREAT-MODEL.md` §5 (B3 STRIDE) deleted entirely; all cross-references in ARCHITECTURE.md, SECURITY-MANIFEST.md, DATA-CLASSIFICATION.md, spec/README.md, openapi.yaml, dependency-rationale.md updated.
+  - **SECURITY-MANIFEST.md ASVS status changes** (architect-pass mandated source-honesty):
+    - V2.4.1 (bcrypt for endpoint keys): IMPLEMENTED → **N/A**
+    - V5.2.2 (sanitize unstructured data): IMPLEMENTED → **PARTIAL** (HTML escaping survives; structured-payload sanitization removed)
+    - V6.4.2 (encryption in transit): IMPLEMENTED → **PARTIAL** (mitmproxy TLS path survives; outbound sync removed)
+    - V9.1.1 (TLS 1.2+): IMPLEMENTED → **PARTIAL** (same rationale)
+    - V2.7.6 (auth state never logged): IMPLEMENTED, evidence repointed to `security.py::verify_token`
+    - V14.5.1 (HTTP method restrictions), A02, A07: evidence cleaned of sync references
+  - **Schema:** `sync_state` table left dormant (lazily `CREATE TABLE IF NOT EXISTS`, no migration file existed). Users who ran `--control-plane` retain a dormant table; default DBs never had it. The future enterprise control plane will introduce its own versioned schema.
+  - **Load-bearing pin tests** in `tests/test_no_sync_surface.py` (14 tests): grep-zero across src/ + tests/ for `SyncAgent`/`cp_url`/`_sanitize_payload`/`--control-plane`/etc.; file-absence (incl. `docs/spec/functional/sync.md` non-existence pin added in a2); import-raises-ModuleNotFoundError; threading-enumerate runtime check; `check_privacy_no_telemetry.py` still green.
+  - **Spec doc scrub (a2 follow-up to judge CHANGES).** `docs/spec/functional/sync.md` deleted (archived to `~/Documents/vigil-notes/repo-hygiene/removed-2026-06/`). Present-tense control-plane prose reworded in `docs/spec/functional/db.md` (sync_state framed as dormant table only), `docs/spec/functional/monitor.md` (outbound scope clarified), `docs/spec/API-CONTRACTS.md` (HTTPS, `/api/fleet/*`, ingest references now explicitly planned-v1.0), `docs/spec/DATA-CLASSIFICATION.md` (log example switched off SyncAgent), `docs/spec/PRD.md:15` (control-plane lead-in reframed as planned tier). `.github/spec-requirements.yaml`'s `sync-sanitization-changes` rule and `.github/pull_request_template.md`'s C3 caller-audit section removed (both keyed to deleted symbols). Trust-boundary §2 list and §8 residual-risk table extended to include B6 (Discovery), correcting a pre-existing boundary-count omission flagged by the judge.
+
 ### Added
 
 - **P3.8 — Ontology mapping bodies wired for all 8 Phase-3 sources.** Replaces the structural-only `frozenset()` placeholders with real rule bodies for VSCode/Cursor extensions, Chromium extensions, Python packages + project deps, Node packages, Homebrew AI tools, and Claude Desktop integrations. The identity-only sources (`ollama-models`, `ai-tool-versions`, `ai-apps-info-plist`), skill sources (`claude-code-skills`, `openclaw-skills`), and the already-complete `mcp-servers` scored mapper are unchanged.

@@ -10,7 +10,6 @@ info:
     Endpoints return JSON unless noted. The `/api/export` endpoint supports JSON,
     NDJSON, and CSV.
 
-    This spec covers the local daemon API only. The control plane API (ingest
     endpoint at `/api/v1/ingest`) is documented separately as it has a different
     authentication model (X-API-Key + X-Endpoint-Key) and lives on a different
     host.
