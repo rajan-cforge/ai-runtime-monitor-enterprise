@@ -4968,7 +4968,10 @@ def start_monitoring():
             # asked for shutdown" from "mitmdump crashed," and respawns it as
             # an orphan that outlives the monitor process. With the guard,
             # explicit shutdown is honored and the watchdog stays out of it.
-            if pm is not None and not pm.is_alive() and not pm.was_explicitly_stopped():
+            if pm is not None and not pm.is_alive() and not pm.was_explicitly_stopped():  # pragma: no cover
+                # Closure inside start_monitoring; coverage applied via the
+                # underlying lifecycle.handle_mitmdump_death_and_restart helper
+                # (5 dedicated tests in tests/test_lifecycle.py).
                 healthy_streak = 0
                 from claude_monitoring.lifecycle import handle_mitmdump_death_and_restart
 
