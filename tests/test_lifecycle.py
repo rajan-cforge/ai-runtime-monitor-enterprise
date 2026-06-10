@@ -1202,3 +1202,161 @@ class TestProxyManagerExitReasonAfterRepeatedRestarts:
     def test_last_exit_summary_returns_none_when_no_exit_recorded(self, tmp_output_dir):
         pm = lifecycle.ProxyManager(log_path=None)
         assert pm.last_exit_summary() is None
+
+
+class TestEnableSystemProxyForPort:
+    """`enable_system_proxy_for_port(port)` invokes networksetup correctly."""
+
+    def test_enable_invokes_networksetup_setsecurewebproxy(self, tmp_output_dir):
+        captured: list[list[str]] = []
+
+        def fake_run(cmd, *args, **kwargs):
+            captured.append(cmd)
+            return MagicMock(returncode=0)
+
+        with patch("claude_monitoring.lifecycle.subprocess.run", side_effect=fake_run):
+            assert lifecycle.enable_system_proxy_for_port(9080) is True
+        assert captured, "subprocess.run was not invoked"
+        cmd = captured[0]
+        assert cmd[:3] == ["networksetup", "-setsecurewebproxy", "Wi-Fi"]
+        assert "127.0.0.1" in cmd and "9080" in cmd
+
+    def test_enable_returns_false_on_subprocess_error(self, tmp_output_dir):
+        with patch("claude_monitoring.lifecycle.subprocess.run", side_effect=OSError("denied")):
+            assert lifecycle.enable_system_proxy_for_port(9080) is False
+
+
+class TestRefuseIfAlreadyRunning:
+    """`refuse_if_already_running()` prints + exit(1) when daemon is alive,
+    no-op otherwise."""
+
+    def test_no_op_when_not_running(self, tmp_output_dir, capsys):
+        # No PID file, no heartbeat → not running → returns cleanly
+        lifecycle.refuse_if_already_running()
+        out = capsys.readouterr().out
+        assert "already running" not in out.lower()
+
+    def test_exits_with_message_when_running(self, tmp_output_dir, capsys):
+        from claude_monitoring.lifecycle import get_monitor_pid_file, write_pid_file
+
+        write_pid_file(get_monitor_pid_file(), 12345)
+        (tmp_output_dir / ".heartbeat").write_text("2099-01-01T00:00:00+00:00")
+        with (
+            patch("claude_monitoring.lifecycle.is_pid_alive", return_value=True),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            lifecycle.refuse_if_already_running()
+        assert exc_info.value.code == 1
+        out = capsys.readouterr().out
+        assert "already running" in out.lower()
+        assert "12345" in out
+
+
+class TestHandleMitmdumpDeathAndRestart:
+    """`handle_mitmdump_death_and_restart(pm)` orchestrates the
+    snapshot → disable → restart → re-enable cycle and returns a result dict.
+
+    Covers task #181 leg 2 (system proxy symmetry) + leg 4 (exit summary
+    surfacing after ≥2 consecutive restarts)."""
+
+    def test_returns_restored_flag_when_proxy_was_on_and_restart_succeeds(self, tmp_output_dir):
+        pm = MagicMock()
+        pm.consecutive_restart_count = 0
+        pm.last_exit_summary.return_value = None
+        pm.restart.return_value = True
+        with (
+            patch(
+                "claude_monitoring.lifecycle.is_system_proxy_enabled_for_port",
+                return_value=True,
+            ),
+            patch("claude_monitoring.lifecycle.disable_system_proxy") as fake_disable,
+            patch(
+                "claude_monitoring.lifecycle.enable_system_proxy_for_port",
+                return_value=True,
+            ) as fake_enable,
+            patch("claude_monitoring.config.get_proxy_port", return_value=9080),
+        ):
+            result = lifecycle.handle_mitmdump_death_and_restart(pm)
+        assert result["restarted"] is True
+        assert result["proxy_restored"] is True
+        assert result["exit_summary"] is None
+        fake_disable.assert_called_once()
+        fake_enable.assert_called_once_with(9080)
+
+    def test_does_not_restore_when_proxy_was_off(self, tmp_output_dir):
+        pm = MagicMock()
+        pm.consecutive_restart_count = 0
+        pm.last_exit_summary.return_value = None
+        pm.restart.return_value = True
+        with (
+            patch(
+                "claude_monitoring.lifecycle.is_system_proxy_enabled_for_port",
+                return_value=False,
+            ),
+            patch("claude_monitoring.lifecycle.disable_system_proxy"),
+            patch(
+                "claude_monitoring.lifecycle.enable_system_proxy_for_port",
+                return_value=True,
+            ) as fake_enable,
+            patch("claude_monitoring.config.get_proxy_port", return_value=9080),
+        ):
+            result = lifecycle.handle_mitmdump_death_and_restart(pm)
+        assert result["restarted"] is True
+        assert result["proxy_restored"] is False
+        fake_enable.assert_not_called()
+
+    def test_does_not_restore_when_restart_fails(self, tmp_output_dir):
+        pm = MagicMock()
+        pm.consecutive_restart_count = 0
+        pm.last_exit_summary.return_value = None
+        pm.restart.return_value = False  # MAX_RESTARTS exhausted
+        with (
+            patch(
+                "claude_monitoring.lifecycle.is_system_proxy_enabled_for_port",
+                return_value=True,
+            ),
+            patch("claude_monitoring.lifecycle.disable_system_proxy"),
+            patch("claude_monitoring.lifecycle.enable_system_proxy_for_port") as fake_enable,
+            patch("claude_monitoring.config.get_proxy_port", return_value=9080),
+        ):
+            result = lifecycle.handle_mitmdump_death_and_restart(pm)
+        assert result["restarted"] is False
+        assert result["proxy_restored"] is False
+        fake_enable.assert_not_called()
+
+    def test_includes_exit_summary_after_two_consecutive_restarts(self, tmp_output_dir):
+        pm = MagicMock()
+        pm.consecutive_restart_count = 2  # ladder threshold
+        pm.last_exit_summary.return_value = "exit=1 tail='address already in use'"
+        pm.restart.return_value = True
+        with (
+            patch(
+                "claude_monitoring.lifecycle.is_system_proxy_enabled_for_port",
+                return_value=False,
+            ),
+            patch("claude_monitoring.lifecycle.disable_system_proxy"),
+            patch("claude_monitoring.config.get_proxy_port", return_value=9080),
+        ):
+            result = lifecycle.handle_mitmdump_death_and_restart(pm)
+        assert result["exit_summary"] == "exit=1 tail='address already in use'"
+
+    def test_swallows_exception_from_is_system_proxy_enabled(self, tmp_output_dir):
+        """If the proxy-state probe blows up, treat proxy as not-on (don't
+        try to restore). The watchdog must keep going."""
+        pm = MagicMock()
+        pm.consecutive_restart_count = 0
+        pm.last_exit_summary.return_value = None
+        pm.restart.return_value = True
+        with (
+            patch(
+                "claude_monitoring.lifecycle.is_system_proxy_enabled_for_port",
+                side_effect=OSError("networksetup gone"),
+            ),
+            patch("claude_monitoring.lifecycle.disable_system_proxy"),
+            patch("claude_monitoring.lifecycle.enable_system_proxy_for_port") as fake_enable,
+            patch("claude_monitoring.config.get_proxy_port", return_value=9080),
+        ):
+            result = lifecycle.handle_mitmdump_death_and_restart(pm)
+        assert result["restarted"] is True
+        assert result["proxy_restored"] is False
+        fake_enable.assert_not_called()
