@@ -37,7 +37,7 @@ This document analyzes threats to the AI Runtime Monitor across its trust bounda
 
 ## 2. Trust boundaries
 
-The system crosses four trust boundaries today, with a fifth (B5: Agent Identity) planned for v0.3. Each is analyzed below.
+The system crosses five trust boundaries today (B1–B4, B6), with one additional boundary (B5: Agent Identity) planned for v0.3. Each is analyzed below.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -56,13 +56,14 @@ The system crosses four trust boundaries today, with a fifth (B5: Agent Identity
 └─────────────────────────────┴───────────────────────────────────────┘
 ```
 
-Four boundaries today, with a fifth planned for v0.3:
+Five boundaries today (B1–B4, B6), with one additional boundary planned for v0.3:
 
 - **B1: User ↔ Dashboard** (browser to local HTTP server)
 - **B2: Daemon ↔ Database** (process to file system)
 - **B3: Proxy ↔ AI APIs** (intercept TLS termination)
 - **B4: Browser Extension ↔ Daemon** (extension to local HTTP)
 - **B5: Agent Identity** (claimed vs. verified agent provenance — planned v0.3; see §7)
+- **B6: Vigil Discovery ↔ Filesystem/Subprocess Input** (raw bytes read by `DiscoverySource.discover()` from attacker-influenced manifests, configs, and subprocess output — added v0.2.2, PARTIALLY mitigated; see §6.5)
 
 ## 3. Boundary B1: User ↔ Dashboard
 
@@ -300,6 +301,7 @@ Until v0.3 mitigations exist, v0.2's existing protections are limited to:
 | B3 Proxy↔AI | NameConstraints bug at OS | Strong (cryptographic enforcement) | Periodic verification on new macOS versions |
 | B4 Browser ext | Fabricated capture data | Moderate (visual distinction) | Heartbeat health enforcement |
 | B5 Agent Identity | Adversarial binary impersonation | None in v0.2; v0.3 addresses | See design doc |
+| B6 Discovery↔FS/Subprocess | Attacker-controlled manifest bytes (YAML/JSON/plist/lockfile/`PATH`) crashing a source or exfiltrating via redaction-bypass | PARTIAL (per-item isolation + safe-helper redaction + bounded subprocess args; XML entity-expansion + Phase 7 UI shell deferred) | Land XML entity-bomb hardening + Phase 7 UI shell redaction sweep (see §6.5) |
 
 ## 9. Open threat-model questions
 

@@ -40,7 +40,7 @@ The token is compared in constant time using `hmac.compare_digest`. There are no
 - **Bind address:** `127.0.0.1` by default. Remote access requires explicit opt-in via `--bind 0.0.0.0`.
 - **CORS:** Not enabled. The dashboard's monkey-patched `fetch` injects the token from `localStorage` automatically. Cross-origin requests are rejected.
 - **Rate limiting:** Not implemented in v0.2. The localhost-only default makes rate limiting low-priority. v1.0 fleet dashboard adds rate limiting.
-- **HTTPS:** Not implemented in v0.2. Token-over-HTTP is acceptable on localhost. v1.0 control plane requires HTTPS.
+- **HTTPS:** Not implemented in v0.2. Token-over-HTTP is acceptable on localhost. A future v1.0 enterprise control plane (planned, not yet designed) would require HTTPS for any remote bind.
 
 ## 4. Response conventions
 
@@ -234,7 +234,7 @@ The local daemon API is currently versioned at v0.2. There is no `/v1/` prefix b
 These are explicitly out of scope for v0.2 but anticipated for future versions:
 
 - **`/api/policies`** — read/write prevention policies (v1.5+)
-- **`/api/fleet/*`** — fleet aggregation endpoints on the control plane (v1.0+)
+- **`/api/fleet/*`** — fleet aggregation endpoints exposed by a planned v1.0 enterprise control plane (not yet designed)
 - **`/api/version`** — daemon version and API compatibility info (v1.0)
 - **Websocket endpoints** — real-time push instead of polling for Live Feed (v0.3+)
 - **GraphQL endpoint** — for richer client queries (under consideration; not committed)
@@ -243,7 +243,7 @@ These are explicitly out of scope for v0.2 but anticipated for future versions:
 
 The endpoints are implemented in `src/claude_monitoring/monitor.py` (`DashboardHandler` class). Request authentication is in `security.py::verify_token`. Sensitive-data masking is in `security.py::mask_value` and applied at insert time, not at serve time, so plaintext never appears in API responses.
 
-For control plane API (`/api/v1/ingest`), see the separate control plane documentation. The local daemon and control plane share data schemas but differ in authentication, transport security, and tenancy model.
+A future enterprise control plane (planned for v1.0, not yet designed) would expose its own ingest API (e.g. `/api/v1/ingest`) on a separate service. The daemon-to-control-plane sync client was removed in `control-plane-feature-removal`; the local daemon no longer ships data off-box.
 
 ## 16. Known best-effort spec areas (verify during integration testing)
 

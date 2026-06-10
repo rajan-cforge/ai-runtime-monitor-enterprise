@@ -76,6 +76,14 @@ class TestNoSyncSurface:
         assert not (REPO_ROOT / "tests" / "test_sync.py").exists()
         assert not (REPO_ROOT / "tests" / "test_sync_sanitize.py").exists()
 
+    def test_sync_spec_doc_does_not_exist(self) -> None:
+        """`docs/spec/functional/sync.md` must be absent — the spec was
+        deleted in `control-plane-feature-removal` (a2) because it
+        described a subsystem this PR removed. Pinning file-absence
+        prevents a future contributor from restoring it without first
+        restoring the underlying sync module + design ratification."""
+        assert not (REPO_ROOT / "docs" / "spec" / "functional" / "sync.md").exists()
+
     def test_sync_import_raises(self) -> None:
         """Importing the removed module must raise ModuleNotFoundError.
 
@@ -94,9 +102,7 @@ class TestNoSyncThreadInDaemonRuntime:
     catch it.
     """
 
-    def test_no_syncagent_thread_after_start_monitoring(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
+    def test_no_syncagent_thread_after_start_monitoring(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         """Run `start_monitoring(cp_url=None, cp_api_key=None)` in a
         minimal mode and assert no thread named 'SyncAgent' appears.
 

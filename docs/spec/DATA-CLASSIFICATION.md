@@ -240,7 +240,7 @@ The product's own logs are at `~/claude_watch_output/monitor.log`. Log entries a
 
 | Log content | Tier | Example |
 |-------------|------|---------|
-| Module names, function names | Public | `[SyncAgent] Sync failed` |
+| Module names, function names | Public | `[VulnScanner] OSV query failed` |
 | Error type names (without values) | Internal | `sanitize failed: ValueError` |
 | File paths, hostnames, port numbers | Internal | `Listening on 127.0.0.1:9081` |
 | User prompts, credentials, message bodies | **NEVER LOGGED** | (would be a bug if it appeared) |

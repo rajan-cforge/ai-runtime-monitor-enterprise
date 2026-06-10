@@ -62,21 +62,11 @@ rules:
       - "docs/spec/functional/security.md"
     severity: BLOCK
 
-  - id: sync-sanitization-changes
-    description: Sync agent sanitization changes must update sync spec and threat model
-    # See auth-changes rationale: scope to source files only.
-    when_file_matches:
-      - "src/claude_monitoring/*.py"
-      - "src/claude_monitoring/**/*.py"
-    when_change_touches_pattern:
-      - "_sanitize_string"
-      - "_sanitize_payload"
-      - "_SANITIZE_TEXT_FIELDS"
-    requires_doc_update:
-      - "docs/spec/functional/sync.md"
-    requires_doc_update_optional:
-      - "docs/spec/THREAT-MODEL.md"
-    severity: BLOCK
+  # NOTE: the sync-sanitization-changes rule was removed alongside the
+  # control-plane feature (control-plane-feature-removal). When the
+  # enterprise control plane returns in v1.0 with its own sync module,
+  # a new rule will be authored against the then-current sanitization
+  # symbols and spec doc path.
 
   - id: schema-changes
     description: Database schema changes must update architecture and data classification

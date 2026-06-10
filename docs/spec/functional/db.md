@@ -81,7 +81,7 @@ The fallback is intentional: SQLCipher is an optional dependency (`pip install '
 
 ## 7. Schema overview
 
-Seven primary tables, plus a `sync_state` table for control plane integration:
+Seven primary tables (a dormant `sync_state` table also exists from the removed control-plane feature — see note below):
 
 | Table | Purpose | Hot path? |
 |-------|---------|-----------|
@@ -92,12 +92,16 @@ Seven primary tables, plus a `sync_state` table for control plane integration:
 | `connections` | Network connections | Insert-heavy |
 | `file_events` | File modifications by AI agents | Insert-heavy |
 | `browser_sessions` | Chrome history-derived AI usage | Insert + read |
-| `sync_state` | Watermarks for control plane delivery | Read + update |
 | `package_vulnerabilities` | Supply-chain scanner output | Periodic write |
 | `agent_dependencies` | Installed packages per agent | Periodic write |
 | `intel_source_status` | Health of threat intel feeds | Periodic write |
 | `scan_history` | Supply-chain scan timeline | Periodic write |
 | `extension_heartbeats` | Browser extension health | Periodic write |
+
+> **Note — dormant `sync_state` table.** A `sync_state` table is still created
+> by `init_db` for forward-compatibility with the planned v1.0 enterprise control
+> plane. As of `control-plane-feature-removal` no code path reads or writes it;
+> it is intentionally left in place to avoid a DDL revert on future re-enable.
 
 Detailed column-level schema is in [ARCHITECTURE.md](../../ARCHITECTURE.md#8-database-schema).
 
@@ -170,6 +174,6 @@ Until v0.3 ships, upgrades from v0.2 to a future version may require running `ai
 
 - **Schema migrations (v0.3)** — see Section 12
 - **Partitioning by month (v1.0)** — large fleet deployments may need this
-- **Replication to control plane (v1.0)** — pluggable replication mechanism
+- **Replication to a future enterprise control plane (v1.0, planned)** — pluggable replication mechanism. The current codebase has no control-plane integration (see CHANGELOG `control-plane-feature-removal`); v1.0 will re-introduce it under a separate spec.
 - **Encrypted at rest by default (v1.0 Enterprise)** — SQLCipher in the standard install, not just `[security]` extra
 - **Async access via aiosqlite (v1.0)** — when the daemon refactors to asyncio
