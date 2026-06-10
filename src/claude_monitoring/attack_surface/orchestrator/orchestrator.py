@@ -403,31 +403,80 @@ ON CONFLICT(id) DO UPDATE SET
 
 
 def default_sources() -> list[DiscoverySource]:
-    """Return a fresh list of registered EASY-tier sources for the orchestrator.
+    """Return a fresh list of all 13 registered discovery sources.
 
     **Factory pattern** per Rajan's 2026-06-05 source-registry ratification:
     returns a NEW list per call (no module-level mutable state — avoids
     the CLAUDE.md forbidden pattern + lets tests mutate without leaking
     state between runs).
 
-    **P1.4-minimal registered sources** (pure C2 enumeration):
+    Source set mirrors
+    :data:`claude_monitoring.attack_surface.ontology.mapping.REGISTERED_SOURCES`
+    (13 entries). The test
+    ``TestSourceRegistry.test_default_sources_registers_all_thirteen_sources``
+    pins set-equality; drift in either direction fails CI.
 
-    - :class:`OllamaModelsSource` — ``ollama list`` text-row parse
-    - :class:`AIToolVersionsSource` — CLI ``--version`` probes for known
-      AI tools (Info.plist and npm package.json strategies deferred to
-      the later C3 batch)
-
-    C3 sources (MCP servers, Claude Code skills, OpenClaw skills, AI
-    apps Info.plist) will be added in a later batch.
+    Phase 3 ratified intent (P3.8): real mapper bodies reachable by scans.
+    This factory is the load-bearing entry point — without an entry here,
+    a mapper body is dead code. Sources fall into the four families
+    catalogued in :mod:`mapping`: identity-only (3), skills (2), MCP
+    scored (1), Phase-3 wired (7).
     """
+    from claude_monitoring.attack_surface.discovery.sources.ai_apps_info_plist import (
+        AiAppsInfoPlistSource,
+    )
     from claude_monitoring.attack_surface.discovery.sources.ai_tool_versions import (
         AIToolVersionsSource,
+    )
+    from claude_monitoring.attack_surface.discovery.sources.chromium_extensions import (
+        ChromiumExtensionsSource,
+    )
+    from claude_monitoring.attack_surface.discovery.sources.claude_code_skills import (
+        ClaudeCodeSkillsSource,
+    )
+    from claude_monitoring.attack_surface.discovery.sources.claude_desktop_integrations import (
+        ClaudeDesktopIntegrationsSource,
+    )
+    from claude_monitoring.attack_surface.discovery.sources.homebrew_ai_tools import (
+        HomebrewAiToolsSource,
+    )
+    from claude_monitoring.attack_surface.discovery.sources.mcp_servers import (
+        McpServersSource,
+    )
+    from claude_monitoring.attack_surface.discovery.sources.node_packages import (
+        NodePackagesSource,
     )
     from claude_monitoring.attack_surface.discovery.sources.ollama_models import (
         OllamaModelsSource,
     )
+    from claude_monitoring.attack_surface.discovery.sources.openclaw_skills import (
+        OpenClawSkillsSource,
+    )
+    from claude_monitoring.attack_surface.discovery.sources.python_packages import (
+        PythonPackagesSource,
+    )
+    from claude_monitoring.attack_surface.discovery.sources.python_project_deps import (
+        PythonProjectDepsSource,
+    )
+    from claude_monitoring.attack_surface.discovery.sources.vscode_cursor_extensions import (
+        VscodeCursorExtensionsSource,
+    )
 
-    return [OllamaModelsSource(), AIToolVersionsSource()]
+    return [
+        OllamaModelsSource(),
+        AIToolVersionsSource(),
+        AiAppsInfoPlistSource(),
+        ClaudeCodeSkillsSource(),
+        OpenClawSkillsSource(),
+        McpServersSource(),
+        VscodeCursorExtensionsSource(),
+        ChromiumExtensionsSource(),
+        PythonPackagesSource(),
+        PythonProjectDepsSource(),
+        NodePackagesSource(),
+        HomebrewAiToolsSource(),
+        ClaudeDesktopIntegrationsSource(),
+    ]
 
 
 __all__ = [

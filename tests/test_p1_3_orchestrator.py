@@ -672,6 +672,35 @@ class TestSourceRegistry:
         assert "ollama-models" in names
         assert "ai-tool-versions" in names
 
+    def test_default_sources_registers_all_thirteen_sources(self) -> None:
+        """Post source-registry-expansion: every source name in the ontology
+        mapping registry MUST be reachable by a scan. The orchestrator
+        registry is the load-bearing entry point — without an entry here,
+        the source's mapper body (P3.8) is dead code.
+
+        Source of truth for the expected set is
+        ``mapping.REGISTERED_SOURCES`` — the same constant the structural
+        completeness CI gate already pins."""
+        from claude_monitoring.attack_surface.ontology.mapping import REGISTERED_SOURCES
+
+        sources = default_sources()
+        names = {s.name() for s in sources}
+        assert names == set(REGISTERED_SOURCES), (
+            f"orchestrator registry must equal mapping registry. "
+            f"missing from default_sources: {set(REGISTERED_SOURCES) - names}; "
+            f"unexpected in default_sources: {names - set(REGISTERED_SOURCES)}"
+        )
+        assert len(sources) == 13
+
+    def test_default_sources_each_instance_implements_discovery_source_protocol(self) -> None:
+        """Every returned instance must satisfy the DiscoverySource Protocol:
+        name() returns str, requires_auth() returns bool, discover() is callable."""
+        sources = default_sources()
+        for src in sources:
+            assert isinstance(src.name(), str) and src.name()
+            assert isinstance(src.requires_auth(), bool)
+            assert callable(src.discover)
+
 
 # ---------------------------------------------------------------------------
 # File 8 — TestFailureModeTelemetryLogging
