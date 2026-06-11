@@ -58,9 +58,12 @@ SCAN_ROOT = REPO_ROOT / "src" / "claude_monitoring" / "attack_surface"
 
 ALLOWED_HOSTNAMES: frozenset[str] = frozenset(
     {
-        # Phase 4 — CVE correlation via OSV.dev (RESERVED, not yet wired)
+        # P4.1 — CVE correlation via OSV.dev (WIRED 2026-06-10 by
+        # attack_surface/cves/client.py — querybatch + /v1/vulns/{id};
+        # Phase A ratified at vigil-notes/v022/phase-4-prep/p4.1-osv-
+        # cve-feed-phase-a.md). `osv.dev` (web UI) is dropped per §1
+        # ratification — only the API host is reached server-side.
         "api.osv.dev",
-        "osv.dev",
         # Loopback — internal dashboard API only
         "localhost",
         "127.0.0.1",
