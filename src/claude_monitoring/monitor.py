@@ -2117,10 +2117,15 @@ class DashboardHandler(BaseHTTPRequestHandler):
             "/api/supply-chain/sbom": self._api_supply_chain_sbom,
             "/api/supply-chain/watchlist": self._api_supply_chain_watchlist,
             "/api/browser/extension-health": self._api_browser_extension_health,
+            "/api/assets": self._api_assets,
+            "/api/asset_detail": self._api_asset_detail,
         }
 
         # Match path prefixes for dynamic routes
-        if path.startswith("/api/browser/session/"):
+        if path.startswith("/api/asset/"):
+            params["id"] = [path.split("/api/asset/", 1)[1]]
+            path = "/api/asset_detail"
+        elif path.startswith("/api/browser/session/"):
             params["conversation_id"] = [path.split("/api/browser/session/")[1]]
             path = "/api/browser/session_detail"
         elif path.startswith("/api/process/"):
@@ -4167,6 +4172,27 @@ class DashboardHandler(BaseHTTPRequestHandler):
             )
 
         self._send_json({"sessions": result, "total": len(result), "period": period})
+
+    # ── Attack-surface assets endpoints ────────────────────────
+    #
+    # `dashboard-asset-view` PR (2026-06-11, judge-queued + Rajan-
+    # ratified). Body lives in `attack_surface/dashboard_api.py` so
+    # monitor.py stays under the 5500-line ceiling. The handlers are
+    # thin wrappers — the rendering rules (Amendment C) and SQL live in
+    # the extracted module.
+
+    def _api_assets(self, params):
+        """Asset list — delegates to `attack_surface.dashboard_api.list_assets`."""
+        from claude_monitoring.attack_surface.dashboard_api import list_assets
+
+        self._send_json(list_assets(get_thread_db(), params))
+
+    def _api_asset_detail(self, params):
+        """Asset detail — delegates to `attack_surface.dashboard_api.get_asset_detail`."""
+        from claude_monitoring.attack_surface.dashboard_api import get_asset_detail
+
+        payload, status = get_asset_detail(get_thread_db(), params)
+        self._send_json(payload, status)
 
     # ── Report endpoint ────────────────────────────────────────
 

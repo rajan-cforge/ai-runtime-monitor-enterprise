@@ -12,9 +12,15 @@ view does.
 from __future__ import annotations
 
 from claude_monitoring.attack_surface.rendering.cve_status_hints import (
+    UNKNOWN_PENDING_RESCAN_HINT,
     RenderHint,
     cve_status_hint,
     risk_score_hint,
 )
 
-__all__ = ["RenderHint", "cve_status_hint", "risk_score_hint"]
+__all__ = [
+    "UNKNOWN_PENDING_RESCAN_HINT",
+    "RenderHint",
+    "cve_status_hint",
+    "risk_score_hint",
+]

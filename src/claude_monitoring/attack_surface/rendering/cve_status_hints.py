@@ -51,6 +51,16 @@ _NOT_APPLICABLE_HINT = RenderHint(
     tooltip="CVE feed does not apply to this asset type (no ecosystem to query).",
 )
 
+# Distinct from NOT_APPLICABLE: scoring failed last scan, so we do NOT know
+# whether the feed applies. Verdict dashboard-asset-view.a1 Finding 4 — a
+# never-scored python package borrowing the not_applicable tooltip
+# ("no ecosystem to query") was data-truthfulness-wrong.
+UNKNOWN_PENDING_RESCAN_HINT = RenderHint(
+    label="—",
+    severity="neutral",
+    tooltip="Not yet scored; CVE status unknown until next scan.",
+)
+
 _NULL_RISK_HINT = RenderHint(
     label="not yet scored",
     severity="neutral",
