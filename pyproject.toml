@@ -36,6 +36,12 @@ dependencies = [
     # half-working product, observed during the new-laptop install
     # verification on 2026-05-25.
     "mitmproxy>=10.0",
+    # P4.1 — OSV.dev CVE feed (Phase A §8 ratification). The `cvss`
+    # library parses the CVSS vector strings OSV returns in
+    # `severity[].score` (e.g. CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H)
+    # into the numeric base score `compute_risk_score` needs.
+    # Well-trodden, pure-Python, no native compile step.
+    "cvss>=3.0",
 ]
 
 [project.optional-dependencies]
