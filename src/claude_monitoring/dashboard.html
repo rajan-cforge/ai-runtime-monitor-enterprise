@@ -67,6 +67,37 @@ body { background:var(--bg); color:var(--text); font-family:var(--font-sans); fo
 .risk-high { background:#ea580c; color:white; }
 .risk-medium { background:#d97706; color:white; }
 .risk-low { background:#4b5563; color:white; }
+/* INFO — must be distinct from LOW (quieter) AND distinct from "not yet scored"
+   (per Rajan Q5 ratification 2026-06-11). No background, muted text, but a
+   visible outline-style badge so the absent-badge state is unambiguously
+   "unscored" and not collapsed into INFO. */
+.risk-info { background:transparent; color:#9ca3af; border:1px solid #4b5563; padding:1px 5px; }
+.risk-unscored { background:transparent; color:#9ca3af; font-style:italic; padding:0; border:none; text-transform:none; letter-spacing:0; font-weight:500; font-size:0.72em; }
+/* cve_status_hint severity tokens — renderer-agnostic palette */
+.cve-hint { display:inline-block; padding:2px 6px; border-radius:3px; font-size:0.7em; font-weight:500; margin-left:4px; }
+.cve-hint-info { background:transparent; color:#22c55e; border:1px solid #22c55e44; }
+.cve-hint-warn-low { background:#fbbf2422; color:#fbbf24; border:1px solid #fbbf2466; }
+.cve-hint-warn-high { background:#ea580c33; color:#fb923c; border:1px solid #ea580c88; font-weight:600; }
+.cve-hint-neutral { color:#6b7280; background:transparent; border:none; padding-left:0; }
+.cve-hint-critical { background:#dc2626; color:white; font-weight:700; }
+.asset-row { display:flex; align-items:center; gap:8px; padding:8px 12px; border-bottom:1px solid var(--border); cursor:pointer; }
+.asset-row:hover { background:var(--surface2); }
+.asset-row .a-name { flex:1; font-size:13px; color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.asset-row .a-source { font-size:11px; color:var(--text2); }
+.asset-row .a-version { font-size:11px; color:var(--text2); font-family:monospace; }
+.asset-row .a-tagcount { font-size:10px; color:var(--text2); background:var(--surface2); padding:1px 5px; border-radius:3px; }
+.asset-filters { padding:8px 12px; display:flex; gap:8px; align-items:center; border-bottom:1px solid var(--border); flex-wrap:wrap; }
+.asset-filters select, .asset-filters input { background:var(--surface); border:1px solid var(--border); color:var(--text); padding:3px 6px; border-radius:3px; font-size:12px; }
+.asset-header-counts { font-size:12px; color:var(--text2); margin-left:auto; }
+.asset-header-counts .unscored-badge { color:#9ca3af; font-style:italic; margin-left:8px; }
+.asset-detail-overlay { position:fixed; top:0; right:0; width:480px; height:100vh; background:var(--surface); border-left:1px solid var(--border); padding:16px; overflow-y:auto; z-index:100; box-shadow:-4px 0 12px rgba(0,0,0,0.4); }
+.asset-detail-overlay h3 { margin-top:0; }
+.asset-detail-overlay .close-btn { position:absolute; top:8px; right:8px; background:transparent; border:none; color:var(--text2); cursor:pointer; font-size:20px; }
+.factor-table { width:100%; font-size:12px; border-collapse:collapse; margin:8px 0; }
+.factor-table td { padding:3px 6px; border-bottom:1px solid var(--border); }
+.factor-table td:first-child { color:var(--text2); }
+.factor-table td:last-child { text-align:right; font-family:monospace; }
+.tag-chip { display:inline-block; background:var(--surface2); border:1px solid var(--border); border-radius:10px; padding:1px 8px; font-size:10px; color:var(--text2); margin:2px 2px 0 0; }
 .active-dot { width:8px; height:8px; border-radius:50%; background:#22c55e; display:inline-block; animation:pulse-green 2s ease-in-out infinite; margin-right:4px; }
 @keyframes pulse-green { 0%,100%{opacity:1} 50%{opacity:0.4} }
 .session-item .title { font-size:13px; font-weight:500; color:var(--text); line-height:1.3; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
@@ -672,6 +703,7 @@ body { background:var(--bg); color:var(--text); font-family:var(--font-sans); fo
   <div class="tab" data-tab="traffic">API Traffic</div>
   <div class="tab" data-tab="timeline">Activity Timeline</div>
   <div class="tab" data-tab="supply-chain">Supply Chain</div>
+  <div class="tab" data-tab="assets">Assets <span id="tab-assets-badge" style="font-size:11px;color:var(--text2);font-weight:normal"></span></div>
   <div class="tab" data-tab="alerts">Alerts <span id="tab-alerts-badge" style="font-size:11px;color:var(--red);font-weight:normal"></span></div>
 </div>
 
@@ -881,6 +913,38 @@ body { background:var(--bg); color:var(--text); font-family:var(--font-sans); fo
     </div>
   </div>
 
+  <!-- Assets — attack-surface inventory + risk banding (dashboard-asset-view PR) -->
+  <div class="panel" id="panel-assets">
+    <div class="system-section">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+        <h3 style="margin:0">Attack-surface Assets</h3>
+        <span class="asset-header-counts" id="assets-header-counts"></span>
+      </div>
+      <div class="asset-filters">
+        <label style="font-size:11px;color:var(--text2)">Band
+          <select id="asset-band-filter" onchange="loadAssets(0)">
+            <option value="">all</option>
+            <option value="critical">critical</option>
+            <option value="high">high</option>
+            <option value="medium">medium</option>
+            <option value="low">low</option>
+            <option value="info">info</option>
+          </select>
+        </label>
+        <label style="font-size:11px;color:var(--text2)">Source
+          <select id="asset-source-filter" onchange="loadAssets(0)">
+            <option value="">all</option>
+          </select>
+        </label>
+        <span id="assets-page-info" style="margin-left:auto;font-size:11px;color:var(--text2)"></span>
+        <button id="assets-prev" disabled style="background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:3px 8px;border-radius:3px;font-size:11px;cursor:pointer">&laquo; Prev</button>
+        <button id="assets-next" disabled style="background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:3px 8px;border-radius:3px;font-size:11px;cursor:pointer">Next &raquo;</button>
+      </div>
+      <div id="assets-list" style="border:1px solid var(--border);border-radius:4px;max-height:calc(100vh - 280px);overflow-y:auto"></div>
+    </div>
+  </div>
+  <div id="asset-detail-overlay" class="asset-detail-overlay" style="display:none"></div>
+
   <div class="panel" id="panel-alerts">
     <div class="system-section">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
@@ -1038,6 +1102,7 @@ function switchTab(name) {
   if (name === 'timeline') { loadTimeline(); }
   if (name === 'alerts') { loadAlerts(); }
   if (name === 'supply-chain') { loadSupplyChain(); }
+  if (name === 'assets') { loadAssets(0); }
 }
 document.querySelectorAll('.tab').forEach(tab => {
   tab.addEventListener('click', () => switchTab(tab.dataset.tab));
@@ -3643,6 +3708,268 @@ async function loadInsights() {
       filesList.innerHTML = '<div style="color:var(--text2);padding:12px">No file reads tracked yet</div>';
     }
   } catch(e) {}
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// Assets tab — attack-surface inventory + risk banding
+//
+// All rendering uses explicit escHtml/escAttr (never bare `esc`); the
+// cve_status_hint payload comes server-rendered from
+// `attack_surface/rendering/cve_status_hints.py` so this JS NEVER
+// re-derives state→label mapping. One load-bearing call site
+// (Amendment C, Rajan C rider 2026-06-11). NULL-risk_score renders the
+// distinct "not yet scored" treatment so unscored ≠ INFO ≠ LOW.
+// ──────────────────────────────────────────────────────────────────────
+var _assetsOffset = 0;
+var _assetsLimit = 200;
+var _assetsSourcesSeen = false;
+var _assetsPagerWired = false;
+
+async function loadAssets(offset) {
+  // Wire pagination buttons via addEventListener (one-time) — matches
+  // the .asset-row click wiring below and the comment that follows;
+  // never set onclick="..." inline on new code.
+  if (!_assetsPagerWired) {
+    document.getElementById('assets-prev').addEventListener('click', function () {
+      loadAssets(Math.max(0, _assetsOffset - _assetsLimit));
+    });
+    document.getElementById('assets-next').addEventListener('click', function () {
+      loadAssets(_assetsOffset + _assetsLimit);
+    });
+    _assetsPagerWired = true;
+  }
+  _assetsOffset = offset | 0;
+  var band = document.getElementById('asset-band-filter').value;
+  var source = document.getElementById('asset-source-filter').value;
+  var qs = '?limit=' + _assetsLimit + '&offset=' + _assetsOffset;
+  if (band) qs += '&risk_band=' + encodeURIComponent(band);
+  if (source) qs += '&source=' + encodeURIComponent(source);
+  try {
+    var r = await fetch(API + '/api/assets' + qs);
+    if (!r.ok) {
+      document.getElementById('assets-list').innerHTML =
+        '<div style="padding:16px;color:var(--red)">Failed to load assets (HTTP ' + r.status + ')</div>';
+      return;
+    }
+    var data = await r.json();
+    renderAssets(data);
+  } catch (e) {
+    document.getElementById('assets-list').innerHTML =
+      '<div style="padding:16px;color:var(--red)">Failed to load assets: ' + escHtml(String(e)) + '</div>';
+  }
+}
+
+function renderAssets(data) {
+  var rows = data.rows || [];
+  var total = data.total | 0;
+  var unscored = data.unscored_count | 0;
+  var limit = data.limit | 0;
+  var offset = data.offset | 0;
+
+  // Header counts + sort rider — operators MUST see how many assets sit
+  // in the NULL-risk_score tail that NULLS LAST hides off page one.
+  var counts = '<span>' + total + ' total</span>';
+  if (unscored > 0) {
+    counts += '<span class="unscored-badge" title="Assets whose scoring failed last scan; they sort below all scored assets.">'
+      + '· ' + unscored + ' not yet scored</span>';
+  }
+  document.getElementById('assets-header-counts').innerHTML = counts;
+
+  // Populate source filter on first load
+  if (!_assetsSourcesSeen) {
+    var sources = new Set();
+    rows.forEach(function (r) { if (r.source) sources.add(r.source); });
+    if (sources.size > 0) {
+      var sel = document.getElementById('asset-source-filter');
+      Array.from(sources).sort().forEach(function (s) {
+        var opt = document.createElement('option');
+        opt.value = s;
+        opt.textContent = s;
+        sel.appendChild(opt);
+      });
+      _assetsSourcesSeen = true;
+    }
+  }
+
+  // Pagination affordances
+  document.getElementById('assets-prev').disabled = offset <= 0;
+  document.getElementById('assets-next').disabled = (offset + limit) >= total;
+  var pageStart = total > 0 ? offset + 1 : 0;
+  var pageEnd = Math.min(offset + rows.length, total);
+  document.getElementById('assets-page-info').textContent =
+    pageStart + '–' + pageEnd + ' of ' + total;
+
+  // Render list rows
+  var listEl = document.getElementById('assets-list');
+  if (rows.length === 0) {
+    listEl.innerHTML = '<div style="padding:16px;color:var(--text2)">No assets match the current filter.</div>';
+    document.getElementById('tab-assets-badge').textContent = '';
+    return;
+  }
+  document.getElementById('tab-assets-badge').textContent = String(total);
+
+  listEl.innerHTML = rows.map(renderAssetRow).join('');
+  // Wire click handlers — addEventListener avoids any inline-handler
+  // sink that would need escJs.
+  Array.from(listEl.querySelectorAll('.asset-row')).forEach(function (el) {
+    el.addEventListener('click', function () {
+      showAssetDetail(el.dataset.id);
+    });
+  });
+}
+
+function renderAssetRow(r) {
+  // Risk badge: distinct treatments for scored vs unscored. Unscored
+  // never shares the LOW/INFO badge style — per Rajan Q5 2026-06-11.
+  var badge;
+  if (r.risk_score === null || r.risk_score === undefined) {
+    var rsHint = r.risk_score_hint || { label: 'not yet scored' };
+    badge = '<span class="risk-badge risk-unscored" title="' + escAttr(rsHint.tooltip || '') + '">'
+      + escHtml(rsHint.label) + '</span>';
+  } else {
+    var band = r.risk_band || 'info';
+    badge = '<span class="risk-badge risk-' + escAttr(band) + '" title="risk_score=' + escAttr(String(r.risk_score)) + '">'
+      + escHtml(band.toUpperCase()) + ' ' + escHtml(String(r.risk_score)) + '</span>';
+  }
+
+  // cve_status_hint — server-rendered, JS never re-derives state.
+  var cveHint = r.cve_status_hint || { label: '', severity: 'neutral', tooltip: '' };
+  var cveBadge = '<span class="cve-hint cve-hint-' + escAttr(cveHint.severity) + '" title="' + escAttr(cveHint.tooltip) + '">'
+    + escHtml(cveHint.label) + '</span>';
+
+  var tagCount = Array.isArray(r.ontology_tags) ? r.ontology_tags.length : 0;
+  var tagBadge = tagCount > 0
+    ? '<span class="a-tagcount" title="ontology tag count">' + escHtml(String(tagCount)) + ' tag' + (tagCount === 1 ? '' : 's') + '</span>'
+    : '';
+
+  return '<div class="asset-row" data-id="' + escAttr(r.id || '') + '">'
+    + badge
+    + '<span class="a-name" title="' + escAttr(r.name || '') + '">' + escHtml(r.name || '') + '</span>'
+    + '<span class="a-source">' + escHtml(r.source || '') + '</span>'
+    + (r.version ? '<span class="a-version">v' + escHtml(r.version) + '</span>' : '')
+    + tagBadge
+    + cveBadge
+    + '</div>';
+}
+
+async function showAssetDetail(assetId) {
+  if (!assetId) return;
+  var overlay = document.getElementById('asset-detail-overlay');
+  overlay.style.display = 'block';
+  overlay.innerHTML = '<button class="close-btn" id="asset-detail-close">×</button><div style="padding:24px;color:var(--text2)">Loading…</div>';
+  document.getElementById('asset-detail-close').addEventListener('click', closeAssetDetail);
+
+  try {
+    var r = await fetch(API + '/api/asset/' + encodeURIComponent(assetId));
+    if (!r.ok) {
+      overlay.innerHTML = '<button class="close-btn" id="asset-detail-close">×</button>'
+        + '<div style="padding:24px;color:var(--red)">Failed (HTTP ' + r.status + ')</div>';
+      document.getElementById('asset-detail-close').addEventListener('click', closeAssetDetail);
+      return;
+    }
+    var data = await r.json();
+    overlay.innerHTML = renderAssetDetail(data);
+    document.getElementById('asset-detail-close').addEventListener('click', closeAssetDetail);
+  } catch (e) {
+    overlay.innerHTML = '<button class="close-btn" id="asset-detail-close">×</button>'
+      + '<div style="padding:24px;color:var(--red)">' + escHtml(String(e)) + '</div>';
+    document.getElementById('asset-detail-close').addEventListener('click', closeAssetDetail);
+  }
+}
+
+function closeAssetDetail() {
+  document.getElementById('asset-detail-overlay').style.display = 'none';
+}
+
+function renderAssetDetail(d) {
+  var rf = d.risk_factors || {};
+  var contribs = rf.contributions || {};
+  var weights = rf.weights || {};
+  var appliedRules = rf.applied_rules || [];
+  var appliedRep = rf.applied_reputation || [];
+  var cves = rf.cves;
+  var cveHint = d.cve_status_hint || { label: '', severity: 'neutral', tooltip: '' };
+
+  var html = '<button class="close-btn" id="asset-detail-close">×</button>';
+  html += '<h3>' + escHtml(d.name || d.id || 'asset') + '</h3>';
+  html += '<div style="font-size:11px;color:var(--text2);margin-bottom:8px">'
+    + escHtml(d.source || '') + (d.version ? ' · v' + escHtml(d.version) : '') + '</div>';
+
+  // Risk score block
+  if (d.risk_score !== null && d.risk_score !== undefined) {
+    html += '<div style="margin:12px 0">'
+      + '<span class="risk-badge risk-' + escAttr(d.risk_band || 'info') + '">'
+      + escHtml((d.risk_band || 'info').toUpperCase()) + ' ' + escHtml(String(d.risk_score))
+      + '</span>'
+      + '</div>';
+  } else {
+    var hint = d.risk_score_hint || { label: 'not yet scored' };
+    html += '<div style="margin:12px 0;color:var(--text2);font-style:italic">' + escHtml(hint.label) + '</div>';
+  }
+
+  // CVE status block — distinct from risk score, per Amendment C
+  html += '<div style="margin:8px 0"><span class="cve-hint cve-hint-' + escAttr(cveHint.severity) + '" title="' + escAttr(cveHint.tooltip) + '">'
+    + escHtml(cveHint.label) + '</span></div>';
+
+  // Ontology tags
+  if (Array.isArray(d.ontology_tags) && d.ontology_tags.length > 0) {
+    html += '<div style="margin:8px 0">';
+    d.ontology_tags.forEach(function (t) {
+      html += '<span class="tag-chip">' + escHtml(t) + '</span>';
+    });
+    html += '</div>';
+  }
+
+  // Risk breakdown (§6.4 transparency mandate)
+  if (Object.keys(contribs).length > 0) {
+    html += '<h4 style="margin:16px 0 4px 0;font-size:12px;color:var(--text2);text-transform:uppercase;letter-spacing:0.04em">Factor contributions</h4>';
+    html += '<table class="factor-table">';
+    Object.keys(contribs).forEach(function (k) {
+      var w = weights[k];
+      var wLabel = (typeof w === 'number') ? ' (×' + w.toFixed(2) + ')' : '';
+      html += '<tr><td>' + escHtml(k) + escHtml(wLabel) + '</td><td>' + escHtml(Number(contribs[k]).toFixed(1)) + '</td></tr>';
+    });
+    html += '</table>';
+  }
+
+  // Applied rules
+  if (appliedRules.length > 0) {
+    html += '<h4 style="margin:16px 0 4px 0;font-size:12px;color:var(--text2);text-transform:uppercase;letter-spacing:0.04em">Applied rules</h4>';
+    appliedRules.forEach(function (rule) {
+      html += '<div style="font-size:12px;margin:4px 0;padding:6px;background:var(--surface2);border-radius:3px">'
+        + '<strong>' + escHtml(rule.id || '') + '</strong> '
+        + '(' + escHtml(String(rule.modifier_applied || 0)) + ')'
+        + (rule.explanation ? '<div style="color:var(--text2);margin-top:2px">' + escHtml(rule.explanation) + '</div>' : '')
+        + '</div>';
+    });
+  }
+
+  // Applied reputation
+  if (appliedRep.length > 0) {
+    html += '<h4 style="margin:16px 0 4px 0;font-size:12px;color:var(--text2);text-transform:uppercase;letter-spacing:0.04em">Reputation</h4>';
+    appliedRep.forEach(function (rep) {
+      html += '<div style="font-size:12px;margin:4px 0;padding:6px;background:var(--surface2);border-radius:3px">'
+        + '<strong>' + escHtml(rep.signal || '') + '</strong> '
+        + (rep.modifier_applied ? '(' + escHtml(String(rep.modifier_applied)) + ')' : '')
+        + (rep.reason ? '<span style="color:var(--text2);margin-left:6px">' + escHtml(rep.reason) + '</span>' : '')
+        + '</div>';
+    });
+  }
+
+  // CVE list (when ok+[...])
+  if (Array.isArray(cves) && cves.length > 0) {
+    html += '<h4 style="margin:16px 0 4px 0;font-size:12px;color:var(--text2);text-transform:uppercase;letter-spacing:0.04em">CVEs</h4>';
+    cves.forEach(function (v) {
+      var vid = (v && v.id) ? v.id : '?';
+      var vcvss = (v && typeof v.cvss === 'number') ? v.cvss.toFixed(1) : '—';
+      html += '<div style="font-size:12px;font-family:monospace;margin:2px 0">'
+        + escHtml(vid) + ' <span style="color:var(--text2)">CVSS ' + escHtml(vcvss) + '</span></div>';
+    });
+  } else if (rf.cve_status === 'ok') {
+    html += '<div style="font-size:12px;color:var(--text2);margin-top:8px;font-style:italic">No known vulnerabilities.</div>';
+  }
+
+  return html;
 }
 </script>
 </body>

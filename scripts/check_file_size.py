@@ -14,6 +14,17 @@ Usage:
 
 Default path is ``src/``. Exit 0 on PASS, 1 on FAIL (any file over the
 threshold), 2 on usage error.
+
+monitor.py ceiling policy (Rajan rider, 2026-06-11, dashboard-asset-view PR)
+---------------------------------------------------------------------------
+The bump 5500 → 5550 this PR carries is the **last bump** for
+``src/claude_monitoring/monitor.py``. Three consecutive sprint PRs
+(scan-scoring-callsite, dashboard-asset-view, and one earlier) have
+nudged against this cap — the trend says the file wants splitting,
+not stretching. The next time monitor.py approaches 5550, the
+resolution is extracting the dashboard / HTTP routing layer
+(``DashboardHandler`` + all ``_api_*`` methods) into its own module
+wholesale. Do not bump further.
 """
 
 from __future__ import annotations
@@ -21,7 +32,11 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-MAX_LINES = 5500
+# Bumped 5500 → 5550 on dashboard-asset-view (PR following PR #115) after
+# extracting ~180 LOC of asset-list logic into
+# ``attack_surface/dashboard_api.py``. Rajan-authorized as the LAST bump
+# for monitor.py (see policy block in the module docstring above).
+MAX_LINES = 5550
 
 
 def file_line_count(path: Path) -> int:
