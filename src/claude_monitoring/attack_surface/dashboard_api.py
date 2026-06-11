@@ -147,7 +147,11 @@ def list_assets(db: sqlite3.Connection, params: dict[str, list[str]]) -> dict[st
         where_args.append(source_filter)
     where_sql = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
 
-    total_row = db.execute(f"SELECT COUNT(*) FROM assets {where_sql}", where_args).fetchone()
+    # bandit B608: `where_sql` is built from literal fragments above —
+    # never from `params`. Filter VALUES are bound via `?` placeholders
+    # in `where_args`. `_ASSET_COLUMNS` is a module-level literal.
+    # CLAUDE.md mandatory pattern (parameterized SQL) satisfied.
+    total_row = db.execute(f"SELECT COUNT(*) FROM assets {where_sql}", where_args).fetchone()  # nosec B608
     total = total_row[0] if total_row else 0
 
     # `unscored_count` is the global tail (no filters) — operators
@@ -157,7 +161,7 @@ def list_assets(db: sqlite3.Connection, params: dict[str, list[str]]) -> dict[st
     unscored_count = unscored_row[0] if unscored_row else 0
 
     sql = (
-        f"SELECT {_ASSET_COLUMNS} FROM assets {where_sql} "
+        f"SELECT {_ASSET_COLUMNS} FROM assets {where_sql} "  # nosec B608
         "ORDER BY (risk_score IS NULL), risk_score DESC, last_scanned DESC "
         "LIMIT ? OFFSET ?"
     )
@@ -193,8 +197,10 @@ def get_asset_detail(db: sqlite3.Connection, params: dict[str, list[str]]) -> tu
     asset_id = params.get("id", [""])[0]
     if not asset_id:
         return {"error": "missing id"}, 400
+    # bandit B608: `_ASSET_COLUMNS` is a module-level literal — never
+    # user-controlled. `asset_id` is bound via `?`. Parameterized.
     row = db.execute(
-        f"SELECT {_ASSET_COLUMNS} FROM assets WHERE id = ?",
+        f"SELECT {_ASSET_COLUMNS} FROM assets WHERE id = ?",  # nosec B608
         (asset_id,),
     ).fetchone()
     if row is None:
