@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import time
 from pathlib import Path
 
@@ -82,8 +81,8 @@ class VulnsCache:
         try:
             self._path.parent.mkdir(parents=True, exist_ok=True)
             tmp.write_text(json.dumps(payload))
-            os.chmod(tmp, 0o600)
-            os.replace(tmp, self._path)
+            tmp.chmod(0o600)
+            tmp.replace(self._path)
         except OSError as exc:
             logger.warning("vulns cache write failed (%s)", exc)
             try:

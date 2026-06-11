@@ -8,10 +8,6 @@ contract per Phase A §4 + the project pattern from
 
 from __future__ import annotations
 
-import json
-import os
-import time
-
 
 class TestQuerybatchCacheReadWrite:
     """Round-trip a (ecosystem, package, version) → vuln-ID-list entry."""

@@ -31,7 +31,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import time
 from pathlib import Path
 
@@ -118,8 +117,8 @@ class QuerybatchCache:
             tmp.write_text(json.dumps(payload))
             # chmod the tmp file BEFORE the atomic rename so the visible
             # file is never world-readable, matching reputation cache.
-            os.chmod(tmp, 0o600)
-            os.replace(tmp, self._path)
+            tmp.chmod(0o600)
+            tmp.replace(self._path)
         except OSError as exc:
             logger.warning("querybatch cache write failed (%s)", exc)
             try:
