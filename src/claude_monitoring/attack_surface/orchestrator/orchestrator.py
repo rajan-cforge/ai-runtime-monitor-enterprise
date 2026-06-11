@@ -29,14 +29,84 @@ import time
 from dataclasses import dataclass, field
 
 from claude_monitoring.attack_surface.asset import Asset
+from claude_monitoring.attack_surface.cves.dispatcher import CVEDispatcher
+from claude_monitoring.attack_surface.cves.types import CVEResult
 from claude_monitoring.attack_surface.discovery.base import (
     DiscoverySource,
     LastRunOutcome,
 )
+from claude_monitoring.attack_surface.ontology.mapping import map_asset
 from claude_monitoring.attack_surface.orchestrator import audit
 from claude_monitoring.attack_surface.orchestrator.lock import VALID_TRIGGERS, ScanLock
+from claude_monitoring.attack_surface.reputation.composition import (
+    score_asset_with_rules_and_reputation,
+)
+from claude_monitoring.attack_surface.reputation.config import get_reputation_cache_path
+from claude_monitoring.attack_surface.reputation.dispatcher import ReputationDispatcher
+from claude_monitoring.attack_surface.risk.rules import (
+    DEFAULT_RULES_PATH,
+    load_curated_rules,
+)
+from claude_monitoring.attack_surface.risk.scoring import RiskScoreResult
 
 logger = logging.getLogger("ai-runtime-monitor.attack_surface.orchestrator")
+
+
+# ---------------------------------------------------------------------------
+# Risk-factors JSON serialization (spec §10 v1 schema — see Rajan
+# ratification 2026-06-11; Amendments C+D + the C/D riders)
+# ---------------------------------------------------------------------------
+
+RISK_FACTORS_SCHEMA_VERSION: int = 1
+"""Bump when the JSON schema for `risk_factors` changes incompatibly.
+v1 keys: schema_version, contributions, weights, applied_rules,
+applied_reputation, cves, cve_status, cve_unavailable_reason."""
+
+
+def _factors_payload(score_result: RiskScoreResult, cve_result: CVEResult | None) -> dict:
+    """Serialize a `RiskScoreResult` + matching `CVEResult` into the
+    `risk_factors` JSON blob persisted on the asset row.
+
+    Tri-state `cve_status` rules — None and [] NEVER collapse:
+
+      * ``cve_result is None`` OR ``cve_result.cves is None`` with
+        ``reason is None``  →  ``cve_status="not_applicable"``,
+        ``cves=null``. Non-PyPI/non-npm sources (Ollama, MCP, etc.).
+      * ``cve_result.cves is None`` with ``reason is set``  →
+        ``cve_status="unavailable"``,
+        ``cve_unavailable_reason=reason.value``, ``cves=null``.
+      * ``cve_result.cves == []``  →  ``cve_status="ok"``, ``cves=[]``.
+      * ``cve_result.cves == [...]``  →  ``cve_status="ok"``,
+        ``cves=[...]``.
+
+    The ``weights`` dict is included so the P7.9 popover stays
+    self-contained — operator sees the weights that produced THIS row
+    even after future weight tuning (audit-trail rationale per Rajan
+    D rider 2026-06-11)."""
+    if cve_result is None or (cve_result.cves is None and cve_result.reason is None):
+        cve_status = "not_applicable"
+        cve_unavailable_reason: str | None = None
+        cves_payload: list | None = None
+    elif cve_result.cves is None:
+        cve_status = "unavailable"
+        # cve_result.reason is set here (the `is None` case is handled above).
+        # mypy can't narrow that, hence the cast.
+        cve_unavailable_reason = cve_result.reason.value if cve_result.reason is not None else None
+        cves_payload = None
+    else:
+        cve_status = "ok"
+        cve_unavailable_reason = None
+        cves_payload = list(cve_result.cves)
+    return {
+        "schema_version": RISK_FACTORS_SCHEMA_VERSION,
+        "contributions": dict(score_result.contributions),
+        "weights": dict(score_result.weights),
+        "applied_rules": list(score_result.applied_rules),
+        "applied_reputation": list(score_result.applied_reputation),
+        "cves": cves_payload,
+        "cve_status": cve_status,
+        "cve_unavailable_reason": cve_unavailable_reason,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -156,7 +226,13 @@ class DiscoveryOrchestrator:
             assets, per_source = self._run_sources()
 
             if self.conn is not None:
-                self._persist_assets(assets, scan_time=started_at)
+                # scan-scoring-callsite (2026-06-11): score assets BEFORE
+                # persistence so the UPSERT writes risk_score / risk_band /
+                # risk_factors / ontology_tags atomically with the asset
+                # row itself. Per-item isolation lives inside _score_assets;
+                # an exception there does NOT propagate.
+                score_results = self._score_assets(assets)
+                self._persist_assets(assets, scan_time=started_at, score_results=score_results)
                 audit.record_run_finished(
                     self.conn,
                     run_id,
@@ -323,15 +399,66 @@ class DiscoveryOrchestrator:
         # UNCALLED should not happen here — outcome is read AFTER run_with_safety resolves.
 
     # ------------------------------------------------------------------
-    # Persistence (drift-2 disposition)
+    # Scoring (scan-scoring-callsite 2026-06-11)
+    # ------------------------------------------------------------------
+
+    def _score_assets(self, assets: list[Asset]) -> dict[str, tuple[RiskScoreResult, CVEResult | None]]:
+        """Compose per-asset risk score from CVE feed + curated rules + reputation.
+
+        Per architect-pass APPROVE-WITH-AMENDMENTS verdict 2026-06-11:
+
+        - **Amendment A:** ``ReputationDispatcher`` is constructed
+          FRESH per scan inside this method (NOT held on
+          ``self``). Cross-scan reuse would silently zero the
+          `PyPIScanBudget` after the first scan.
+        - **Amendment B:** Each successful asset yields a
+          ``(RiskScoreResult, CVEResult | None)`` tuple — the
+          ``CVEResult`` is threaded through to ``_persist_assets`` so
+          ``_factors_payload`` can serialize ``cve_status`` from the
+          original tri-state.
+        - **Per-item isolation:** any per-asset exception (in
+          ``map_asset`` or in the composition call) is caught + logged;
+          the asset is omitted from the return dict and its
+          ``risk_score`` column stays NULL on persistence. Distinct from
+          "scored with risk_score=0".
+        """
+        # Per-scan CVE dispatcher — budget counter resets every scan.
+        cves_by_asset = CVEDispatcher().scan(assets)
+        # Per-scan reputation dispatcher — class docstring says "One
+        # instance per scan" (file-backed cache survives across instances).
+        rep_dispatcher = ReputationDispatcher(cache_path=get_reputation_cache_path())
+        # Rules: reload from YAML every scan so operator edits take
+        # effect immediately (Phase A Q4 option (a) ratified).
+        rules = load_curated_rules(DEFAULT_RULES_PATH)
+        out: dict[str, tuple[RiskScoreResult, CVEResult | None]] = {}
+        for asset in assets:
+            try:
+                tags = map_asset(asset)
+                cve_result = cves_by_asset.get(asset.id)
+                cves = cve_result.cves if cve_result is not None else None
+                score_result = score_asset_with_rules_and_reputation(asset, tags, rules, rep_dispatcher, cves=cves)
+                out[asset.id] = (score_result, cve_result)
+            except Exception as exc:
+                # Architect Q11: per-item isolation. risk_score stays NULL
+                # → distinguishable in the dashboard from "scored=0".
+                logger.warning(
+                    "score_asset failed for %s: %s — risk_score will be NULL",
+                    asset.id,
+                    exc,
+                )
+        return out
+
+    # ------------------------------------------------------------------
+    # Persistence (drift-2 + drift-3 disposition)
     # ------------------------------------------------------------------
 
     _UPSERT_SQL: str = """
 INSERT INTO assets (
     id, type, parent_asset_id, name, version, install_path, source,
-    first_seen, last_seen, last_scanned, current_state, is_vigil_component
+    first_seen, last_seen, last_scanned, current_state, is_vigil_component,
+    ontology_tags, risk_score, risk_band, risk_factors
 ) VALUES (
-    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
 )
 ON CONFLICT(id) DO UPDATE SET
     type = excluded.type,
@@ -343,11 +470,21 @@ ON CONFLICT(id) DO UPDATE SET
     last_seen = excluded.last_seen,
     last_scanned = excluded.last_scanned,
     current_state = excluded.current_state,
-    is_vigil_component = excluded.is_vigil_component
+    is_vigil_component = excluded.is_vigil_component,
+    ontology_tags = excluded.ontology_tags,
+    risk_score = excluded.risk_score,
+    risk_band = excluded.risk_band,
+    risk_factors = excluded.risk_factors
 ;
 """
 
-    def _persist_assets(self, assets: list[Asset], scan_time: float) -> None:
+    def _persist_assets(
+        self,
+        assets: list[Asset],
+        scan_time: float,
+        *,
+        score_results: dict[str, tuple[RiskScoreResult, CVEResult | None]] | None = None,
+    ) -> None:
         """UPSERT assets into the `assets` table.
 
         Drift dispositions (P1.1 architect-pass §3):
@@ -357,27 +494,54 @@ ON CONFLICT(id) DO UPDATE SET
           last_scanned = scan_time`. `ON CONFLICT` preserves `first_seen`
           (column NOT in the SET clause); updates only `last_seen` /
           `last_scanned`.
-        - **Drift 3** — orchestrator-owned columns (`ontology_tags`,
-          `risk_score`, `risk_band`, `risk_factors`) NOT touched.
+        - **Drift 3 (REVERSED 2026-06-11, scan-scoring-callsite):**
+          orchestrator-owned columns (`ontology_tags`, `risk_score`,
+          `risk_band`, `risk_factors`) ARE now written. Assets where
+          scoring failed (absent from ``score_results``) have NULL
+          values for all four — distinguishable in the dashboard from
+          ``risk_score = 0`` ("scored, no factors fired").
         - **Drift 4** — `is_vigil_component bool → INTEGER 0/1` adapted
           via `int(asset.is_vigil_component)`.
+
+        Q11 cap guard: any persisted ``risk_score > 100`` raises
+        ``ValueError`` at the persistence boundary. The composition
+        function clamps at 100; this guard is the last-line defense
+        against a future scorer change that drops the clamp.
         """
         import json as _json
 
         if self.conn is None:
             return
 
+        score_results = score_results or {}
+
         # Atomic commit/rollback per #156 (Rajan 2026-06-05): wrap the
         # UPSERT loop in `with self.conn:` so a mid-loop failure rolls
         # back the in-flight transaction rather than leaving the
         # connection in a mid-transaction state for the caller to clean
-        # up. sqlite3.Connection as a context manager commits on
-        # __exit__ on success, rolls back on exception.
+        # up.
         with self.conn:
             for asset in assets:
                 if not asset.source or not asset.source.strip():
                     raise ValueError(f"asset {asset.id!r}: source must be non-empty for persistence (drift 1)")
                 current_state_json = _json.dumps(asset.current_state)
+                tags = map_asset(asset)
+                ontology_tags_json = _json.dumps(sorted(t.value for t in tags))
+                scored = score_results.get(asset.id)
+                if scored is not None:
+                    score_result, cve_result = scored
+                    if score_result.final_score > 100 or score_result.final_score < 0:
+                        raise ValueError(
+                            f"asset {asset.id!r}: risk_score {score_result.final_score} "
+                            "out of [0,100] — composition guard breach"
+                        )
+                    risk_score = score_result.final_score
+                    risk_band = score_result.band.value
+                    risk_factors_json = _json.dumps(_factors_payload(score_result, cve_result))
+                else:
+                    risk_score = None
+                    risk_band = None
+                    risk_factors_json = None
                 self.conn.execute(
                     self._UPSERT_SQL,
                     (
@@ -393,6 +557,10 @@ ON CONFLICT(id) DO UPDATE SET
                         scan_time,
                         current_state_json,
                         int(asset.is_vigil_component),
+                        ontology_tags_json,
+                        risk_score,
+                        risk_band,
+                        risk_factors_json,
                     ),
                 )
 

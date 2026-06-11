@@ -29,7 +29,6 @@ from claude_monitoring.attack_surface.asset import Asset
 from claude_monitoring.attack_surface.discovery.base import DiscoverySource
 from claude_monitoring.attack_surface.orchestrator import DiscoveryOrchestrator, ScanLock
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -108,9 +107,7 @@ class TestFloorPreservation:
         )
         rep_dispatcher = MagicMock()
         rep_dispatcher.lookup.return_value = None
-        result = score_asset_with_rules_and_reputation(
-            asset, tags, [rule], rep_dispatcher, cves=None
-        )
+        result = score_asset_with_rules_and_reputation(asset, tags, [rule], rep_dispatcher, cves=None)
         assert result.final_score >= 40, "floor §6.9: negative modifier must not breach UNKNOWN_CAPABILITY_FLOOR"
         assert result.final_score >= 0, "scoring is never negative"
         assert result.band in (RiskBand.MEDIUM, RiskBand.HIGH, RiskBand.CRITICAL)
@@ -192,7 +189,7 @@ class TestNullOnScoredAsset:
         row = conn.execute("SELECT risk_score, risk_band FROM assets WHERE id = ?", (asset.id,)).fetchone()
         assert row is not None
         assert row[0] is not None and row[0] == 30
-        assert row[1] == "LOW"
+        assert row[1] == RiskBand.LOW.value
 
     def test_scoring_exception_produces_null_risk_score_in_db(self, tmp_path):
         """When _score_assets returns nothing for an asset (because the
@@ -210,7 +207,9 @@ class TestNullOnScoredAsset:
         # Empty score_results → no scoring data for this asset
         with patch.object(orch, "_score_assets", return_value={}):
             orch.scan(trigger="on_demand")
-        row = conn.execute("SELECT risk_score, risk_band, risk_factors FROM assets WHERE id = ?", (asset.id,)).fetchone()
+        row = conn.execute(
+            "SELECT risk_score, risk_band, risk_factors FROM assets WHERE id = ?", (asset.id,)
+        ).fetchone()
         assert row is not None
         assert row[0] is None, "exception → risk_score MUST be NULL (not 0)"
         assert row[1] is None
@@ -479,4 +478,4 @@ class TestPersistAssetsWritesScoringColumns:
         assert row is not None
         assert row[0] is not None
         tags_list = json.loads(row[0])
-        assert "NETWORK_UNRESTRICTED" in tags_list
+        assert OntologyCategory.NETWORK_UNRESTRICTED.value in tags_list

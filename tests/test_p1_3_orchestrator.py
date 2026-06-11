@@ -458,9 +458,16 @@ class TestPersistenceUpsert:
         with pytest.raises(ValueError, match="source"):
             o.scan(trigger="on_demand")
 
-    def test_orchestrator_does_not_write_phase2_owned_columns(self, tmp_path: Path) -> None:
-        """Drift 3 — ontology_tags / risk_score / risk_band / risk_factors
-        NOT touched by the orchestrator's UPSERT (Phase 2 owns them)."""
+    def test_orchestrator_writes_phase2_owned_columns_drift3_reversed(self, tmp_path: Path) -> None:
+        """Drift 3 REVERSED (2026-06-11, scan-scoring-callsite): the
+        orchestrator NOW writes ontology_tags + risk_score + risk_band +
+        risk_factors via the new ``_score_assets`` → ``_persist_assets``
+        pipeline. Every asset that ``_score_assets`` returns has all four
+        columns populated; assets where scoring raised stay NULL.
+
+        Original pin (drift 3 UNREVERSED, ``test_orchestrator_does_not_write_phase2_owned_columns``)
+        is the inverse — kept in git history as proof of the contract
+        flip, not in the live test suite."""
         conn = _setup_assets_db(tmp_path)
         o = DiscoveryOrchestrator(
             sources=[_HappySource()],
@@ -469,8 +476,12 @@ class TestPersistenceUpsert:
         )
         o.scan(trigger="on_demand")
         rows = list(conn.execute("SELECT ontology_tags, risk_score, risk_band, risk_factors FROM assets"))
-        for row in rows:
-            assert all(v is None for v in row)
+        assert len(rows) >= 1
+        for ontology_tags, risk_score, risk_band, risk_factors in rows:
+            assert ontology_tags is not None, "ontology_tags MUST be populated post-drift-3-reversal"
+            assert risk_score is not None, "risk_score MUST be populated for scored assets"
+            assert risk_band is not None
+            assert risk_factors is not None
 
     def test_parameterized_sql_via_qmark_placeholders(self, tmp_path: Path) -> None:
         """CLAUDE.md mandatory: parameterized SQL. Asset with quote chars
