@@ -24,14 +24,23 @@ def fake_caches(tmp_path, monkeypatch):
 
 
 class _PackageAsset:
-    """Minimal duck-typed Asset for tests."""
+    """Minimal duck-typed Asset for tests.
+
+    Matches the MERGED source contract (verified 2026-06-11): `package_name`
+    + `package_name_normalized` in `current_state`; version on the
+    `asset.version` attribute. The OLD shape (`current_state["package"]` +
+    `current_state["version"]`) was caught by verdict
+    scan-scoring-callsite.a1 Finding 1 — it never matched any of the three
+    merged sources, so a dispatcher reading the OLD shape returned None
+    for every real asset and OSV was never queried."""
 
     def __init__(self, asset_id: str, source: str, package: str, version: str, ecosystem: str):
         self.id = asset_id
         self.source = source
+        self.version = version
         self.current_state = {
-            "package": package,
-            "version": version,
+            "package_name": package,
+            "package_name_normalized": package.lower(),
             "ecosystem": ecosystem,
         }
 
@@ -206,3 +215,112 @@ class TestCVEDispatcherBudgetCap:
         budget_exhausted = sum(1 for r in out.values() if r.reason == UnavailableReason.BUDGET_EXHAUSTED)
         assert budget_exhausted == 2
         assert client.vuln_detail.call_count == 2
+
+
+class TestPackageVersionMatchesMergedSourceShapes:
+    """Verdict scan-scoring-callsite.a1 Finding 1 pin: `_package_version`
+    MUST read the SHAPE the merged discovery sources emit, not the Phase A
+    §9 planned shape. Each test constructs an asset's `current_state` +
+    `version` VERBATIM as the corresponding source's `discover()` builds
+    them, then asserts `_package_version` returns the right tuple. Regression
+    guard: if a future PR changes any of these source shapes, the dispatcher
+    test fails, not a downstream UI bug at scan time."""
+
+    def test_extracts_from_python_packages_shape(self):
+        """`python_packages.py:252-258` emits `package_name` +
+        `package_name_normalized` in current_state; version is on the
+        top-level Asset.version (an exact installed version)."""
+        from claude_monitoring.attack_surface.cves.dispatcher import _package_version
+
+        class _A:
+            source = "python-packages"
+            version = "2.25.0"
+            current_state = {
+                "venv_label": "global",
+                "venv_path": "/usr/local/lib/python3.12",
+                "python_executable": "/usr/local/bin/python3",
+                "package_name": "requests",
+                "package_name_normalized": "requests",
+            }
+
+        assert _package_version(_A()) == ("requests", "2.25.0")
+
+    def test_extracts_from_python_project_deps_shape_when_pinned(self):
+        """`python_project_deps.py:440-448` emits `package_name` +
+        `package_name_normalized` + `version_spec` in current_state;
+        top-level Asset.version IS the version_spec. Pinned versions
+        (`==2.25.0` parsed → `"2.25.0"`) are queryable."""
+        from claude_monitoring.attack_surface.cves.dispatcher import _package_version
+
+        class _A:
+            source = "python-project-deps"
+            version = "2.25.0"
+            current_state = {
+                "project_path": "/Users/x/proj",
+                "manifest_file": "requirements.txt",
+                "package_name": "requests",
+                "package_name_normalized": "requests",
+                "version_spec": "2.25.0",
+                "dep_kind": "runtime",
+            }
+
+        assert _package_version(_A()) == ("requests", "2.25.0")
+
+    def test_skips_python_project_deps_when_range_spec(self):
+        """`>=2.0` / `^1.0` / `*` are NOT OSV-queryable. Return None — the
+        asset surfaces as `cve_status="not_applicable"`, NOT a guess at the
+        range's lower bound (which would silently mis-attribute CVEs)."""
+        from claude_monitoring.attack_surface.cves.dispatcher import _package_version
+
+        for spec in (">=2.0", "^1.0", "~1", "*", ">=1.0,<2.0", "1.0 || 2.0"):
+
+            class _A:
+                source = "python-project-deps"
+                version = spec
+                current_state = {
+                    "package_name": "requests",
+                    "package_name_normalized": "requests",
+                    "version_spec": spec,
+                    "dep_kind": "runtime",
+                }
+
+            assert _package_version(_A()) is None, f"range spec {spec!r} must skip OSV lookup"
+
+    def test_extracts_from_node_packages_shape(self):
+        """`node_packages.py:411-419` matches the python-project-deps
+        shape: `package_name` + `version_spec` in current_state, Asset.version
+        IS the version_spec."""
+        from claude_monitoring.attack_surface.cves.dispatcher import _package_version
+
+        class _A:
+            source = "node-packages"
+            version = "0.21.4"
+            current_state = {
+                "project_path": "/Users/x/proj",
+                "manifest_file": "package.json",
+                "package_name": "axios",
+                "package_name_normalized": "axios",
+                "version_spec": "0.21.4",
+            }
+
+        assert _package_version(_A()) == ("axios", "0.21.4")
+
+    def test_skips_when_missing_package_name(self):
+        from claude_monitoring.attack_surface.cves.dispatcher import _package_version
+
+        class _A:
+            source = "python-packages"
+            version = "1.0.0"
+            current_state = {"venv_label": "global"}  # no package_name
+
+        assert _package_version(_A()) is None
+
+    def test_skips_when_version_attribute_missing(self):
+        from claude_monitoring.attack_surface.cves.dispatcher import _package_version
+
+        class _A:
+            source = "python-packages"
+            version = None
+            current_state = {"package_name": "requests"}
+
+        assert _package_version(_A()) is None
