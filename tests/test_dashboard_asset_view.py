@@ -308,6 +308,27 @@ class TestServerSideCveStatusHint:
         ua = self._row_by_id(api_server, "a3-medium-unavail")["cve_status_hint"]
         assert na["label"] != ua["label"]
 
+    def test_unscored_asset_does_not_borrow_not_applicable_tooltip(self, api_server):
+        """Verdict dashboard-asset-view.a1 Finding 4 — a never-scored
+        python-packages asset (NULL risk_factors) was rendering with the
+        not_applicable tooltip ('CVE feed does not apply to this asset
+        type'), which is data-truthfulness-wrong: the feed DOES apply,
+        scoring just didn't run yet. Fix pinned: tooltips must differ,
+        and the unscored tooltip must mention scoring/rescan — not 'no
+        ecosystem to query'."""
+        unscored = self._row_by_id(api_server, "a6-unscored")["cve_status_hint"]
+        not_applicable = self._row_by_id(api_server, "a2-high-exfil")["cve_status_hint"]
+        assert unscored["tooltip"] != not_applicable["tooltip"], (
+            "scored-failed and not-applicable must not share a tooltip"
+        )
+        assert "scor" in unscored["tooltip"].lower() or "rescan" in unscored["tooltip"].lower(), (
+            "unscored tooltip must reference scoring/rescan, not ecosystem-applicability"
+        )
+        assert "ecosystem" not in unscored["tooltip"].lower(), (
+            "unscored tooltip must NOT mention 'no ecosystem' — the feed DOES apply for "
+            "python-packages assets that just haven't been scored yet"
+        )
+
 
 # ---------------------------------------------------------------------------
 # Detail endpoint

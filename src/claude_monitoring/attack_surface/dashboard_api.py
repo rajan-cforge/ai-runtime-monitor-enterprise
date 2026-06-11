@@ -18,7 +18,11 @@ import json
 import sqlite3
 from typing import Any
 
-from claude_monitoring.attack_surface.rendering import cve_status_hint, risk_score_hint
+from claude_monitoring.attack_surface.rendering import (
+    UNKNOWN_PENDING_RESCAN_HINT,
+    cve_status_hint,
+    risk_score_hint,
+)
 
 # Hot-path DoS guard. `do_GET` is hot per CLAUDE.md; an authenticated caller
 # requesting `?limit=10000000` would `fetchall()` the entire table into
@@ -67,9 +71,13 @@ def render_asset_row(row: sqlite3.Row) -> dict[str, Any]:
         )
     else:
         # No risk_factors → score-pipeline didn't run for this asset.
-        # Treat as not_applicable so the row still has a defined hint
-        # and never collapses to "missing field" at the renderer.
-        hint = cve_status_hint("not_applicable", None, None)
+        # Distinct from not_applicable (= no ecosystem to query): we
+        # do NOT know whether the feed applies. Verdict
+        # dashboard-asset-view.a1 Finding 4 — borrowing
+        # "CVE feed does not apply" was data-truthfulness-wrong for
+        # python-packages assets that have an ecosystem but whose
+        # scoring failed last scan.
+        hint = UNKNOWN_PENDING_RESCAN_HINT
 
     risk_score = row["risk_score"]
     rs_hint = risk_score_hint(risk_score)

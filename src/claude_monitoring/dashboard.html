@@ -1108,6 +1108,20 @@ document.querySelectorAll('.tab').forEach(tab => {
   tab.addEventListener('click', () => switchTab(tab.dataset.tab));
 });
 
+// URL-hash → tab activation. Enables `/#assets` to land directly on the
+// Assets tab — useful for deep-links and for headless-Chrome evidence
+// capture (dashboard-asset-view.a2 screenshot batch).
+function _hashToTab() {
+  const h = (window.location.hash || '').replace(/^#/, '').trim();
+  if (!h) return;
+  // Sanitize: tab name must match an actual tab element (defense-in-depth
+  // against an attacker stuffing JS into the hash and hoping for trouble).
+  const safe = document.querySelector('.tab[data-tab="' + CSS.escape(h) + '"]');
+  if (safe) switchTab(h);
+}
+_hashToTab();
+window.addEventListener('hashchange', _hashToTab);
+
 // Format numbers
 function fmtNum(n) {
   if (n >= 1e6) return (n/1e6).toFixed(1) + 'M';
@@ -3932,15 +3946,31 @@ function renderAssetDetail(d) {
     html += '</table>';
   }
 
-  // Applied rules
+  // Applied rules — §6.4 transparency mandate requires explanation +
+  // framework_ref (NIST CSF / MITRE / CIS citations from the
+  // curated-rules YAML). Verdict dashboard-asset-view.a1 Finding 3
+  // — popover was dropping framework_ref.
   if (appliedRules.length > 0) {
     html += '<h4 style="margin:16px 0 4px 0;font-size:12px;color:var(--text2);text-transform:uppercase;letter-spacing:0.04em">Applied rules</h4>';
     appliedRules.forEach(function (rule) {
       html += '<div style="font-size:12px;margin:4px 0;padding:6px;background:var(--surface2);border-radius:3px">'
         + '<strong>' + escHtml(rule.id || '') + '</strong> '
         + '(' + escHtml(String(rule.modifier_applied || 0)) + ')'
-        + (rule.explanation ? '<div style="color:var(--text2);margin-top:2px">' + escHtml(rule.explanation) + '</div>' : '')
-        + '</div>';
+        + (rule.explanation ? '<div style="color:var(--text2);margin-top:2px">' + escHtml(rule.explanation) + '</div>' : '');
+      var fwRef = rule.framework_ref;
+      if (fwRef && typeof fwRef === 'object') {
+        var fwKeys = Object.keys(fwRef);
+        if (fwKeys.length > 0) {
+          html += '<div style="margin-top:4px;font-size:11px;color:var(--text2)">';
+          fwKeys.forEach(function (k, i) {
+            html += (i > 0 ? ' · ' : '')
+              + '<span style="color:var(--cyan)">' + escHtml(k) + ':</span> '
+              + escHtml(String(fwRef[k]));
+          });
+          html += '</div>';
+        }
+      }
+      html += '</div>';
     });
   }
 
