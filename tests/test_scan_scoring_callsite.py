@@ -43,7 +43,14 @@ _NO_TAGS: frozenset[OntologyCategory] = frozenset()
 
 
 def _make_asset(name: str, source: str = "python-packages", **extra_state) -> Asset:
-    state: dict = {"package": name, "version": "1.0.0", "ecosystem": "PyPI"}
+    """Build an asset with the SHAPE the merged discovery sources emit.
+
+    Verified 2026-06-11 against `python_packages.py:252-258`,
+    `python_project_deps.py:440-448`, `node_packages.py:411-419` (verdict
+    scan-scoring-callsite.a1 Finding 1): `current_state` carries
+    `package_name` + `package_name_normalized`, NOT `package`; the
+    version lives on `Asset.version`, NOT in `current_state`."""
+    state: dict = {"package_name": name, "package_name_normalized": name.lower()}
     state.update(extra_state)
     return Asset(
         id=f"{source}:{name}",

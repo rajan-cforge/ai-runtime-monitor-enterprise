@@ -21,6 +21,7 @@ normally. Matches `project_v022_per_item_isolation` rider.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 from claude_monitoring.attack_surface.cves import config
@@ -55,13 +56,42 @@ def _ecosystem_for_source(source: str) -> str | None:
     return _SOURCE_TO_ECOSYSTEM.get(source)
 
 
+_EXACT_VERSION_RE = re.compile(r"^[0-9]+(?:\.[0-9]+)*(?:[\-+a-zA-Z0-9.]+)?$")
+"""OSV's `/v1/querybatch` needs an exact version. python_project_deps + node_packages
+emit `Asset.version = version_spec` which may be a range (`>=2.0`, `^1.0`, `~1`,
+etc.) — those are not OSV-queryable and must be skipped, not guessed. This regex
+accepts a leading digit + dot-separated digits + an optional suffix
+(`1.0.0`, `2.25.0`, `1.0.0a1`, `1.0.0-rc.1`, `2.0+meta`). Rejects anything
+beginning with `<>=~^*!` or containing space, comma, pipe."""
+
+
 def _package_version(asset: Any) -> tuple[str, str] | None:
-    """Extract (package, version) from an asset's `current_state`, or None
-    if either field is missing (skip the asset rather than guess)."""
+    """Extract (package, version) from an asset, or None if unqueryable.
+
+    Reads the MERGED source contracts (verified 2026-06-11 against
+    `python_packages.py:252-258`, `python_project_deps.py:440-448`,
+    `node_packages.py:411-419`):
+
+      * `current_state["package_name"]` — the canonical name on all three
+        sources. `package_name_normalized` exists alongside but is for
+        identity, not OSV (OSV uses the canonical name).
+      * `asset.version` — the version on `python-packages` is a real
+        installed version (always exact); on `python-project-deps` and
+        `node-packages` it is the `version_spec`, which may be a range
+        like `>=2.0` / `^1.0` / `*`. Ranges are NOT OSV-queryable; the
+        regex `_EXACT_VERSION_RE` requires a literal version.
+
+    Per Phase A §9 + verdict scan-scoring-callsite.a1 Finding 1: NEVER
+    guess at a range — return ``None`` so the asset surfaces as
+    ``cve_status="not_applicable"`` (range was not queryable), distinct
+    from "we asked and OSV said clean".
+    """
     state = getattr(asset, "current_state", None) or {}
-    pkg = state.get("package")
-    ver = state.get("version")
-    if not isinstance(pkg, str) or not isinstance(ver, str):
+    pkg = state.get("package_name")
+    ver = getattr(asset, "version", None)
+    if not isinstance(pkg, str) or not pkg:
+        return None
+    if not isinstance(ver, str) or not _EXACT_VERSION_RE.match(ver):
         return None
     return pkg, ver
 
