@@ -23,6 +23,7 @@ Per the v0.2.2 P1.3 architect-pass + Rajan's 2026-06-05 ratifications:
 from __future__ import annotations
 
 import concurrent.futures
+import json
 import logging
 import sqlite3
 import time
@@ -35,6 +36,7 @@ from claude_monitoring.attack_surface.discovery.base import (
     DiscoverySource,
     LastRunOutcome,
 )
+from claude_monitoring.attack_surface.ontology.categories import OntologyCategory
 from claude_monitoring.attack_surface.ontology.mapping import map_asset
 from claude_monitoring.attack_surface.orchestrator import audit
 from claude_monitoring.attack_surface.orchestrator.lock import VALID_TRIGGERS, ScanLock
@@ -412,15 +414,19 @@ class DiscoveryOrchestrator:
           ``self``). Cross-scan reuse would silently zero the
           `PyPIScanBudget` after the first scan.
         - **Amendment B:** Each successful asset yields a
-          ``(RiskScoreResult, CVEResult | None)`` tuple — the
-          ``CVEResult`` is threaded through to ``_persist_assets`` so
-          ``_factors_payload`` can serialize ``cve_status`` from the
-          original tri-state.
+          ``(RiskScoreResult, CVEResult | None, frozenset[OntologyCategory])``
+          tuple — the ``CVEResult`` is threaded through to
+          ``_persist_assets`` so ``_factors_payload`` can serialize
+          ``cve_status`` from the original tri-state; the tags are
+          threaded through so persistence does NOT call ``map_asset``
+          a second time (avoids the double-call divergence flagged by
+          code-reviewer).
         - **Per-item isolation:** any per-asset exception (in
           ``map_asset`` or in the composition call) is caught + logged;
-          the asset is omitted from the return dict and its
-          ``risk_score`` column stays NULL on persistence. Distinct from
-          "scored with risk_score=0".
+          the asset is omitted from the return dict and ALL four
+          orchestrator-owned columns (`ontology_tags`, `risk_score`,
+          `risk_band`, `risk_factors`) stay NULL on persistence —
+          distinct from "scored with risk_score=0".
         """
         # Per-scan CVE dispatcher — budget counter resets every scan.
         cves_by_asset = CVEDispatcher().scan(assets)
@@ -430,14 +436,14 @@ class DiscoveryOrchestrator:
         # Rules: reload from YAML every scan so operator edits take
         # effect immediately (Phase A Q4 option (a) ratified).
         rules = load_curated_rules(DEFAULT_RULES_PATH)
-        out: dict[str, tuple[RiskScoreResult, CVEResult | None]] = {}
+        out: dict[str, tuple[RiskScoreResult, CVEResult | None, frozenset[OntologyCategory]]] = {}
         for asset in assets:
             try:
                 tags = map_asset(asset)
                 cve_result = cves_by_asset.get(asset.id)
                 cves = cve_result.cves if cve_result is not None else None
                 score_result = score_asset_with_rules_and_reputation(asset, tags, rules, rep_dispatcher, cves=cves)
-                out[asset.id] = (score_result, cve_result)
+                out[asset.id] = (score_result, cve_result, tags)
             except Exception as exc:
                 # Architect Q11: per-item isolation. risk_score stays NULL
                 # → distinguishable in the dashboard from "scored=0".
@@ -483,7 +489,7 @@ ON CONFLICT(id) DO UPDATE SET
         assets: list[Asset],
         scan_time: float,
         *,
-        score_results: dict[str, tuple[RiskScoreResult, CVEResult | None]] | None = None,
+        score_results: dict[str, tuple[RiskScoreResult, CVEResult | None, frozenset[OntologyCategory]]] | None = None,
     ) -> None:
         """UPSERT assets into the `assets` table.
 
@@ -499,21 +505,39 @@ ON CONFLICT(id) DO UPDATE SET
           `risk_band`, `risk_factors`) ARE now written. Assets where
           scoring failed (absent from ``score_results``) have NULL
           values for all four — distinguishable in the dashboard from
-          ``risk_score = 0`` ("scored, no factors fired").
+          ``risk_score = 0`` ("scored, no factors fired"). Tags used
+          for ``ontology_tags`` are the SAME ``frozenset`` that
+          ``_score_assets`` fed into the composition call (threaded via
+          ``score_results[asset.id][2]``) — persistence never calls
+          ``map_asset`` itself, so a future non-deterministic mapper
+          cannot create scored-vs-persisted tag divergence.
         - **Drift 4** — `is_vigil_component bool → INTEGER 0/1` adapted
           via `int(asset.is_vigil_component)`.
 
-        Q11 cap guard: any persisted ``risk_score > 100`` raises
-        ``ValueError`` at the persistence boundary. The composition
-        function clamps at 100; this guard is the last-line defense
-        against a future scorer change that drops the clamp.
+        Q11 cap guard: any persisted ``risk_score > 100`` (or < 0)
+        raises ``ValueError`` at the persistence boundary. The
+        composition function clamps at [0, 100]; this guard is the
+        last-line defense against a future scorer change that drops
+        the clamp. **Validated BEFORE entering the
+        ``with self.conn:`` transaction** so a single corrupt score
+        does not roll back the entire batch — per-item isolation must
+        hold at persistence too, not just at scoring.
         """
-        import json as _json
-
         if self.conn is None:
             return
 
         score_results = score_results or {}
+
+        # Pre-validate score range BEFORE the transaction. A ValueError
+        # raised mid-loop inside ``with self.conn:`` would roll back
+        # every prior asset's UPSERT, violating the per-item isolation
+        # contract (`project_v022_per_item_isolation`).
+        for _asset_id, (score_result, _cve, _tags) in score_results.items():
+            if score_result.final_score > 100 or score_result.final_score < 0:
+                raise ValueError(
+                    f"asset {_asset_id!r}: risk_score {score_result.final_score} "
+                    "out of [0,100] — composition guard breach"
+                )
 
         # Atomic commit/rollback per #156 (Rajan 2026-06-05): wrap the
         # UPSERT loop in `with self.conn:` so a mid-loop failure rolls
@@ -524,21 +548,16 @@ ON CONFLICT(id) DO UPDATE SET
             for asset in assets:
                 if not asset.source or not asset.source.strip():
                     raise ValueError(f"asset {asset.id!r}: source must be non-empty for persistence (drift 1)")
-                current_state_json = _json.dumps(asset.current_state)
-                tags = map_asset(asset)
-                ontology_tags_json = _json.dumps(sorted(t.value for t in tags))
+                current_state_json = json.dumps(asset.current_state)
                 scored = score_results.get(asset.id)
                 if scored is not None:
-                    score_result, cve_result = scored
-                    if score_result.final_score > 100 or score_result.final_score < 0:
-                        raise ValueError(
-                            f"asset {asset.id!r}: risk_score {score_result.final_score} "
-                            "out of [0,100] — composition guard breach"
-                        )
-                    risk_score = score_result.final_score
-                    risk_band = score_result.band.value
-                    risk_factors_json = _json.dumps(_factors_payload(score_result, cve_result))
+                    score_result, cve_result, tags = scored
+                    ontology_tags_json: str | None = json.dumps(sorted(t.value for t in tags))
+                    risk_score: int | None = score_result.final_score
+                    risk_band: str | None = score_result.band.value
+                    risk_factors_json: str | None = json.dumps(_factors_payload(score_result, cve_result))
                 else:
+                    ontology_tags_json = None
                     risk_score = None
                     risk_band = None
                     risk_factors_json = None

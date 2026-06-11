@@ -27,7 +27,15 @@ import pytest
 
 from claude_monitoring.attack_surface.asset import Asset
 from claude_monitoring.attack_surface.discovery.base import DiscoverySource
+from claude_monitoring.attack_surface.ontology.categories import OntologyCategory
 from claude_monitoring.attack_surface.orchestrator import DiscoveryOrchestrator, ScanLock
+
+# `_score_assets` returns `dict[asset.id -> (RiskScoreResult, CVEResult | None,
+# frozenset[OntologyCategory])]` since the code-reviewer 2026-06-11 fix that
+# threads the tags through (avoiding a double `map_asset` call at persistence).
+# Tests that don't care about the persisted ontology_tags pass an empty
+# frozenset; tests that DO care pass a deterministic set.
+_NO_TAGS: frozenset[OntologyCategory] = frozenset()
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -146,7 +154,11 @@ class TestRiskScoreCapGuard:
             applied_reputation=[],
         )
         # Force the orchestrator to produce the bad result
-        with patch.object(orch, "_score_assets", return_value={"python-packages:evil": (evil_result, None)}):
+        with patch.object(
+            orch,
+            "_score_assets",
+            return_value={"python-packages:evil": (evil_result, None, _NO_TAGS)},
+        ):
             with pytest.raises(ValueError, match="risk_score"):
                 orch.scan(trigger="on_demand")
 
@@ -184,7 +196,7 @@ class TestNullOnScoredAsset:
             applied_rules=[],
             applied_reputation=[],
         )
-        with patch.object(orch, "_score_assets", return_value={asset.id: (good_result, None)}):
+        with patch.object(orch, "_score_assets", return_value={asset.id: (good_result, None, _NO_TAGS)}):
             orch.scan(trigger="on_demand")
         row = conn.execute("SELECT risk_score, risk_band FROM assets WHERE id = ?", (asset.id,)).fetchone()
         assert row is not None
@@ -235,7 +247,11 @@ class TestCveStatusTriState:
             lock=lock,
             persistence_connection=conn,
         )
-        with patch.object(orch, "_score_assets", return_value={asset.id: (score_result, cve_result)}):
+        with patch.object(
+            orch,
+            "_score_assets",
+            return_value={asset.id: (score_result, cve_result, _NO_TAGS)},
+        ):
             orch.scan(trigger="on_demand")
         row = conn.execute("SELECT risk_factors FROM assets WHERE id = ?", (asset.id,)).fetchone()
         return json.loads(row[0])
@@ -346,7 +362,7 @@ class TestRiskFactorsSchema:
             lock=ScanLock(lock_path=tmp_path / ".lock"),
             persistence_connection=conn,
         )
-        with patch.object(orch, "_score_assets", return_value={asset.id: (result, cve)}):
+        with patch.object(orch, "_score_assets", return_value={asset.id: (result, cve, _NO_TAGS)}):
             orch.scan(trigger="on_demand")
         row = conn.execute("SELECT risk_factors FROM assets WHERE id = ?", (asset.id,)).fetchone()
         factors = json.loads(row[0])
@@ -379,7 +395,7 @@ class TestRiskFactorsSchema:
             lock=ScanLock(lock_path=tmp_path / ".lock"),
             persistence_connection=conn,
         )
-        with patch.object(orch, "_score_assets", return_value={asset.id: (result, cve)}):
+        with patch.object(orch, "_score_assets", return_value={asset.id: (result, cve, _NO_TAGS)}):
             orch.scan(trigger="on_demand")
         row = conn.execute("SELECT risk_factors FROM assets WHERE id = ?", (asset.id,)).fetchone()
         factors = json.loads(row[0])
@@ -412,7 +428,7 @@ class TestRiskFactorsSchema:
             lock=ScanLock(lock_path=tmp_path / ".lock"),
             persistence_connection=conn,
         )
-        with patch.object(orch, "_score_assets", return_value={asset.id: (result, cve)}):
+        with patch.object(orch, "_score_assets", return_value={asset.id: (result, cve, _NO_TAGS)}):
             orch.scan(trigger="on_demand")
         row = conn.execute("SELECT risk_factors FROM assets WHERE id = ?", (asset.id,)).fetchone()
         factors = json.loads(row[0])
@@ -463,16 +479,11 @@ class TestPersistAssetsWritesScoringColumns:
             lock=ScanLock(lock_path=tmp_path / ".lock"),
             persistence_connection=conn,
         )
-        # Mock map_asset so the test doesn't depend on the live mapper output for python-packages
-        from claude_monitoring.attack_surface.ontology.categories import OntologyCategory
-
-        with (
-            patch.object(orch, "_score_assets", return_value={asset.id: (result, cve)}),
-            patch(
-                "claude_monitoring.attack_surface.orchestrator.orchestrator.map_asset",
-                return_value=frozenset({OntologyCategory.NETWORK_UNRESTRICTED}),
-            ),
-        ):
+        # Tags flow through `_score_assets`'s third tuple element after the
+        # 2026-06-11 code-reviewer fix — persistence no longer calls
+        # `map_asset` itself, so passing the desired tag set here is enough.
+        tags = frozenset({OntologyCategory.NETWORK_UNRESTRICTED})
+        with patch.object(orch, "_score_assets", return_value={asset.id: (result, cve, tags)}):
             orch.scan(trigger="on_demand")
         row = conn.execute("SELECT ontology_tags FROM assets WHERE id = ?", (asset.id,)).fetchone()
         assert row is not None

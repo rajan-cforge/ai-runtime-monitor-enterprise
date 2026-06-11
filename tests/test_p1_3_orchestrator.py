@@ -467,14 +467,54 @@ class TestPersistenceUpsert:
 
         Original pin (drift 3 UNREVERSED, ``test_orchestrator_does_not_write_phase2_owned_columns``)
         is the inverse — kept in git history as proof of the contract
-        flip, not in the live test suite."""
+        flip, not in the live test suite.
+
+        ``_score_assets`` is patched so the assertion exercises the
+        persistence-layer contract directly without depending on
+        real-CVE / real-reputation pipeline health (code-reviewer
+        2026-06-11 issue #3)."""
+        from unittest.mock import patch
+
+        from claude_monitoring.attack_surface.ontology.categories import OntologyCategory
+        from claude_monitoring.attack_surface.risk.scoring import RiskBand, RiskFactors, RiskScoreResult
+
         conn = _setup_assets_db(tmp_path)
         o = DiscoveryOrchestrator(
             sources=[_HappySource()],
             lock=ScanLock(lock_path=tmp_path / ".lock"),
             persistence_connection=conn,
         )
-        o.scan(trigger="on_demand")
+
+        def _fake_score(_self, assets):  # autospec passes self positionally
+            stub_score = RiskScoreResult(
+                final_score=30,
+                band=RiskBand.LOW,
+                factors=RiskFactors(
+                    max_cve_severity=0.0,
+                    permission_breadth=100.0,
+                    integration_sensitivity=0.0,
+                    activity_recency=0.0,
+                ),
+                contributions={
+                    "max_cve_severity": 0.0,
+                    "permission_breadth": 30.0,
+                    "integration_sensitivity": 0.0,
+                    "activity_recency": 0.0,
+                },
+                weights={
+                    "max_cve_severity": 0.35,
+                    "permission_breadth": 0.30,
+                    "integration_sensitivity": 0.20,
+                    "activity_recency": 0.15,
+                },
+                applied_rules=[],
+                applied_reputation=[],
+            )
+            return {a.id: (stub_score, None, frozenset([OntologyCategory.NETWORK_SCOPED])) for a in assets}
+
+        with patch.object(DiscoveryOrchestrator, "_score_assets", autospec=True, side_effect=_fake_score):
+            o.scan(trigger="on_demand")
+
         rows = list(conn.execute("SELECT ontology_tags, risk_score, risk_band, risk_factors FROM assets"))
         assert len(rows) >= 1
         for ontology_tags, risk_score, risk_band, risk_factors in rows:
