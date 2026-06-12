@@ -57,7 +57,6 @@ class TestSchedulerLoop:
 
     def test_scheduler_runs_after_startup_delay(self, monkeypatch):
         """First scan fires after ``_DISCOVERY_STARTUP_DELAY`` of elapsed time."""
-        from claude_monitoring import monitor
         from claude_monitoring import discovery_scheduler
 
         sleeps: list[float] = []
@@ -126,7 +125,6 @@ class TestSchedulerLoop:
 
     def test_scheduler_periodic_cadence(self, monkeypatch):
         """Between scans, the loop sleeps for ``_DISCOVERY_CADENCE``."""
-        from claude_monitoring import monitor
         from claude_monitoring import discovery_scheduler
 
         sleeps: list[float] = []
@@ -165,7 +163,6 @@ class TestSchedulerLoop:
 
     def test_scheduler_backoff_on_exception(self, monkeypatch):
         """A failed scan sleeps ``_DISCOVERY_FAILURE_BACKOFF`` (NOT backoff+cadence)."""
-        from claude_monitoring import monitor
         from claude_monitoring import discovery_scheduler
 
         sleeps: list[float] = []

@@ -2076,13 +2076,13 @@ def backfill_existing_sessions(watcher):
 # monitor.X) keep working without source changes.
 from claude_monitoring.discovery_scheduler import (  # noqa: E402, F401
     DISCOVERY_CADENCE as _DISCOVERY_CADENCE,
-    DISCOVERY_FAILURE_BACKOFF as _DISCOVERY_FAILURE_BACKOFF,
-    DISCOVERY_MAX_RUN_SEC as _DISCOVERY_MAX_RUN_SEC,
-    DISCOVERY_STARTUP_DELAY as _DISCOVERY_STARTUP_DELAY,
+)
+from claude_monitoring.discovery_scheduler import (  # noqa: E402
     discovery_scheduler_loop as _discovery_scheduler_loop,
+)
+from claude_monitoring.discovery_scheduler import (  # noqa: E402
     sweep_stale_discovery_runs as _sweep_stale_discovery_runs,
 )
-
 
 # ─────────────────────────────────────────────────────────────
 # SECTION 11: MAIN ORCHESTRATOR
