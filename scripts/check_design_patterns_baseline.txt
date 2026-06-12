@@ -90,13 +90,13 @@ src/claude_monitoring/monitor.py:1973: empty 'except Exception: pass' (silently 
 src/claude_monitoring/monitor.py:2003: empty 'except Exception: pass' (silently swallowing errors)
 src/claude_monitoring/monitor.py:2009: empty 'except Exception: pass' (silently swallowing errors)
 src/claude_monitoring/monitor.py:2015: empty 'except Exception: pass' (silently swallowing errors)
-src/claude_monitoring/monitor.py:2123: empty 'except Exception: pass' (silently swallowing errors)
-src/claude_monitoring/monitor.py:2185: empty 'except Exception: pass' (silently swallowing errors)
-src/claude_monitoring/monitor.py:2352: public function 'signal_handler' missing docstring
-src/claude_monitoring/monitor.py:2363: empty 'except Exception: pass' (silently swallowing errors)
-src/claude_monitoring/monitor.py:2499: empty 'except Exception: pass' (silently swallowing errors)
-src/claude_monitoring/monitor.py:2545: public function 'main' missing docstring
-src/claude_monitoring/monitor.py:2713: empty 'except Exception: pass' (silently swallowing errors)
+src/claude_monitoring/monitor.py:2120: empty 'except Exception: pass' (silently swallowing errors)
+src/claude_monitoring/monitor.py:2182: empty 'except Exception: pass' (silently swallowing errors)
+src/claude_monitoring/monitor.py:2359: public function 'signal_handler' missing docstring
+src/claude_monitoring/monitor.py:2370: empty 'except Exception: pass' (silently swallowing errors)
+src/claude_monitoring/monitor.py:2506: empty 'except Exception: pass' (silently swallowing errors)
+src/claude_monitoring/monitor.py:2552: public function 'main' missing docstring
+src/claude_monitoring/monitor.py:2720: empty 'except Exception: pass' (silently swallowing errors)
 src/claude_monitoring/monitor.py:282: empty 'except Exception: pass' (silently swallowing errors)
 src/claude_monitoring/monitor.py:446: empty 'except Exception: pass' (silently swallowing errors)
 src/claude_monitoring/monitor.py:465: empty 'except Exception: pass' (silently swallowing errors)

@@ -27,16 +27,21 @@ CONTRACT §5a/§6a):
   enough that "fix and wait" works, long enough that a persistent
   failure doesn't fill logs.
 
-Plus the in-flight-marker sweep threshold (architect-pass Finding 2,
-2026-06-12):
+The in-flight-marker problem (daemon SIGKILL leaves ``discovery_runs.
+completed_at = NULL`` forever) is handled by
+``attack_surface/orchestrator/audit.finalize_crashed_runs(conn)`` — a
+mechanism that already shipped + tested in P1.5, but which had zero
+production callers until ``start_monitoring()`` wires it (judge
+verdict feat-daemon-discovery-scheduler.phase-a.a1 found the dormant
+duplicate; this PR is the sixth shipped-but-dormant gap closure).
+The finalizer's 600s cutoff is docstring-paired with
+``ScanLock.STALE_THRESHOLD_SEC = 600`` so a stale lock and an unfinished
+audit row reflect the same crashed-scan event. It sets
+``status="crashed"`` + ``finalized_at_daemon_startup=True`` in the
+errors JSON so a crash never becomes indistinguishable from a clean
+completion in the audit trail.
 
-- ``DISCOVERY_MAX_RUN_SEC = 4 * 3600`` s — a ``discovery_runs`` row
-  whose ``started_at`` is older than this AND whose ``completed_at`` is
-  NULL must have been from a daemon SIGKILLed mid-scan. The sweep
-  closes it out so the ``/api/assets`` envelope's ``scan_in_progress``
-  field never surfaces a permanent "Scan running…" banner.
-
-P4.5 (background scheduler) will collapse these into a
+P4.5 (background scheduler) will collapse the cadence constants into a
 ``schedule.toml``-driven config. No doc promise of configurability in
 v0.2.2 — the constants are intentionally hardcoded.
 """
@@ -44,7 +49,6 @@ v0.2.2 — the constants are intentionally hardcoded.
 from __future__ import annotations
 
 import logging
-import sqlite3
 import time
 
 from claude_monitoring.attack_surface.orchestrator import (
@@ -56,7 +60,6 @@ from claude_monitoring.db import get_db_path, init_db
 DISCOVERY_STARTUP_DELAY = 60
 DISCOVERY_CADENCE = 24 * 3600
 DISCOVERY_FAILURE_BACKOFF = 3600
-DISCOVERY_MAX_RUN_SEC = 4 * 3600
 
 
 def _get_logger() -> logging.Logger:
@@ -66,33 +69,6 @@ def _get_logger() -> logging.Logger:
     from claude_monitoring.lifecycle import get_logger
 
     return get_logger()
-
-
-def sweep_stale_discovery_runs(conn: sqlite3.Connection) -> int:
-    """Close out ``discovery_runs`` rows left with ``completed_at=NULL``
-    past the sweep threshold.
-
-    Architect-pass 2026-06-12 Finding 2: a daemon SIGKILLed mid-scan
-    leaves a ``discovery_runs`` row in the in-flight state forever;
-    without this sweep, the ``/api/assets`` envelope's ``scan_in_progress``
-    field surfaces a permanent "Scan running…" banner the operator
-    cannot dismiss. Called once per daemon start, BEFORE the
-    ``DiscoveryScheduler`` thread launches, so the dashboard is clean
-    regardless of whether the scheduler ever fires.
-
-    Rows with ``started_at`` within the threshold are NOT touched —
-    they might be a genuinely in-flight scan from a previous graceful
-    restart window.
-
-    Returns the number of rows closed (for logging + observability).
-    """
-    cutoff = time.time() - DISCOVERY_MAX_RUN_SEC
-    with conn:
-        cur = conn.execute(
-            "UPDATE discovery_runs SET completed_at = ? WHERE completed_at IS NULL AND started_at < ?",
-            (time.time(), cutoff),
-        )
-        return cur.rowcount
 
 
 def discovery_scheduler_loop() -> None:

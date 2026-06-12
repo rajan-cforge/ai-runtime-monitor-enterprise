@@ -2080,9 +2080,6 @@ from claude_monitoring.discovery_scheduler import (  # noqa: E402, F401
 from claude_monitoring.discovery_scheduler import (  # noqa: E402
     discovery_scheduler_loop as _discovery_scheduler_loop,
 )
-from claude_monitoring.discovery_scheduler import (  # noqa: E402
-    sweep_stale_discovery_runs as _sweep_stale_discovery_runs,
-)
 
 # ─────────────────────────────────────────────────────────────
 # SECTION 11: MAIN ORCHESTRATOR
@@ -2326,23 +2323,33 @@ def start_monitoring():
     watchdog_thread = threading.Thread(target=_watchdog_loop, daemon=True, name="Watchdog")
     watchdog_thread.start()
 
-    # feat/daemon-discovery-scheduler: sweep stale in-flight markers from
-    # any prior daemon SIGKILLed mid-scan BEFORE the scheduler thread
-    # launches, so the `/api/assets` envelope starts clean regardless of
-    # whether the scheduler ever fires. Architect-pass 2026-06-12.
+    # feat/daemon-discovery-scheduler: finalize crashed discovery_runs
+    # (any row left with completed_at=NULL by a prior daemon SIGKILLed
+    # mid-scan) BEFORE the scheduler thread launches, so the
+    # `/api/assets` envelope starts clean regardless of whether the
+    # scheduler ever fires. Uses the merged `audit.finalize_crashed_runs`
+    # (P1.5, dormant until now — judge phase-a.a1 found the duplicate
+    # 4h-sweep I'd proposed re-implements this with the wrong contract).
+    # The 600s cutoff is docstring-paired with ScanLock.STALE_THRESHOLD_SEC
+    # so stale lock + unfinished audit row reflect the same crashed-scan
+    # event; sets `status="crashed"` + `finalized_at_daemon_startup=True`
+    # in the errors JSON so crash never becomes indistinguishable from
+    # clean completion.
     try:
+        from claude_monitoring.attack_surface.orchestrator import audit
+
         _sweep_conn = init_db(get_db_path())
         try:
-            _swept = _sweep_stale_discovery_runs(_sweep_conn)
-            if _swept:
-                print(f"  Discovery scheduler: swept {_swept} stale in-flight marker(s)")
+            _finalized = audit.finalize_crashed_runs(_sweep_conn)
+            if _finalized:
+                print(f"  Discovery scheduler: finalized {_finalized} crashed run(s)")
         finally:
             _sweep_conn.close()
     except Exception as exc:
-        # The sweep is a hygiene step; if it fails, the scheduler still
-        # runs (and the operator sees a permanent "Scan running…" banner
-        # at worst — degraded, not crashed).
-        print(f"  Discovery scheduler: stale-marker sweep failed: {exc}")
+        # Hygiene step; if it fails, the scheduler still runs (and the
+        # operator sees a stale "Scan running…" banner at worst —
+        # degraded, not crashed).
+        print(f"  Discovery scheduler: crashed-run finalize failed: {exc}")
 
     discovery_scheduler_thread = threading.Thread(
         target=_discovery_scheduler_loop, daemon=True, name="DiscoveryScheduler"

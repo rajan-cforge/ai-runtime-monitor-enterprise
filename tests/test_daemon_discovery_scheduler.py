@@ -14,16 +14,14 @@ The three R1 values (judge AUTO-RATIFY pre-signaled 2026-06-12):
 - ``_DISCOVERY_CADENCE = 24 * 3600`` seconds (matches CVE 24h TTL)
 - ``_DISCOVERY_FAILURE_BACKOFF = 3600`` seconds
 
-Plus a fourth constant for the in-flight-marker sweep (architect-pass
-2026-06-12 — Finding 2 folded in-scope):
-
-- ``_DISCOVERY_MAX_RUN_SEC = 4 * 3600`` seconds
-
-The sweep runs once per daemon start, NULLing-out
-``discovery_runs.completed_at`` rows older than
-``_DISCOVERY_MAX_RUN_SEC`` so a daemon SIGKILLed mid-scan does NOT
-leave the dashboard envelope's ``scan_in_progress`` field permanently
-stuck.
+The in-flight-marker problem (daemon SIGKILL leaves
+``discovery_runs.completed_at = NULL``) is handled by the merged
+``attack_surface.orchestrator.audit.finalize_crashed_runs`` (P1.5,
+dormant until ``start_monitoring()`` wires it). Tests #12/#13 below
+target that function — judge phase-a.a1 verdict 2026-06-12 caught
+my first-pass duplicate that re-implemented this with the wrong
+threshold (4h vs the docstring-paired 600s) and lossy semantics
+(missing the crashed-status marker).
 """
 
 from __future__ import annotations
@@ -382,50 +380,74 @@ class TestScanLockContention:
 
 
 class TestStartupSweep:
-    """In-flight-marker sweep: NULL ``completed_at`` older than
-    ``_DISCOVERY_MAX_RUN_SEC`` is closed out on every daemon start so
-    the dashboard envelope doesn't show permanent "Scan running…"."""
+    """Crashed-run finalize: NULL ``completed_at`` older than the
+    600s cutoff is closed out on every daemon start so the dashboard
+    envelope doesn't show permanent "Scan running…".
 
-    def test_startup_sweep_clears_stale_null_completed_at(self, tmp_path):
-        from claude_monitoring import discovery_scheduler
+    Per judge phase-a.a1 verdict 2026-06-12: uses the merged
+    ``audit.finalize_crashed_runs`` (P1.5, dormant until now). The
+    600s cutoff is docstring-paired with ``ScanLock.STALE_THRESHOLD_SEC``
+    so a stale lock and an unfinished audit row reflect the same
+    crashed-scan event. The finalizer sets ``status="crashed"`` +
+    ``finalized_at_daemon_startup=True`` in the errors JSON so a crash
+    is never indistinguishable from a clean completion in the audit
+    trail.
+    """
+
+    def test_finalize_crashed_runs_marks_stale_row_crashed(self, tmp_path):
+        """A NULL-completed_at row older than 600s is marked status=crashed."""
+        import json
+
+        from claude_monitoring.attack_surface.orchestrator import audit
 
         conn = _conn(tmp_path)
-        # Insert a row with started_at older than the threshold and
-        # completed_at = NULL (simulates daemon SIGKILLed mid-scan).
-        stale_started = time.time() - (discovery_scheduler.DISCOVERY_MAX_RUN_SEC + 60)
+        # Simulate daemon SIGKILLed mid-scan: row started >600s ago
+        # with completed_at = NULL.
+        stale_started = time.time() - (audit.DEFAULT_CRASH_CUTOFF_SEC + 60)
         conn.execute(
             "INSERT INTO discovery_runs (trigger, started_at, completed_at) VALUES (?, ?, NULL)",
             ("scheduled", stale_started),
         )
         conn.commit()
 
-        discovery_scheduler.sweep_stale_discovery_runs(conn)
+        n = audit.finalize_crashed_runs(conn)
+        assert n == 1, "stale NULL completed_at must be finalized"
 
         row = conn.execute(
-            "SELECT completed_at FROM discovery_runs WHERE started_at = ?",
+            "SELECT completed_at, errors FROM discovery_runs WHERE started_at = ?",
             (stale_started,),
         ).fetchone()
-        assert row[0] is not None, "stale NULL completed_at must be closed"
+        assert row[0] is not None, "completed_at must be set"
+        # Data-truthfulness invariant: crash ≠ clean finish. The judge
+        # CHANGES verdict on a1 flagged this — a raw UPDATE that only
+        # sets completed_at would make the row indistinguishable from
+        # a clean completion.
+        errors = json.loads(row[1])
+        assert errors.get("status") == "crashed"
+        assert errors.get("finalized_at_daemon_startup") is True
         conn.close()
 
-    def test_startup_sweep_does_not_touch_recent_null_completed_at(self, tmp_path):
-        """A row that's only 30s old must NOT be swept — it could be a
-        genuinely in-flight scan from a graceful restart window."""
-        from claude_monitoring import discovery_scheduler
+    def test_finalize_crashed_runs_does_not_touch_recent_row(self, tmp_path):
+        """A row that's only 30s old must NOT be finalized — it could be
+        a genuinely in-flight scan from a graceful restart window. The
+        600s cutoff matches ``ScanLock.STALE_THRESHOLD_SEC`` so both
+        consistency signals stay in sync."""
+        from claude_monitoring.attack_surface.orchestrator import audit
 
         conn = _conn(tmp_path)
-        recent_started = time.time() - 30  # well inside the sweep threshold
+        recent_started = time.time() - 30  # well inside the 600s cutoff
         conn.execute(
             "INSERT INTO discovery_runs (trigger, started_at, completed_at) VALUES (?, ?, NULL)",
             ("scheduled", recent_started),
         )
         conn.commit()
 
-        discovery_scheduler.sweep_stale_discovery_runs(conn)
+        n = audit.finalize_crashed_runs(conn)
+        assert n == 0, "recent NULL completed_at must NOT be finalized"
 
         row = conn.execute(
             "SELECT completed_at FROM discovery_runs WHERE started_at = ?",
             (recent_started,),
         ).fetchone()
-        assert row[0] is None, "recent NULL completed_at must NOT be swept"
+        assert row[0] is None, "recent NULL completed_at must stay NULL"
         conn.close()
