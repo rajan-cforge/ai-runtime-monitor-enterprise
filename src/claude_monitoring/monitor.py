@@ -97,6 +97,11 @@ active_cwds_lock = threading.Lock()
 # Plan/subscription detection (populated on startup)
 plan_info = {"is_subscription": False, "plan_tier": ""}
 
+# feat/daemon-discovery-scheduler — see `discovery_scheduler.py` for the
+# loop body, the sweep, and the cadence constants. Re-exported below so
+# tests + first-party consumers that monkeypatch `monitor.X` continue
+# to resolve the same callable.
+
 # Feature B: async scan progress state. Module-level singleton protected
 # by a lock. Shape matches the plan:
 #   running, started_at, finished_at, phase, per_source, totals
@@ -2064,6 +2069,22 @@ def backfill_existing_sessions(watcher):
 
 
 # ─────────────────────────────────────────────────────────────
+# SECTION 10b: DISCOVERY SCHEDULER (re-export)
+# ─────────────────────────────────────────────────────────────
+# Live code in discovery_scheduler.py. Re-exported here so callers
+# (tests, start_monitoring(), first-party consumers that monkeypatch
+# monitor.X) keep working without source changes.
+from claude_monitoring.discovery_scheduler import (  # noqa: E402, F401
+    DISCOVERY_CADENCE as _DISCOVERY_CADENCE,
+    DISCOVERY_FAILURE_BACKOFF as _DISCOVERY_FAILURE_BACKOFF,
+    DISCOVERY_MAX_RUN_SEC as _DISCOVERY_MAX_RUN_SEC,
+    DISCOVERY_STARTUP_DELAY as _DISCOVERY_STARTUP_DELAY,
+    discovery_scheduler_loop as _discovery_scheduler_loop,
+    sweep_stale_discovery_runs as _sweep_stale_discovery_runs,
+)
+
+
+# ─────────────────────────────────────────────────────────────
 # SECTION 11: MAIN ORCHESTRATOR
 # ─────────────────────────────────────────────────────────────
 
@@ -2304,6 +2325,29 @@ def start_monitoring():
 
     watchdog_thread = threading.Thread(target=_watchdog_loop, daemon=True, name="Watchdog")
     watchdog_thread.start()
+
+    # feat/daemon-discovery-scheduler: sweep stale in-flight markers from
+    # any prior daemon SIGKILLed mid-scan BEFORE the scheduler thread
+    # launches, so the `/api/assets` envelope starts clean regardless of
+    # whether the scheduler ever fires. Architect-pass 2026-06-12.
+    try:
+        _sweep_conn = init_db(get_db_path())
+        try:
+            _swept = _sweep_stale_discovery_runs(_sweep_conn)
+            if _swept:
+                print(f"  Discovery scheduler: swept {_swept} stale in-flight marker(s)")
+        finally:
+            _sweep_conn.close()
+    except Exception as exc:
+        # The sweep is a hygiene step; if it fails, the scheduler still
+        # runs (and the operator sees a permanent "Scan running…" banner
+        # at worst — degraded, not crashed).
+        print(f"  Discovery scheduler: stale-marker sweep failed: {exc}")
+
+    discovery_scheduler_thread = threading.Thread(
+        target=_discovery_scheduler_loop, daemon=True, name="DiscoveryScheduler"
+    )
+    discovery_scheduler_thread.start()
 
     def signal_handler(sig, frame):
         print("\n\n  Shutting down...")

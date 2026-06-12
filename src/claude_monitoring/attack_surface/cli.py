@@ -1,17 +1,17 @@
-"""Throwaway CLI for the first-real-discovery milestone.
+"""Discovery scan CLI — runs one ``DiscoveryOrchestrator.scan(trigger="cli")``
+against :func:`default_sources` and **persists results to the live monitor DB
+by default** (feat/daemon-discovery-scheduler, Rajan 2026-06-12: "defaults
+should do what an operator expects; the incantation is for the special case").
 
 Usage::
 
-    python -m claude_monitoring.attack_surface.cli scan --dump
+    python -m claude_monitoring.attack_surface.cli scan              # persist
+    python -m claude_monitoring.attack_surface.cli scan --dump        # persist + dump JSON
+    python -m claude_monitoring.attack_surface.cli scan --no-persist  # legacy throwaway
 
-Runs ``DiscoveryOrchestrator.scan(trigger="cli")`` with the
-:func:`default_sources` registry (Ollama models + AI tool versions at
-P1.4-minimal merge time) and dumps the resulting ``Asset`` records as
-JSON to stdout. No persistence; no audit DB writes; no dashboard.
-
-This is the v0.2.2 proof-of-function — Vigil enumerating real assets
-on the developer's machine end-to-end. Will be replaced by a proper
-``claude-watch`` subcommand surface once the dashboard lands.
+``--no-persist`` preserves the pre-feat/daemon-discovery-scheduler behavior
+("dump → eyeball → walk away") for development debugging where touching the
+live DB is undesirable.
 """
 
 from __future__ import annotations
@@ -49,6 +49,11 @@ def main(argv: list[str] | None = None) -> int:
         help="Dump the resulting ScanResult as JSON to stdout.",
     )
     scan.add_argument(
+        "--no-persist",
+        action="store_true",
+        help=("Run discovery without writing to the live monitor DB (legacy throwaway mode). Default is persist."),
+    )
+    scan.add_argument(
         "--lock-path",
         type=Path,
         default=None,
@@ -60,8 +65,23 @@ def main(argv: list[str] | None = None) -> int:
         parser.error(f"unknown command: {args.command}")
 
     lock = ScanLock(lock_path=args.lock_path) if args.lock_path else None
-    orchestrator = DiscoveryOrchestrator(sources=default_sources(), lock=lock)
-    result = orchestrator.scan(trigger="cli")
+
+    # Default is persist; --no-persist preserves the legacy throwaway mode.
+    conn = None
+    if not args.no_persist:
+        from claude_monitoring.db import get_db_path, init_db
+
+        conn = init_db(get_db_path())
+    try:
+        orchestrator = DiscoveryOrchestrator(
+            sources=default_sources(),
+            lock=lock,
+            persistence_connection=conn,
+        )
+        result = orchestrator.scan(trigger="cli")
+    finally:
+        if conn is not None:
+            conn.close()
 
     if args.dump:
         payload = {
