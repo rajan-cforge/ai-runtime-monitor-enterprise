@@ -31,18 +31,7 @@
 # Add a new entry by editing this file manually — that forces the
 # new entry to show up in the diff so the judge sees the addition.
 #
-# Initial entries (2026-06-12, this micro-PR): the two files affected
-# by the dashboard-handler-extraction pure-move PR (#118). Evidence:
-#   overall coverage: 81.98% -> 82.00% (+0.02%, IMPROVED)
-#   migration accounting:
-#     monitor.py 5547 lines × 75.48% = ~4187 covered  (pre-split)
-#     monitor.py 2807 lines × 69.10% = ~1940 covered  (post-split)
-#     dashboard_handler.py 2789 lines × 83.09% = ~2317 covered  (new)
-#     post-split total covered = 1940 + 2317 = 4257  (+70 vs pre)
-#   The +70 lines is the +0.02% overall improvement: the moved code
-#   is the same code, but the split makes the dashboard portion's
-#   coverage countable separately at a HIGHER per-file rate than the
-#   mixed monitor.py used to show.
-#
-src/claude_monitoring/dashboard_handler.py 83.09
-src/claude_monitoring/monitor.py 69.10
+# No active entries. The dashboard-handler-extraction transition
+# floors (PR #118 merged 2026-06-12 as 0e6f5bd) were removed per the
+# transient-floor rule above; the ordinary diff-vs-main gate now
+# protects monitor.py and dashboard_handler.py on its own.

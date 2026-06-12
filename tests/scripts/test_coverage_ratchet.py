@@ -204,14 +204,16 @@ def test_update_baseline_fails_when_no_path_found(tmp_path, monkeypatch, capsys)
     assert "ERROR" in out
 
 
-def test_committed_baseline_loads_two_entries():
-    """The committed baseline file in this PR holds the two #118 entries."""
+def test_committed_baseline_is_empty_post_118_transition():
+    """Per the transient-floor rule, #118's entries were removed once the
+    split landed on main (commit 0e6f5bd). The baseline is now empty —
+    monitor.py and dashboard_handler.py are protected by the ordinary
+    diff-vs-main gate. The mechanism stays in place for the next
+    legitimate structural change.
+    """
     mod = _load_module()
     floors = mod.load_baseline()
-    assert "src/claude_monitoring/monitor.py" in floors
-    assert "src/claude_monitoring/dashboard_handler.py" in floors
-    assert floors["src/claude_monitoring/monitor.py"] == 69.10
-    assert floors["src/claude_monitoring/dashboard_handler.py"] == 83.09
+    assert floors == {}, f"baseline should be empty post-#118; got {floors!r}"
 
 
 def test_baseline_file_has_documented_refresh_discipline():
