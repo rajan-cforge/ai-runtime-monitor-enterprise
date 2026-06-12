@@ -2328,13 +2328,10 @@ def start_monitoring():
 
     # feat/daemon-discovery-scheduler: finalize crashed discovery_runs
     # before the scheduler launches, so the /api/assets envelope starts
-    # clean regardless of whether the scheduler ever fires. Delegates
-    # to discovery_scheduler.finalize_crashed_runs_at_startup() so the
-    # wiring is unit-testable; the wrapper handles conn open/close +
-    # fail-open per judge phase-a.a2.
-    _finalized = _finalize_crashed_runs_at_startup()
-    if _finalized:
-        print(f"  Discovery scheduler: finalized {_finalized} crashed run(s)")
+    # clean regardless of whether the scheduler ever fires. The wrapper
+    # handles conn open/close + fail-open + the operator-visible print;
+    # extracted into discovery_scheduler so the wiring is unit-testable.
+    _finalize_crashed_runs_at_startup()
 
     discovery_scheduler_thread = threading.Thread(
         target=_discovery_scheduler_loop, daemon=True, name="DiscoveryScheduler"

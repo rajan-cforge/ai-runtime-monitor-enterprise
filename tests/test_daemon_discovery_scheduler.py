@@ -448,6 +448,43 @@ class TestStartupSweep:
         n = discovery_scheduler.finalize_crashed_runs_at_startup()
         assert n == 1
 
+    def test_finalize_crashed_runs_at_startup_prints_when_count_positive(self, tmp_path, monkeypatch, capsys):
+        """Wrapper prints the operator-visible "finalized N crashed run(s)"
+        line only when N > 0 — the print is the user-facing artifact
+        and must stay inside the unit-testable wrapper, NOT in
+        `start_monitoring`'s untested body."""
+        from claude_monitoring import discovery_scheduler
+        from claude_monitoring.attack_surface.orchestrator import audit
+
+        db_path = tmp_path / "monitor.db"
+        seed = _conn(tmp_path)
+        stale_started = time.time() - (audit.DEFAULT_CRASH_CUTOFF_SEC + 60)
+        seed.execute(
+            "INSERT INTO discovery_runs (trigger, started_at, completed_at) VALUES (?, ?, NULL)",
+            ("scheduled", stale_started),
+        )
+        seed.commit()
+        seed.close()
+
+        monkeypatch.setattr(discovery_scheduler, "get_db_path", lambda: db_path)
+        discovery_scheduler.finalize_crashed_runs_at_startup()
+        out = capsys.readouterr().out
+        assert "finalized 1 crashed run(s)" in out
+
+    def test_finalize_crashed_runs_at_startup_silent_when_no_stale_rows(self, tmp_path, monkeypatch, capsys):
+        """When no rows need finalization, the wrapper is silent — no
+        operator-visible print should fire on a clean startup."""
+        from claude_monitoring import discovery_scheduler
+
+        db_path = tmp_path / "monitor.db"
+        seed = _conn(tmp_path)
+        seed.close()  # empty DB; no rows to finalize
+
+        monkeypatch.setattr(discovery_scheduler, "get_db_path", lambda: db_path)
+        discovery_scheduler.finalize_crashed_runs_at_startup()
+        out = capsys.readouterr().out
+        assert "finalized" not in out
+
     def test_finalize_crashed_runs_at_startup_returns_zero_on_db_failure(self, tmp_path, monkeypatch):
         """Wrapper is fail-open: a broken init_db raises, wrapper logs
         and returns 0. The scheduler still launches; the operator sees

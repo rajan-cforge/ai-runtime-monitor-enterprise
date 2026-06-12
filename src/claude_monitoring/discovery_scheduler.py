@@ -131,30 +131,38 @@ def discovery_scheduler_loop() -> None:
 
 
 def finalize_crashed_runs_at_startup() -> int:
-    """Wrap ``audit.finalize_crashed_runs`` with conn lifecycle + fail-open.
+    """Wrap ``audit.finalize_crashed_runs`` with conn lifecycle + fail-open
+    + operator-visible print.
 
     Called once per daemon start from ``monitor.start_monitoring()``,
     BEFORE the :func:`discovery_scheduler_loop` thread launches, so the
     ``/api/assets`` envelope's ``scan_in_progress`` field starts clean
     regardless of whether the scheduler ever fires.
 
-    Lives here (not in ``monitor.py``) so the wiring is unit-testable
-    in isolation — the same coverage-ratchet rule that the
-    coverage-ratchet baseline mechanism (#119) was built to defend.
+    Lives here (not in ``monitor.py``) so the entire wiring — DB conn
+    open/close, delegate to merged finalizer, fail-open, and the
+    operator-visible print line — is unit-testable in isolation. The
+    coverage-ratchet rule from PR #119 (the per-file baseline
+    mechanism) was the right gate; the honest fix for a coverage drop
+    on new code is extracting it into a testable helper, not bumping
+    the baseline.
 
-    Returns the number of crashed rows finalized (for the start_monitoring
-    print line). Returns 0 on any exception — the sweep is a hygiene step;
-    if it fails, the scheduler still runs and the operator sees a stale
-    "Scan running…" banner at worst.
+    Returns the number of crashed rows finalized. Returns 0 on any
+    exception — the sweep is a hygiene step; if it fails, the scheduler
+    still runs and the operator sees a stale "Scan running…" banner at
+    worst.
     """
     try:
         from claude_monitoring.attack_surface.orchestrator import audit
 
         conn = init_db(get_db_path())
         try:
-            return audit.finalize_crashed_runs(conn)
+            n = audit.finalize_crashed_runs(conn)
         finally:
             conn.close()
     except Exception as exc:
         _get_logger().warning("discovery startup crash-recovery failed: %s", exc)
         return 0
+    if n:
+        print(f"  Discovery scheduler: finalized {n} crashed run(s)")
+    return n
