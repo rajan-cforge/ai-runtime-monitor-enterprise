@@ -1,0 +1,48 @@
+# Per-file line-coverage baseline for the coverage ratchet.
+#
+# Each entry: `<path> <line_pct>`. The ratchet
+# (scripts/coverage_ratchet.py) gates any PR-modified file with a
+# baseline entry against `<pr_line_pct> >= <floor> - LINE_DROP_TOLERANCE`,
+# IN PLACE OF the diff comparison. Files NOT listed here keep the
+# existing diff-based gate.
+#
+# Refresh discipline (mirrors check_design_patterns_baseline.txt;
+# judge ruling 2026-06-12, R1 gate maintenance):
+# this file is JUDGE-REVIEWED. Refresh entries only via an explicit,
+# committed PR that includes evidence:
+#   (a) overall delta >= 0% on the PR triggering the refresh
+#   (b) migration accounting — for module splits, account for where
+#       the moved lines now count (covered lines preserved across
+#       the split)
+# Auto-pass mechanisms (runtime --allow-drop flags, env vars, label
+# overrides) are forbidden — every legitimate per-file drop is its
+# own explicit, committed, judge-reviewed two-line refresh.
+#
+# Transient-floor rule (judge ruling 2026-06-12, coverage-ratchet-baseline.a1):
+# entries are removed once the split lands on main — floors are for the
+# transition window only. Leaving a floor in place would silently disable
+# the upward ratchet for that file (future improvements could quietly slide
+# back down to the floor). After a split-driving PR merges, the next
+# action is a one-line follow-up commit DELETING the entries; the
+# ordinary diff-vs-main gate then resumes correctly on its own.
+#
+# Update existing entries with:
+#   python scripts/coverage_ratchet.py --update-baseline <coverage.xml> <path>
+# Add a new entry by editing this file manually — that forces the
+# new entry to show up in the diff so the judge sees the addition.
+#
+# Initial entries (2026-06-12, this micro-PR): the two files affected
+# by the dashboard-handler-extraction pure-move PR (#118). Evidence:
+#   overall coverage: 81.98% -> 82.00% (+0.02%, IMPROVED)
+#   migration accounting:
+#     monitor.py 5547 lines × 75.48% = ~4187 covered  (pre-split)
+#     monitor.py 2807 lines × 69.10% = ~1940 covered  (post-split)
+#     dashboard_handler.py 2789 lines × 83.09% = ~2317 covered  (new)
+#     post-split total covered = 1940 + 2317 = 4257  (+70 vs pre)
+#   The +70 lines is the +0.02% overall improvement: the moved code
+#   is the same code, but the split makes the dashboard portion's
+#   coverage countable separately at a HIGHER per-file rate than the
+#   mixed monitor.py used to show.
+#
+src/claude_monitoring/dashboard_handler.py 83.09
+src/claude_monitoring/monitor.py 69.10
