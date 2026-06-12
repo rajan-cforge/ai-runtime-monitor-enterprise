@@ -427,6 +427,42 @@ class TestStartupSweep:
         assert errors.get("finalized_at_daemon_startup") is True
         conn.close()
 
+    def test_finalize_crashed_runs_at_startup_returns_count_on_success(self, tmp_path, monkeypatch):
+        """The `start_monitoring` wrapper opens its own conn, delegates to
+        the merged finalizer, and returns the count for the print line."""
+        from claude_monitoring import discovery_scheduler
+        from claude_monitoring.attack_surface.orchestrator import audit
+
+        db_path = tmp_path / "monitor.db"
+        # Seed the DB with one stale crashed row.
+        seed = _conn(tmp_path)
+        stale_started = time.time() - (audit.DEFAULT_CRASH_CUTOFF_SEC + 60)
+        seed.execute(
+            "INSERT INTO discovery_runs (trigger, started_at, completed_at) VALUES (?, ?, NULL)",
+            ("scheduled", stale_started),
+        )
+        seed.commit()
+        seed.close()
+
+        monkeypatch.setattr(discovery_scheduler, "get_db_path", lambda: db_path)
+        n = discovery_scheduler.finalize_crashed_runs_at_startup()
+        assert n == 1
+
+    def test_finalize_crashed_runs_at_startup_returns_zero_on_db_failure(self, tmp_path, monkeypatch):
+        """Wrapper is fail-open: a broken init_db raises, wrapper logs
+        and returns 0. The scheduler still launches; the operator sees
+        a stale banner at worst, never a crashed daemon."""
+        from claude_monitoring import discovery_scheduler
+
+        def boom(_path):
+            raise RuntimeError("simulated DB unavailable")
+
+        monkeypatch.setattr(discovery_scheduler, "init_db", boom)
+        monkeypatch.setattr(discovery_scheduler, "get_db_path", lambda: tmp_path / "x.db")
+        # Must not raise — the wrapper logs + returns 0.
+        n = discovery_scheduler.finalize_crashed_runs_at_startup()
+        assert n == 0
+
     def test_finalize_crashed_runs_does_not_touch_recent_row(self, tmp_path):
         """A row that's only 30s old must NOT be finalized — it could be
         a genuinely in-flight scan from a graceful restart window. The

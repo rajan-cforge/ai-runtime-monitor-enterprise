@@ -1,11 +1,13 @@
 """Daemon-side discovery scheduler — closes the operator-path loop.
 
-Closes the fourth shipped-but-dormant gap of v0.2.2 (after mappers →
-scoring → daemon-cadence → CLI-persistence): the daemon now invokes
-``DiscoveryOrchestrator.scan(trigger="scheduled")`` on startup (after a
-short delay) and then periodically. A fresh-machine daemon start
-populates the Assets tab without the operator running any manual
-incantation.
+Closes the fifth and sixth consecutive shipped-but-dormant gaps of
+v0.2.2 (after mappers → scoring → daemon-cadence → CLI-persistence):
+the daemon now invokes ``DiscoveryOrchestrator.scan(trigger="scheduled")``
+on startup (after a short delay) and then periodically, AND wires the
+already-merged ``audit.finalize_crashed_runs`` (P1.5, dormant until
+now — judge phase-a.a1 verdict caught the dormant duplicate). A
+fresh-machine daemon start populates the Assets tab without the
+operator running any manual incantation.
 
 Lives in its own module (rather than ``monitor.py``) per the post-#118
 pattern: feature surfaces with their own thread + state model land in
@@ -29,14 +31,15 @@ CONTRACT §5a/§6a):
 
 The in-flight-marker problem (daemon SIGKILL leaves ``discovery_runs.
 completed_at = NULL`` forever) is handled by
-``attack_surface/orchestrator/audit.finalize_crashed_runs(conn)`` — a
-mechanism that already shipped + tested in P1.5, but which had zero
-production callers until ``start_monitoring()`` wires it (judge
-verdict feat-daemon-discovery-scheduler.phase-a.a1 found the dormant
-duplicate; this PR is the sixth shipped-but-dormant gap closure).
-The finalizer's 600s cutoff is docstring-paired with
-``ScanLock.STALE_THRESHOLD_SEC = 600`` so a stale lock and an unfinished
-audit row reflect the same crashed-scan event. It sets
+``attack_surface/orchestrator/audit.finalize_crashed_runs(conn)`` —
+shipped + tested in P1.5 with zero production callers until this PR.
+``finalize_crashed_runs_at_startup`` (below) is the thin wrapper
+``start_monitoring()`` calls: opens a conn via :func:`init_db`,
+delegates to the merged finalizer, closes the conn, fail-open on any
+exception (the operator sees a stale "Scan running…" banner at worst,
+never a crashed daemon). The finalizer's 600s cutoff is docstring-paired
+with ``ScanLock.STALE_THRESHOLD_SEC = 600`` so a stale lock and an
+unfinished audit row reflect the same crashed-scan event. It sets
 ``status="crashed"`` + ``finalized_at_daemon_startup=True`` in the
 errors JSON so a crash never becomes indistinguishable from a clean
 completion in the audit trail.
@@ -89,8 +92,9 @@ def discovery_scheduler_loop() -> None:
     the thread is torn down with it. In-flight ``_persist_assets`` is
     wrapped in ``with self.conn:`` (P1.3 follow-up #156) so partial
     writes cannot happen; the in-flight ``discovery_runs.completed_at``
-    NULL row is cleaned by :func:`sweep_stale_discovery_runs` on the
-    next start.
+    NULL row is cleaned by ``audit.finalize_crashed_runs`` on the next
+    start, called via :func:`finalize_crashed_runs_at_startup` BEFORE
+    this thread launches.
     """
     time.sleep(DISCOVERY_STARTUP_DELAY)
     while True:
@@ -124,3 +128,33 @@ def discovery_scheduler_loop() -> None:
                 DISCOVERY_FAILURE_BACKOFF,
             )
             time.sleep(DISCOVERY_FAILURE_BACKOFF)
+
+
+def finalize_crashed_runs_at_startup() -> int:
+    """Wrap ``audit.finalize_crashed_runs`` with conn lifecycle + fail-open.
+
+    Called once per daemon start from ``monitor.start_monitoring()``,
+    BEFORE the :func:`discovery_scheduler_loop` thread launches, so the
+    ``/api/assets`` envelope's ``scan_in_progress`` field starts clean
+    regardless of whether the scheduler ever fires.
+
+    Lives here (not in ``monitor.py``) so the wiring is unit-testable
+    in isolation — the same coverage-ratchet rule that the
+    coverage-ratchet baseline mechanism (#119) was built to defend.
+
+    Returns the number of crashed rows finalized (for the start_monitoring
+    print line). Returns 0 on any exception — the sweep is a hygiene step;
+    if it fails, the scheduler still runs and the operator sees a stale
+    "Scan running…" banner at worst.
+    """
+    try:
+        from claude_monitoring.attack_surface.orchestrator import audit
+
+        conn = init_db(get_db_path())
+        try:
+            return audit.finalize_crashed_runs(conn)
+        finally:
+            conn.close()
+    except Exception as exc:
+        _get_logger().warning("discovery startup crash-recovery failed: %s", exc)
+        return 0
