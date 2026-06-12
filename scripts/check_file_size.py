@@ -15,16 +15,18 @@ Usage:
 Default path is ``src/``. Exit 0 on PASS, 1 on FAIL (any file over the
 threshold), 2 on usage error.
 
-monitor.py ceiling policy (Rajan rider, 2026-06-11, dashboard-asset-view PR)
----------------------------------------------------------------------------
-The bump 5500 → 5550 this PR carries is the **last bump** for
-``src/claude_monitoring/monitor.py``. Three consecutive sprint PRs
-(scan-scoring-callsite, dashboard-asset-view, and one earlier) have
-nudged against this cap — the trend says the file wants splitting,
-not stretching. The next time monitor.py approaches 5550, the
-resolution is extracting the dashboard / HTTP routing layer
-(``DashboardHandler`` + all ``_api_*`` methods) into its own module
-wholesale. Do not bump further.
+monitor.py ceiling policy (Rajan rider, 2026-06-11 → realized 2026-06-12)
+-------------------------------------------------------------------------
+The 5500 → 5550 bump was the LAST bump for ``monitor.py``. The next time
+it approached 5550 (in the P4.3 runtime-correlation PR), the resolution
+landed: ``DashboardHandler`` + all ``_api_*`` methods + ``DASHBOARD_HTML``
++ ``_format_uptime`` extracted wholesale into
+``src/claude_monitoring/dashboard_handler.py`` (pure-move PR
+2026-06-12, Rajan-ratified Path 1). After the move, both monitor.py and
+dashboard_handler.py sit just under 2900 lines. The ceiling drops to
+2900 — a real ratchet down from 5550, matching the new shape of the
+codebase. Do not bump back up; the next time either file approaches
+2900, split again.
 """
 
 from __future__ import annotations
@@ -32,11 +34,11 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-# Bumped 5500 → 5550 on dashboard-asset-view (PR following PR #115) after
-# extracting ~180 LOC of asset-list logic into
-# ``attack_surface/dashboard_api.py``. Rajan-authorized as the LAST bump
-# for monitor.py (see policy block in the module docstring above).
-MAX_LINES = 5550
+# Ratcheted 5550 → 2900 on dashboard-handler-extraction (2026-06-12) after
+# the wholesale move of ``DashboardHandler`` to its own module. Both
+# monitor.py (~2814) and dashboard_handler.py (~2801) sit just under
+# this ceiling. Honors the "last bump" rule by NEVER bumping back up.
+MAX_LINES = 2900
 
 
 def file_line_count(path: Path) -> int:

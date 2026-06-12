@@ -193,6 +193,7 @@ Patterns to preserve for `verify_token`:
 |-------|-------|-----------|
 | C1 (Phase 3A) | `verify_token` used `==` comparison (potentially timing-leakable) | Switched to `hmac.compare_digest`; PR #13 |
 | Origin | The need for NameConstraints was identified during initial security architecture review | Pattern established before C1; never had a vulnerable version |
+| 2026-06-12 (pure move) | `verify_token` call sites in `DashboardHandler._check_auth` moved from `monitor.py` to the new `dashboard_handler.py` module (PR #118 dashboard-handler-extraction) | **No semantic change.** `_check_auth` body copied verbatim; every route still funnels through it; 42-route registration set byte-identical to pre-move main; browser-extension exemption set (`/api/browser/ingest`, `/api/browser/heartbeat`) unchanged. The lazy `from claude_monitoring.security import verify_token` inside `_check_auth` was moved as-is. |
 
 The module's security posture has been reviewed multiple times in the project history (Audit 2026-05-21, Phase 3A C1-C4) and the patterns established have not regressed.
 
