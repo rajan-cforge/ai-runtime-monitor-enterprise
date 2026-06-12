@@ -186,6 +186,14 @@ CREATE INDEX idx_assets_parent ON assets(parent_asset_id);
 CREATE INDEX idx_assets_risk_band ON assets(risk_band);
 CREATE INDEX idx_assets_last_seen ON assets(last_seen);
 
+-- asset_cves: spec §9.1 per-asset CVE join table. DDL'd here for the
+-- schema-rollback gate (round-trip drop/create) AND to reserve the
+-- surface for v0.3+ reverse-CVE-to-asset queries. Empty through v0.2.2:
+-- per-asset CVE data is materialized inline as `assets.risk_factors.cves`
+-- JSON via the §6.10 v1 schema (see scan-scoring-callsite PR #115). See
+-- spec §9.1.1 amendment (Rajan 2026-06-11, P4.2) for the storage-shape
+-- ratification + v0.3 reactivation path. DO NOT add INSERT/SELECT
+-- against this table without a follow-up directive amendment.
 CREATE TABLE asset_cves (
     asset_id TEXT NOT NULL,
     cve_id TEXT NOT NULL,
@@ -212,6 +220,20 @@ CREATE TABLE asset_history (
 
 CREATE INDEX idx_history_asset ON asset_history(asset_id);
 
+-- cve_cache: spec §9.1 per-(ecosystem, package, cve_id) vuln master.
+-- DDL'd here for the schema-rollback gate (round-trip drop/create) AND
+-- to reserve the surface for v0.3+ reverse-CVE queries (severity
+-- histograms, fleet-wide aging). Empty through v0.2.2: CVE feed
+-- caching ships as two file-backed caches under
+-- `${VIGIL_OUTPUT}/cves/` per `attack_surface/cves/` (PR #114) —
+-- querybatch 24h symmetric TTL, vulns 7d TTL, chmod 600, atomic
+-- tempfile+rename writes. File storage chosen for privacy-posture
+-- isolation: CVE query metadata MUST NOT share row space with
+-- capture data in monitor.db. See spec §9.1.1 amendment (Rajan
+-- 2026-06-11, P4.2). `cve_references` column name preserved (vs
+-- spec's `references` which is a reserved SQL keyword that fails
+-- to parse); ratified as canonical for v0.3+ SQL consumers in the
+-- amendment.
 CREATE TABLE cve_cache (
     package_ecosystem TEXT NOT NULL,
     package_name TEXT NOT NULL,
