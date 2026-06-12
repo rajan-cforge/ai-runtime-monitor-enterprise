@@ -18,6 +18,14 @@
 # overrides) are forbidden — every legitimate per-file drop is its
 # own explicit, committed, judge-reviewed two-line refresh.
 #
+# Transient-floor rule (judge ruling 2026-06-12, coverage-ratchet-baseline.a1):
+# entries are removed once the split lands on main — floors are for the
+# transition window only. Leaving a floor in place would silently disable
+# the upward ratchet for that file (future improvements could quietly slide
+# back down to the floor). After a split-driving PR merges, the next
+# action is a one-line follow-up commit DELETING the entries; the
+# ordinary diff-vs-main gate then resumes correctly on its own.
+#
 # Update existing entries with:
 #   python scripts/coverage_ratchet.py --update-baseline <coverage.xml> <path>
 # Add a new entry by editing this file manually — that forces the

@@ -222,6 +222,35 @@ def test_baseline_file_has_documented_refresh_discipline():
     assert "forbidden" in text
 
 
+def test_baseline_file_documents_transient_floor_rule():
+    """Per coverage-ratchet-baseline.a1 fix mandate: floors are transient.
+
+    Entries get DELETED once the split lands on main; leaving them in
+    place would silently disable the upward ratchet for those files.
+    The rule must be documented in the baseline header AND re-emitted
+    by ``write_baseline`` so it survives every ``--update-baseline`` call.
+    """
+    text = (REPO_ROOT / "scripts" / "coverage_ratchet_baseline.txt").read_text()
+    assert "Transient-floor rule" in text
+    assert "transition window only" in text
+    assert "DELETING the entries" in text
+
+
+def test_write_baseline_re_emits_transient_floor_rule(tmp_path, monkeypatch):
+    """``write_baseline`` must preserve the transient-floor rule in its header.
+
+    Otherwise a future ``--update-baseline`` call could strip the rule from
+    the file silently.
+    """
+    mod = _load_module()
+    _patch_baseline_path(monkeypatch, mod, tmp_path)
+    mod.write_baseline({"src/a.py": 90.0})
+    text = (tmp_path / "baseline.txt").read_text()
+    assert "Transient-floor rule" in text
+    assert "transition window only" in text
+    assert "DELETING the entries" in text
+
+
 def _argv_dispatch(mod, argv: list[str]) -> int:
     """Run main() with the given argv. Captures sys.argv[0] convention."""
     return mod.main(["coverage_ratchet.py"] + argv)
