@@ -112,6 +112,14 @@ def api_server(tmp_path, monkeypatch):
         "claude_monitoring.attack_surface.activity.correlator._now",
         lambda: _NOW,
     )
+    # Default the heartbeat to fresh so `capture_ok=True` in the handler.
+    # CI runners have no live daemon → `heartbeat_age_seconds()` returns
+    # None → the handler would collapse every response to `capture_off`.
+    # Individual tests that need `capture_off` re-patch this to `None`.
+    monkeypatch.setattr(
+        "claude_monitoring.lifecycle.heartbeat_age_seconds",
+        lambda: 5.0,
+    )
     with (
         patch("claude_monitoring.monitor.DB_PATH", db_path),
         patch("claude_monitoring.monitor.OUTPUT_DIR", output_dir),
@@ -496,9 +504,7 @@ class TestProductionTimestampFormatContract:
             f"row in production format must be aggregated; got data_status={result.data_status!r}"
         )
         hosts = [d["host"] for d in result.top_destinations]
-        assert "api.anthropic.com" in hosts, (
-            f"production-format row must appear in top_destinations; got {hosts!r}"
-        )
+        assert "api.anthropic.com" in hosts, f"production-format row must appear in top_destinations; got {hosts!r}"
 
         # (c) last_seen reflects the production-format row
         assert result.last_seen is not None
