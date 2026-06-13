@@ -372,7 +372,10 @@ class TestExpectedHostsContract:
 
         hosts = expected_hosts_for_source("chromium-extensions")
         assert hosts is not None
-        assert "api.anthropic.com" in hosts
+        # Exact element equality, NOT substring. CodeQL
+        # py/incomplete-url-substring-sanitization can't tell `hosts` is a
+        # tuple/list here; rewrite as explicit equality to dispel the FP.
+        assert any(h == "api.anthropic.com" for h in hosts)
 
     def test_ollama_models_correlate_to_localhost_port(self):
         from claude_monitoring.attack_surface.activity.expected_hosts import (
@@ -504,7 +507,10 @@ class TestProductionTimestampFormatContract:
             f"row in production format must be aggregated; got data_status={result.data_status!r}"
         )
         hosts = [d["host"] for d in result.top_destinations]
-        assert "api.anthropic.com" in hosts, f"production-format row must appear in top_destinations; got {hosts!r}"
+        # Exact element equality, NOT substring (see CodeQL FP note above).
+        assert any(h == "api.anthropic.com" for h in hosts), (
+            f"production-format row must appear in top_destinations; got {hosts!r}"
+        )
 
         # (c) last_seen reflects the production-format row
         assert result.last_seen is not None
