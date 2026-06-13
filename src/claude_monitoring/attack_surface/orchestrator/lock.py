@@ -112,6 +112,24 @@ class ScanLock:
             if self._process_lock.locked():
                 self._process_lock.release()
 
+    def read_holder_trigger(self) -> str | None:
+        """Return the trigger of the current lock holder, or ``None`` if
+        no lock file exists / can't be parsed.
+
+        Added in P4.5: the scheduler reads this on ``acquire()=False`` so
+        it can emit the spec §8.6 / directive L585 deferral log line
+        (``"Scheduled scan deferred — on-demand scan in progress"``)
+        only when the holder is actually an on-demand or cli scan.
+        """
+        if not self.lock_path.exists():
+            return None
+        try:
+            data = json.loads(self.lock_path.read_text())
+        except (OSError, json.JSONDecodeError):
+            return None
+        trigger = data.get("trigger")
+        return trigger if isinstance(trigger, str) else None
+
     def _is_stale(self) -> bool:
         try:
             data = json.loads(self.lock_path.read_text())

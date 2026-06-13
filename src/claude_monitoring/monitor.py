@@ -2074,6 +2074,9 @@ def backfill_existing_sessions(watcher):
 # Live code in discovery_scheduler.py. Re-exported here so callers
 # (tests, start_monitoring(), first-party consumers that monkeypatch
 # monitor.X) keep working without source changes.
+from claude_monitoring.cve_poll_scheduler import (  # noqa: E402
+    cve_poll_loop as _cve_poll_loop,
+)
 from claude_monitoring.discovery_scheduler import (  # noqa: E402, F401
     DISCOVERY_CADENCE as _DISCOVERY_CADENCE,
 )
@@ -2337,6 +2340,12 @@ def start_monitoring():
         target=_discovery_scheduler_loop, daemon=True, name="DiscoveryScheduler"
     )
     discovery_scheduler_thread.start()
+
+    # P4.5: separate CVE-poll thread per spec §8.3 ("Separate from asset
+    # discovery. Runs daily."). Reads the same schedule.toml (under
+    # [cve_poll]) so operators have one config surface.
+    cve_poll_thread = threading.Thread(target=_cve_poll_loop, daemon=True, name="CvePollScheduler")
+    cve_poll_thread.start()
 
     def signal_handler(sig, frame):
         print("\n\n  Shutting down...")
