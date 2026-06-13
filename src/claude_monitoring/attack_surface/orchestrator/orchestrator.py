@@ -28,6 +28,7 @@ import logging
 import sqlite3
 import time
 from dataclasses import dataclass, field
+from typing import Any
 
 from claude_monitoring.attack_surface.activity import (
     correlate_asset_activity,
@@ -238,7 +239,12 @@ class DiscoveryOrchestrator:
                 # row itself. Per-item isolation lives inside _score_assets;
                 # an exception there does NOT propagate.
                 score_results = self._score_assets(assets)
-                self._persist_assets(assets, scan_time=started_at, score_results=score_results)
+                self._persist_assets(
+                    assets,
+                    scan_time=started_at,
+                    score_results=score_results,
+                    discovery_run_id=run_id,
+                )
                 audit.record_run_finished(
                     self.conn,
                     run_id,
@@ -543,6 +549,7 @@ ON CONFLICT(id) DO UPDATE SET
         scan_time: float,
         *,
         score_results: dict[str, tuple[RiskScoreResult, CVEResult | None, frozenset[OntologyCategory]]] | None = None,
+        discovery_run_id: int = 0,
     ) -> None:
         """UPSERT assets into the `assets` table.
 
@@ -635,6 +642,84 @@ ON CONFLICT(id) DO UPDATE SET
                         risk_factors_json,
                     ),
                 )
+                # P4.4: append to asset_history when state actually changed
+                # since the last scan. Per-item isolated — a history-write
+                # failure on one asset MUST NOT abort the rest of the loop
+                # (`project_v022_per_item_isolation`).
+                try:
+                    self._record_history(
+                        self.conn,
+                        asset,
+                        scan_time=scan_time,
+                        discovery_run_id=discovery_run_id,
+                        ontology_tags_json=ontology_tags_json,
+                        risk_score=risk_score,
+                        risk_band=risk_band,
+                        risk_factors_json=risk_factors_json,
+                    )
+                except Exception as exc:
+                    logger.warning("asset_history write failed for %s: %s", asset.id, exc)
+
+    def _record_history(
+        self,
+        conn: sqlite3.Connection,
+        asset: Asset,
+        *,
+        scan_time: float,
+        discovery_run_id: int,
+        ontology_tags_json: str | None,
+        risk_score: int | None,
+        risk_band: str | None,
+        risk_factors_json: str | None,
+    ) -> None:
+        """Append one asset_history row when state changed since last scan.
+
+        State for diff purposes (D1, judge p4.4.a3 APPROVE):
+        {current_state, ontology_tags, risk_score, risk_band,
+        risk_factors, version}. Excludes last_seen/last_scanned which
+        change every scan — including them would defeat "only on change".
+
+        Diff shape (D2): per-field {old, new}; special token
+        `_kind: "first_seen"` for the initial discovery row.
+
+        Snapshot (D3): full materialized state dict.
+
+        Run attribution (D4): integer FK to discovery_runs.id, not a
+        float-equality timestamp join.
+        """
+        snapshot = {
+            "current_state": asset.current_state,
+            "ontology_tags": json.loads(ontology_tags_json) if ontology_tags_json else None,
+            "risk_score": risk_score,
+            "risk_band": risk_band,
+            "risk_factors": json.loads(risk_factors_json) if risk_factors_json else None,
+            "version": asset.version,
+        }
+        prev_row = conn.execute(
+            "SELECT state_snapshot FROM asset_history WHERE asset_id = ? ORDER BY scan_timestamp DESC LIMIT 1",
+            (asset.id,),
+        ).fetchone()
+        if prev_row is None:
+            diff: dict[str, Any] = {"_kind": "first_seen"}
+        else:
+            prev_snapshot = json.loads(prev_row[0])
+            diff = {}
+            for field_name, value in snapshot.items():
+                if prev_snapshot.get(field_name) != value:
+                    diff[field_name] = {"old": prev_snapshot.get(field_name), "new": value}
+            if not diff:
+                return  # No-op: nothing changed since last scan.
+        conn.execute(
+            "INSERT INTO asset_history (asset_id, scan_timestamp, discovery_run_id, "
+            "state_snapshot, changes_from_previous) VALUES (?, ?, ?, ?, ?)",
+            (
+                asset.id,
+                scan_time,
+                discovery_run_id or None,
+                json.dumps(snapshot),
+                json.dumps(diff),
+            ),
+        )
 
 
 # ---------------------------------------------------------------------------

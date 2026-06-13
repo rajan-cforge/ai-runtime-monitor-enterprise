@@ -57,6 +57,8 @@ EXPECTED_INDEXES = {
     "idx_cve_cache_ecosystem",
     "idx_cve_cache_fetched",
     "idx_runs_started",
+    # P4.4 (v0.2.2.002 amendment): asset_history.discovery_run_id FK index.
+    "idx_history_run",
 }
 
 
@@ -217,6 +219,11 @@ class TestP02SchemaCreation:
             "scan_timestamp",
             "state_snapshot",
             "changes_from_previous",
+            # P4.4 (v0.2.2.002 amendment): exact integer FK to discovery_runs(id)
+            # — replaces the fragile timestamp-equality join. PRAGMA
+            # foreign_keys is OFF per P0.2 deviation #3, so the REFERENCES
+            # clause is documentary; orphan FKs render trigger="unknown".
+            "discovery_run_id",
         }
         assert set(cols.keys()) == expected_columns
         assert cols["asset_id"][1] == 1

@@ -233,3 +233,64 @@ def get_asset_detail(db: sqlite3.Connection, params: dict[str, list[str]]) -> tu
     if row is None:
         return {"error": "not found", "id": asset_id}, 404
     return render_asset_row(row), 200
+
+
+def get_asset_history(db: sqlite3.Connection, asset_id: str) -> tuple[dict[str, Any], int]:
+    """P4.4 temporal audit trail. Returns reverse-chronological history
+    rows for ``asset_id`` joined to ``discovery_runs`` for trigger
+    attribution. LEFT JOIN renders orphan-FK rows with
+    ``trigger="unknown"`` so the endpoint never 500s on a half-consistent
+    DB.
+
+    Returns ``(payload, status_code)``. ``404`` if the asset itself
+    doesn't exist; ``200`` with ``{"history": []}`` if the asset exists
+    but has no history rows yet (just discovered, or pre-P4.4 DB).
+    """
+    if not asset_id:
+        return {"error": "missing id"}, 400
+    exists = db.execute("SELECT 1 FROM assets WHERE id = ?", (asset_id,)).fetchone()
+    if exists is None:
+        return {"error": "not found", "id": asset_id}, 404
+    rows = db.execute(
+        "SELECT h.scan_timestamp, h.discovery_run_id, h.state_snapshot, "
+        "h.changes_from_previous, COALESCE(r.trigger, 'unknown') AS trigger "
+        "FROM asset_history h "
+        "LEFT JOIN discovery_runs r ON r.id = h.discovery_run_id "
+        "WHERE h.asset_id = ? "
+        "ORDER BY h.scan_timestamp DESC",
+        (asset_id,),
+    ).fetchall()
+    history = []
+    for r in rows:
+        history.append(
+            {
+                "scan_timestamp": r["scan_timestamp"] if hasattr(r, "keys") else r[0],
+                "discovery_run_id": r["discovery_run_id"] if hasattr(r, "keys") else r[1],
+                "state_snapshot": r["state_snapshot"] if hasattr(r, "keys") else r[2],
+                "changes_from_previous": r["changes_from_previous"] if hasattr(r, "keys") else r[3],
+                "trigger": r["trigger"] if hasattr(r, "keys") else r[4],
+            }
+        )
+    return {"history": history}, 200
+
+
+def get_new_in_24h(db: sqlite3.Connection) -> tuple[dict[str, Any], int]:
+    """Count of assets with ``first_seen`` within the last 24 hours.
+
+    Q1 data-truthfulness condition (judge p4.4.a3 ratification): distinguish
+    ``no_runs`` (zero discovery_runs rows) from ``no_new`` (runs exist
+    but zero assets are new in window) from ``ok`` (positive count).
+    The UI MUST render distinct copy per state so an operator never
+    sees a bare ``0`` that conflates "never ran" with "ran, found
+    nothing new".
+    """
+    import time as _t
+
+    runs_count = db.execute("SELECT COUNT(*) FROM discovery_runs").fetchone()[0]
+    if runs_count == 0:
+        return {"count": 0, "status": "no_runs"}, 200
+    cutoff = _t.time() - 24 * 3600
+    new_count = db.execute("SELECT COUNT(*) FROM assets WHERE first_seen >= ?", (cutoff,)).fetchone()[0]
+    if new_count == 0:
+        return {"count": 0, "status": "no_new"}, 200
+    return {"count": new_count, "status": "ok"}, 200

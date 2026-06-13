@@ -151,8 +151,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
             "/api/supply-chain/watchlist": self._api_supply_chain_watchlist,
             "/api/browser/extension-health": self._api_browser_extension_health,
             "/api/assets": self._api_assets,
+            "/api/assets/new-in-24h": self._api_assets_new_in_24h,
             "/api/asset_detail": self._api_asset_detail,
             "/api/asset_activity": self._api_asset_activity,
+            "/api/asset_history": self._api_asset_history,
         }
 
         # Match path prefixes for dynamic routes
@@ -161,6 +163,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
             if remainder.endswith("/activity"):
                 params["id"] = [remainder[: -len("/activity")]]
                 path = "/api/asset_activity"
+            elif remainder.endswith("/history"):
+                params["id"] = [remainder[: -len("/history")]]
+                path = "/api/asset_history"
             else:
                 params["id"] = [remainder]
                 path = "/api/asset_detail"
@@ -2271,6 +2276,35 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self._send_json({"error": "not found", "id": asset_id}, 404)
             return
         self._send_json(result.to_payload())
+
+    def _api_asset_history(self, params):
+        """Per-asset temporal audit trail — P4.4 (spec §9.1 + amendment).
+
+        Returns reverse-chronological history rows for one asset, each
+        joined to its producing discovery_runs row for trigger
+        attribution. LEFT JOIN renders ``trigger="unknown"`` for orphan
+        FKs (deleted run) so the endpoint never 500s on a half-consistent
+        DB. Same ``_check_auth`` gate as every other ``/api/*`` route.
+        """
+        from claude_monitoring.attack_surface.dashboard_api import get_asset_history
+
+        asset_id = params.get("id", [""])[0]
+        if not asset_id:
+            self._send_json({"error": "missing id"}, 400)
+            return
+        payload, status = get_asset_history(get_thread_db(), asset_id)
+        self._send_json(payload, status)
+
+    def _api_assets_new_in_24h(self, params):
+        """Count assets with first_seen within the last 24h. Q1
+        data-truthfulness condition (judge p4.4.a3): distinguish
+        ``no_runs`` (discovery never executed) from ``no_new`` (runs
+        exist, zero new in window). UI must render different copy.
+        """
+        from claude_monitoring.attack_surface.dashboard_api import get_new_in_24h
+
+        payload, status = get_new_in_24h(get_thread_db())
+        self._send_json(payload, status)
 
     # ── Report endpoint ────────────────────────────────────────
 

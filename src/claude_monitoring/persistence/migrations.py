@@ -315,6 +315,39 @@ statements are needed. Exercised by the round-trip rollback test and the
 """
 
 
+_P4_4_HISTORY_RUN_ID_UP_SQL = """\
+ALTER TABLE asset_history ADD COLUMN discovery_run_id INTEGER REFERENCES discovery_runs(id);
+CREATE INDEX idx_history_run ON asset_history(discovery_run_id);
+"""
+"""Up-SQL for v0.2.2.002 — asset_history.discovery_run_id FK.
+
+P4.4 (judge p4.4.a3 APPROVE 2026-06-13) — spec §9.1 amendment. Adds an
+exact integer FK so the cross-table trigger-attribution join is
+`asset_history.discovery_run_id == discovery_runs.id`, not a fragile
+float-equality on timestamps. The prior draft assumed
+``discovery_runs.started_at == assets.last_scanned`` via a shared
+``time.time()`` value, but the orchestrator's ``started_at`` and
+``audit.record_run_started``'s internal ``time.time()`` are distinct
+calls producing distinct floats — judge p4.4.a2 caught this.
+
+PRAGMA foreign_keys is OFF (per P0.2 deviation #3), so the REFERENCES
+clause is documentary; orphan FK values render `trigger="unknown"` in
+the endpoint via LEFT JOIN.
+"""
+
+
+_P4_4_HISTORY_RUN_ID_DOWN_SQL = """\
+DROP INDEX IF EXISTS idx_history_run;
+ALTER TABLE asset_history DROP COLUMN discovery_run_id;
+"""
+"""Down-SQL for v0.2.2.002.
+
+Reverses the P4.4 amendment cleanly. SQLite 3.35+ supports
+``ALTER TABLE ... DROP COLUMN`` natively; the round-trip rollback gate
+exercises this path.
+"""
+
+
 MIGRATIONS: list[Migration] = [
     Migration(
         version="0.2.2.001",
@@ -325,6 +358,16 @@ MIGRATIONS: list[Migration] = [
         ),
         up_sql=_P0_2_ATTACK_SURFACE_UP_SQL,
         down_sql=_P0_2_ATTACK_SURFACE_DOWN_SQL,
+    ),
+    Migration(
+        version="0.2.2.002",
+        description=(
+            "P4.4: asset_history.discovery_run_id INTEGER FK to discovery_runs(id) "
+            "+ idx_history_run; replaces fragile timestamp-equality join with "
+            "exact integer FK (spec §9.1 amendment per judge p4.4.a3)"
+        ),
+        up_sql=_P4_4_HISTORY_RUN_ID_UP_SQL,
+        down_sql=_P4_4_HISTORY_RUN_ID_DOWN_SQL,
     ),
 ]
 """Ordered registry of migrations.
