@@ -204,29 +204,16 @@ def test_update_baseline_fails_when_no_path_found(tmp_path, monkeypatch, capsys)
     assert "ERROR" in out
 
 
-def test_committed_baseline_has_pr121_transition_entries():
-    """feat/daemon-discovery-scheduler (PR #121) transition floors.
-
-    Per the transient-floor rule documented in the baseline header,
-    these entries are removed in a one-line follow-up commit
-    immediately after #121 merges (same pattern as #120 removing
-    #118's entries). The mechanism stays in place for the next
-    legitimate structural change.
-
-    Evidence backing these floors (baseline header):
-      overall coverage: 82.00% -> 82.16% (+0.16%, IMPROVED)
-      migration accounting: ~85 covered lines moved from monitor.py
-      to discovery_scheduler.py (100% covered by 17 tests); ~1 net
-      uncovered line gained in monitor.py (call site in
-      start_monitoring, which has heavy daemon side effects no test
-      exercises end-to-end).
+def test_committed_baseline_is_empty_post_121_transition():
+    """Per the transient-floor rule, #121's entries were removed once
+    the split landed on main (commit 1127ba7). The baseline is now
+    empty — monitor.py and discovery_scheduler.py are protected by
+    the ordinary diff-vs-main gate. The mechanism stays in place for
+    the next legitimate structural change.
     """
     mod = _load_module()
     floors = mod.load_baseline()
-    assert floors == {
-        "src/claude_monitoring/discovery_scheduler.py": 100.00,
-        "src/claude_monitoring/monitor.py": 68.89,
-    }, f"unexpected baseline contents: {floors!r}"
+    assert floors == {}, f"baseline should be empty post-#121; got {floors!r}"
 
 
 def test_baseline_file_has_documented_refresh_discipline():
