@@ -30,8 +30,8 @@ src/claude_monitoring/dashboard_handler.py:532: empty 'except Exception: pass' (
 src/claude_monitoring/dashboard_handler.py:709: empty 'except Exception: pass' (silently swallowing errors)
 src/claude_monitoring/dashboard_handler.py:79: public function 'log_message' missing docstring
 src/claude_monitoring/dashboard_handler.py:954: empty 'except Exception: pass' (silently swallowing errors)
-src/claude_monitoring/db.py:369: empty 'except Exception: pass' (silently swallowing errors)
-src/claude_monitoring/db.py:436: empty 'except Exception: pass' (silently swallowing errors)
+src/claude_monitoring/db.py:378: empty 'except Exception: pass' (silently swallowing errors)
+src/claude_monitoring/db.py:445: empty 'except Exception: pass' (silently swallowing errors)
 src/claude_monitoring/db.py:74: empty 'except Exception: pass' (silently swallowing errors)
 src/claude_monitoring/lifecycle.py:1002: empty 'except Exception: pass' (silently swallowing errors)
 src/claude_monitoring/lifecycle.py:102: public function 'flush' missing docstring

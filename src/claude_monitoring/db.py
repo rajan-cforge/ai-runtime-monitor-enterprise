@@ -75,6 +75,15 @@ def init_db(db_path=None):
         pass
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
+    # Bump busy_timeout from the 5s default to 30s. Surfaced 2026-06-13
+    # by the feat/daemon-discovery-scheduler operator-path demo: the
+    # scheduler's `_persist_assets` (1094 UPSERTs in one transaction)
+    # collided with the live JSONLSessionWatcher's writer and raised
+    # "database is locked" inside 5s. 30s gives a working window that
+    # also covers any future bulk-write paths without changing schema
+    # or splitting the persist transaction. SQLite WAL keeps readers
+    # concurrent regardless.
+    conn.execute("PRAGMA busy_timeout=30000")
 
     # v0.2.2 P0.0: versioned-migration framework runs first. In-process
     # startup pattern — check_daemon=False because the daemon is migrating
@@ -455,6 +464,10 @@ def get_thread_db(db_path=None):
     conn = _connect(str(db_path), check_same_thread=False)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
+    # See init_db for the busy_timeout rationale (operator-path demo
+    # 2026-06-13). Mirror it here so the per-thread dashboard conns
+    # also tolerate the JSONLSessionWatcher's bulk writes.
+    conn.execute("PRAGMA busy_timeout=30000")
     conn.row_factory = sqlite3.Row
     return conn
 

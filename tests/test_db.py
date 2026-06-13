@@ -33,6 +33,16 @@ class TestInitDb:
         assert mode == "wal"
         conn.close()
 
+    def test_busy_timeout_30s(self, tmp_path):
+        """The discovery-scheduler operator-path demo (2026-06-13)
+        revealed the default 5s busy_timeout was too short for the
+        scheduler's ~1094-asset persist to outlast the
+        JSONLSessionWatcher's bulk writes. 30s gives headroom."""
+        conn, _ = self._init(tmp_path)
+        timeout = conn.execute("PRAGMA busy_timeout").fetchone()[0]
+        assert timeout == 30000, f"busy_timeout should be 30000ms, got {timeout}"
+        conn.close()
+
     def test_session_insert_update(self, tmp_path):
         conn, _ = self._init(tmp_path)
         conn.execute(
