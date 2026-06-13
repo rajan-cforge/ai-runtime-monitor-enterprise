@@ -358,6 +358,146 @@ class TestActivityRecencyFactorWiring:
         assert _compute_activity_recency(None) == 0.0
         assert _compute_activity_recency({}) == 0.0
 
+    def test_recency_0_when_last_seen_seconds_missing(self):
+        """`runtime_activity` may be a dict with no `last_seen_seconds`
+        key (e.g. the orchestrator skipped this asset). The scoring
+        function must fall through to the `seconds_ago is None` early
+        return, not crash on `float(None)`."""
+        from claude_monitoring.attack_surface.risk.scoring import (
+            _compute_activity_recency,
+        )
+
+        assert _compute_activity_recency({"recency_score": None}) == 0.0
+        assert _compute_activity_recency({"last_seen_seconds": None}) == 0.0
+
+    def test_recency_0_for_more_than_30_days(self):
+        """Activity older than 30 days falls through every bucket and
+        lands on the final `return 0.0` per spec §6.1."""
+        from claude_monitoring.attack_surface.risk.scoring import (
+            _compute_activity_recency,
+        )
+
+        recency = _compute_activity_recency({"last_seen_seconds": 45 * 86400, "recency_score": None})
+        assert recency == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Orchestrator activity-wiring (lines 449/452/498-507 in orchestrator.py)
+# ---------------------------------------------------------------------------
+
+
+class TestOrchestratorActivityWiring:
+    """The orchestrator's `_correlate_activity` is the glue between the
+    capture layer and the scoring formula. Without these tests the
+    method ships uncovered — coverage-ratchet caught the drop on PR #123
+    (orchestrator.py 96.30% → 92.79%)."""
+
+    def _make_asset(self, name: str, source: str):
+        from claude_monitoring.attack_surface.asset import Asset
+
+        return Asset(
+            id=f"id-{name}-{source}",
+            type="ai_tool",
+            parent_asset_id=None,
+            name=name,
+            version=None,
+            install_path=None,
+            source=source,
+            current_state={},
+            discovered_at=0.0,
+        )
+
+    def _make_orchestrator(self, tmp_path, conn):
+        from claude_monitoring.attack_surface.orchestrator import (
+            DiscoveryOrchestrator,
+            ScanLock,
+        )
+
+        lock = ScanLock(lock_path=tmp_path / ".lock")
+        return DiscoveryOrchestrator(sources=[], lock=lock, persistence_connection=conn)
+
+    def test_correlate_activity_skips_structural_n_a_sources(self, tmp_path):
+        """Sources whose `expected_hosts_for_source` returns None
+        (python-packages, MCP configs) must be skipped before the
+        correlator runs — leaves `runtime_activity=None` per spec
+        §7.1.1 amendment."""
+        conn = init_db(tmp_path / "test.db")
+        o = self._make_orchestrator(tmp_path, conn)
+        asset = self._make_asset("requests", "python-packages")
+        result = o._correlate_activity([asset])
+        assert result == {}
+        conn.close()
+
+    def test_correlate_activity_populates_for_correlatable_asset_with_traffic(self, tmp_path, monkeypatch):
+        """When the correlator returns a non-None `last_seen`, the
+        orchestrator surfaces `{asset.id: {"last_seen_seconds": float}}`
+        for the scoring path."""
+        conn = init_db(tmp_path / "test.db")
+        # Seed an api_calls row for the chrome-ext expected host so
+        # the correlator returns last_seen != None.
+        now_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(_NOW - 1800))
+        conn.execute(
+            """INSERT INTO api_calls (timestamp, session_id, destination_host,
+                                       destination_service, request_size_bytes,
+                                       response_size_bytes)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (now_iso, "test-sess", "api.anthropic.com", "anthropic_api", 100, 200),
+        )
+        conn.commit()
+        # Freeze the correlator clock so the seeded row falls in window.
+        monkeypatch.setattr(
+            "claude_monitoring.attack_surface.activity.correlator._now",
+            lambda: _NOW,
+        )
+        o = self._make_orchestrator(tmp_path, conn)
+        asset = self._make_asset("claude", "chromium-extensions")
+        # Insert the asset so correlate_asset_activity finds the source row.
+        conn.execute(
+            """INSERT INTO assets (id, type, name, source, first_seen, last_seen, last_scanned, current_state)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (asset.id, asset.type, asset.name, asset.source, _NOW - 86400, _NOW, _NOW, "{}"),
+        )
+        conn.commit()
+        result = o._correlate_activity([asset])
+        assert asset.id in result
+        assert result[asset.id]["last_seen_seconds"] >= 0.0
+        conn.close()
+
+    def test_correlate_activity_per_item_isolation_swallows_exceptions(self, tmp_path, monkeypatch):
+        """Per-item isolation contract: a correlator exception on one
+        asset must NOT propagate or affect other assets. Result dict
+        simply omits the failing asset (scoring sees runtime_activity=None
+        → recency=0)."""
+        conn = init_db(tmp_path / "test.db")
+        o = self._make_orchestrator(tmp_path, conn)
+
+        def _boom(*_args, **_kwargs):
+            raise RuntimeError("simulated correlator failure")
+
+        monkeypatch.setattr(
+            "claude_monitoring.attack_surface.orchestrator.orchestrator.correlate_asset_activity",
+            _boom,
+        )
+        asset = self._make_asset("claude", "chromium-extensions")
+        result = o._correlate_activity([asset])
+        # Failure does NOT raise; failing asset is simply absent.
+        assert result == {}
+        conn.close()
+
+    def test_correlate_activity_returns_empty_when_no_conn(self, tmp_path):
+        """When the orchestrator has no DB connection (defensive guard
+        in `_correlate_activity`), it must short-circuit cleanly."""
+        from claude_monitoring.attack_surface.orchestrator import (
+            DiscoveryOrchestrator,
+            ScanLock,
+        )
+
+        lock = ScanLock(lock_path=tmp_path / ".lock")
+        o = DiscoveryOrchestrator(sources=[], lock=lock)
+        asset = self._make_asset("claude", "chromium-extensions")
+        result = o._correlate_activity([asset])
+        assert result == {}
+
 
 # ---------------------------------------------------------------------------
 # Source → expected hosts contract
