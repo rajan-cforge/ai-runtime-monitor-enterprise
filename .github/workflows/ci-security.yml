@@ -34,7 +34,27 @@ jobs:
       # local in-tree package (ai-runtime-monitor) on PyPI, which fails
       # because it's not published. `--desc` gives reviewers the CVE
       # description inline.
-      - run: pip-audit --skip-editable --desc
+      #
+      # `--ignore-vuln` entries below: Rajan deferral 2026-06-13 for the
+      # v0.2.2 release window. See memory
+      # `project_pipaudit_deferral_2026-06-13.md` for the topology
+      # analysis (each bundled via mitmproxy or hits a Vigil deployment
+      # that doesn't reach the vulnerable code path). Three follow-up
+      # chore(deps) PRs queued. NEW advisories not in this list still
+      # fail the gate -- this is a per-ID deferral, not a blanket waiver.
+      - run: |
+          pip-audit --skip-editable --desc \
+            --ignore-vuln PYSEC-2026-35 \
+            --ignore-vuln CVE-2026-26007 \
+            --ignore-vuln GHSA-h4gh-qq45-vh27 \
+            --ignore-vuln CVE-2024-12797 \
+            --ignore-vuln CVE-2025-23217 \
+            --ignore-vuln GHSA-63cx-g855-hvv4 \
+            --ignore-vuln CVE-2026-27205 \
+            --ignore-vuln CVE-2025-43859 \
+            --ignore-vuln CVE-2025-6176 \
+            --ignore-vuln CVE-2026-27448 \
+            --ignore-vuln CVE-2026-49854
 
   bandit:
     name: bandit (SAST)

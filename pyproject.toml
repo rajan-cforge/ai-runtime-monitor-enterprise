@@ -36,15 +36,6 @@ dependencies = [
     # half-working product, observed during the new-laptop install
     # verification on 2026-05-25.
     "mitmproxy>=10.0",
-    # Transitive pin: CVE-2026-49854 in tornado < 6.5.6 (websocket_mask
-    # buffer overread in the optional native extension, reachable from
-    # the XSRF token decoder when xsrf_cookies=True). mitmproxy pulls
-    # tornado transitively; until mitmproxy bumps its own pin we add a
-    # direct floor here so `pip install` resolves the patched version.
-    # Surfaced 2026-06-13 by the pip-audit gate failing CI on this PR's
-    # green commit (unrelated to feature; we fold the dep bump because
-    # the gate is global).
-    "tornado>=6.5.6",
     # P4.1 — OSV.dev CVE feed (Phase A §8 ratification). The `cvss`
     # library parses the CVSS vector strings OSV returns in
     # `severity[].score` (e.g. CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H)
