@@ -97,6 +97,11 @@ active_cwds_lock = threading.Lock()
 # Plan/subscription detection (populated on startup)
 plan_info = {"is_subscription": False, "plan_tier": ""}
 
+# feat/daemon-discovery-scheduler — see `discovery_scheduler.py` for the
+# loop body, the sweep, and the cadence constants. Re-exported below so
+# tests + first-party consumers that monkeypatch `monitor.X` continue
+# to resolve the same callable.
+
 # Feature B: async scan progress state. Module-level singleton protected
 # by a lock. Shape matches the plan:
 #   running, started_at, finished_at, phase, per_source, totals
@@ -2064,6 +2069,22 @@ def backfill_existing_sessions(watcher):
 
 
 # ─────────────────────────────────────────────────────────────
+# SECTION 10b: DISCOVERY SCHEDULER (re-export)
+# ─────────────────────────────────────────────────────────────
+# Live code in discovery_scheduler.py. Re-exported here so callers
+# (tests, start_monitoring(), first-party consumers that monkeypatch
+# monitor.X) keep working without source changes.
+from claude_monitoring.discovery_scheduler import (  # noqa: E402, F401
+    DISCOVERY_CADENCE as _DISCOVERY_CADENCE,
+)
+from claude_monitoring.discovery_scheduler import (  # noqa: E402
+    discovery_scheduler_loop as _discovery_scheduler_loop,
+)
+from claude_monitoring.discovery_scheduler import (  # noqa: E402
+    finalize_crashed_runs_at_startup as _finalize_crashed_runs_at_startup,
+)
+
+# ─────────────────────────────────────────────────────────────
 # SECTION 11: MAIN ORCHESTRATOR
 # ─────────────────────────────────────────────────────────────
 
@@ -2304,6 +2325,18 @@ def start_monitoring():
 
     watchdog_thread = threading.Thread(target=_watchdog_loop, daemon=True, name="Watchdog")
     watchdog_thread.start()
+
+    # feat/daemon-discovery-scheduler: finalize crashed discovery_runs
+    # before the scheduler launches, so the /api/assets envelope starts
+    # clean regardless of whether the scheduler ever fires. The wrapper
+    # handles conn open/close + fail-open + the operator-visible print;
+    # extracted into discovery_scheduler so the wiring is unit-testable.
+    _finalize_crashed_runs_at_startup()
+
+    discovery_scheduler_thread = threading.Thread(
+        target=_discovery_scheduler_loop, daemon=True, name="DiscoveryScheduler"
+    )
+    discovery_scheduler_thread.start()
 
     def signal_handler(sig, frame):
         print("\n\n  Shutting down...")

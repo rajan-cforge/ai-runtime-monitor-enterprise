@@ -181,12 +181,31 @@ def list_assets(db: sqlite3.Connection, params: dict[str, list[str]]) -> dict[st
         payload.pop("risk_factors", None)
         projected.append(payload)
 
+    # feat/daemon-discovery-scheduler: surface in-flight scan so the UI
+    # can render "Scan running…" instead of an empty table.
+    # `discovery_runs.completed_at IS NULL` is the durable signal — set
+    # by `audit.record_run_started`, cleared on `record_run_finished`.
+    # The startup-sweep in monitor.py closes stale NULL rows from a
+    # SIGKILLed mid-scan, so this query never returns ghost rows.
+    in_flight_row = db.execute(
+        "SELECT trigger, started_at FROM discovery_runs WHERE completed_at IS NULL ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    scan_in_progress = (
+        None
+        if in_flight_row is None
+        else {
+            "trigger": in_flight_row["trigger"],
+            "started_at": in_flight_row["started_at"],
+        }
+    )
+
     return {
         "rows": projected,
         "total": total,
         "limit": limit,
         "offset": offset,
         "unscored_count": unscored_count,
+        "scan_in_progress": scan_in_progress,
     }
 
 

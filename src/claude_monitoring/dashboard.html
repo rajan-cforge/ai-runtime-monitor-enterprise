@@ -3813,16 +3813,45 @@ function renderAssets(data) {
   document.getElementById('assets-page-info').textContent =
     pageStart + '–' + pageEnd + ' of ' + total;
 
-  // Render list rows
+  // Render list rows. Four-case truth table for the scan-in-progress
+  // envelope field (feat/daemon-discovery-scheduler 2026-06-12):
+  //
+  //   rows | scan_in_progress | render
+  //   -----|------------------|------------------------------------------
+  //     0  | null             | "No assets match..." (today's empty state)
+  //     0  | not null         | "Scan running... (Xs in)" panel
+  //    >0  | null             | normal table
+  //    >0  | not null         | normal table + small "scan running" banner
+  //
+  // Operator must never see "no assets" while a scan is grinding -- same
+  // data-truthfulness rule as section 6.10 cve_status hints. All interpolated
+  // values pass through escHtml/escAttr per CLAUDE.md.
   var listEl = document.getElementById('assets-list');
+  var sip = data.scan_in_progress;
+  var sipBanner = '';
+  if (sip) {
+    var sipAgeSec = Math.max(0, Math.round((Date.now() / 1000) - (sip.started_at | 0)));
+    sipBanner = '<div class="scan-running-banner" '
+      + 'style="padding:10px 14px;margin-bottom:8px;background:var(--bg2);'
+      + 'border-left:3px solid var(--accent);color:var(--text2);font-size:13px">'
+      + 'Scan running... ' + escHtml(sipAgeSec + 's in')
+      + ' (trigger: ' + escHtml(String(sip.trigger || '')) + ')'
+      + '. Results may grow as it progresses.'
+      + '</div>';
+  }
   if (rows.length === 0) {
-    listEl.innerHTML = '<div style="padding:16px;color:var(--text2)">No assets match the current filter.</div>';
+    var emptyMsg = sip
+      ? '<div style="padding:16px;color:var(--text2)">'
+        + escHtml('Discovery scan in progress -- assets will appear as they are found.')
+        + '</div>'
+      : '<div style="padding:16px;color:var(--text2)">No assets match the current filter.</div>';
+    listEl.innerHTML = sipBanner + emptyMsg;  // escHtml/escAttr per CLAUDE.md, see comment block above
     document.getElementById('tab-assets-badge').textContent = '';
     return;
   }
   document.getElementById('tab-assets-badge').textContent = String(total);
 
-  listEl.innerHTML = rows.map(renderAssetRow).join('');
+  listEl.innerHTML = sipBanner + rows.map(renderAssetRow).join('');  // escHtml/escAttr per CLAUDE.md, see comment block above
   // Wire click handlers — addEventListener avoids any inline-handler
   // sink that would need escJs.
   Array.from(listEl.querySelectorAll('.asset-row')).forEach(function (el) {
