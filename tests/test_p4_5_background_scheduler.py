@@ -16,6 +16,8 @@ from __future__ import annotations
 import logging
 import time
 
+import pytest
+
 from claude_monitoring.attack_surface.orchestrator import ScanLock
 
 
@@ -92,6 +94,109 @@ class TestSchedulerDeferralLog:
         logger = logging.getLogger("ai-runtime-monitor.test")
         _emit_deferral_log("on_demand", logger)
         assert get_deferral_count() == before + 1
+
+
+class TestEdgeCases:
+    """Coverage for off-cadence + race + exception-fallback paths."""
+
+    def test_deferral_log_when_holder_trigger_is_none(self, caplog):
+        """Race: manual scan finished between failed acquire and the
+        read of the lock file. Holder is None; log generically — don't
+        misattribute as 'on-demand in progress'."""
+        from claude_monitoring.discovery_scheduler import _emit_deferral_log
+
+        logger = logging.getLogger("ai-runtime-monitor.test")
+        with caplog.at_level(logging.INFO, logger="ai-runtime-monitor.test"):
+            _emit_deferral_log(None, logger)
+        assert any(
+            "scheduled scan deferred (no holder visible at log time)" in record.message for record in caplog.records
+        )
+
+    def test_compute_next_sleep_seconds_with_off_cadence_falls_back(self, tmp_path, monkeypatch):
+        """When discovery cadence is "off", `next_slot()` returns None
+        and the helper should fall back to the default."""
+        from claude_monitoring.discovery_scheduler import (
+            DISCOVERY_CADENCE,
+            _compute_next_sleep_seconds,
+        )
+
+        path = tmp_path / "off.toml"
+        path.write_text('[discovery]\ncadence = "off"\n')
+        monkeypatch.setenv("VIGIL_SCHEDULE_CONFIG", str(path))
+        assert _compute_next_sleep_seconds() == DISCOVERY_CADENCE
+
+    def test_compute_next_sleep_seconds_exception_falls_back(self, monkeypatch):
+        """If `load_schedule_config` raises (e.g. disk I/O error), the
+        helper must NOT propagate — it returns the default cadence so the
+        loop keeps running."""
+        from claude_monitoring import discovery_scheduler
+
+        def _boom(*_a, **_k):
+            raise RuntimeError("simulated disk failure")
+
+        monkeypatch.setattr(discovery_scheduler, "load_schedule_config", _boom)
+        assert discovery_scheduler._compute_next_sleep_seconds() == discovery_scheduler.DISCOVERY_CADENCE
+
+    def test_loop_emits_deferral_when_lock_acquired_false(self, tmp_path, monkeypatch, caplog):
+        """Integration: when orchestrator.scan returns lock_acquired=False,
+        the loop reads holder trigger + emits the §8.6 line, then continues."""
+        from claude_monitoring import discovery_scheduler
+
+        sleeps: list[float] = []
+        scan_count = [0]
+
+        def fake_sleep(secs: float) -> None:
+            sleeps.append(secs)
+            if len(sleeps) >= 2:
+                raise SystemExit("stop")
+
+        # Pre-acquire the ScanLock as on-demand so the scheduler sees a
+        # genuine on_demand holder and emits the verbatim §8.6 message.
+        from claude_monitoring.attack_surface.orchestrator import ScanLock
+
+        # Pin the lock-file location so the test reader hits the same file.
+        lock_path = tmp_path / ".lock"
+        held_lock = ScanLock(lock_path=lock_path)
+        assert held_lock.acquire(trigger="on_demand") is True
+        monkeypatch.setattr(
+            discovery_scheduler,
+            "ScanLock",
+            lambda **kw: ScanLock(lock_path=lock_path),
+        )
+
+        class _FakeResult:
+            lock_acquired = False
+            assets = []  # type: ignore[var-annotated]
+            total_duration_sec = 0.0
+
+        class _FakeOrch:
+            def __init__(self, *_, **__):
+                pass
+
+            def scan(self, *, trigger):
+                scan_count[0] += 1
+                return _FakeResult()
+
+        monkeypatch.setattr(discovery_scheduler.time, "sleep", fake_sleep)
+        monkeypatch.setattr(discovery_scheduler, "DiscoveryOrchestrator", _FakeOrch)
+        monkeypatch.setattr(discovery_scheduler, "default_sources", lambda: [])
+        monkeypatch.setattr(
+            discovery_scheduler,
+            "_compute_next_sleep_seconds",
+            lambda: 60,
+        )
+
+        try:
+            with caplog.at_level(logging.INFO, logger="ai-runtime-monitor"):
+                with pytest.raises(SystemExit):
+                    discovery_scheduler.discovery_scheduler_loop()
+        finally:
+            held_lock.release()
+
+        # The verbatim §8.6 / L585 message landed on at least one cycle.
+        assert any(
+            "Scheduled scan deferred — on-demand scan in progress" in record.message for record in caplog.records
+        )
 
 
 class TestSchedulerSurvivesStaleNullDiscoveryRow:
