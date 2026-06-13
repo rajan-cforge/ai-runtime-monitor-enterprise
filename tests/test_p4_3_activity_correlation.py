@@ -412,3 +412,96 @@ class TestRouteRegistration:
         assert hasattr(DashboardHandler, "_api_asset_activity"), (
             "DashboardHandler must expose _api_asset_activity handler method"
         )
+
+
+# ---------------------------------------------------------------------------
+# Production-timestamp-format regression (judge p4.3.a1 APPROVE-WITH-FIX)
+# ---------------------------------------------------------------------------
+
+
+class TestProductionTimestampFormatContract:
+    """The lexicographic window comparison + `_parse_capture_ts` must hold
+    against the EXACT timestamp format `watch.py` writes into
+    `api_calls.timestamp`, not the sanitized seconds+Z form the other
+    tests use to match the correlator's internal `_iso()` boundary
+    generator.
+
+    **Load-bearing format dependency:** production writes
+    ``datetime.now(timezone.utc).isoformat()`` →
+    ``"2026-06-12T12:34:56.789012+00:00"`` (microseconds + ``+00:00``).
+    The activity window relies on lexicographic ordering of this TEXT
+    column. The fixed-width ``YYYY-MM-DDTHH:MM:SS`` prefix governs
+    ordering for any ≥1s separation — same-second boundary records
+    may be excluded (the conservative direction), never silently
+    included from outside the window. If `watch.py`'s timestamp
+    writing or `api_calls`'s schema ever changes (epoch float, drops
+    the offset, etc.), this test breaks and the window filter needs
+    re-verification.
+    """
+
+    def test_production_iso_format_included_in_window(self, tmp_path, monkeypatch):
+        """Insert a row with the production timestamp format at a known
+        offset inside the 24h window; assert it appears in
+        `top_destinations` and `last_seen` parses correctly through
+        `_parse_capture_ts`, producing the expected `activity_recency`
+        bucket."""
+        import datetime as _dt
+
+        from claude_monitoring.attack_surface.activity.correlator import (
+            _parse_capture_ts,
+            correlate_asset_activity,
+        )
+
+        db_path = tmp_path / "monitor.db"
+        conn = init_db(db_path)
+
+        # Two timestamps in production format. Anchor "now" to a real
+        # wall-clock value so `correlate_asset_activity`'s internal
+        # window math (which uses real time.time()) compares correctly.
+        now_dt = _dt.datetime.now(_dt.timezone.utc)
+        in_window_dt = now_dt - _dt.timedelta(minutes=30)  # 30 min ago
+        in_window_iso = in_window_dt.isoformat()
+        # Sanity-check the format we're asserting: microseconds + +00:00
+        assert "+00:00" in in_window_iso, f"production format expected, got {in_window_iso}"
+        assert "." in in_window_iso, "production format includes microseconds"
+
+        # Insert an asset (chrome ext → correlates to api.anthropic.com)
+        conn.execute(
+            """INSERT INTO assets (id, type, source, name, first_seen, last_seen,
+                                    last_scanned, current_state)
+               VALUES ('chrome-test', 'browser_extension', 'chromium-extensions',
+                       'Test', ?, ?, ?, '{}')""",
+            (now_dt.timestamp(), now_dt.timestamp(), now_dt.timestamp()),
+        )
+        # Insert api_calls row with the PRODUCTION timestamp format
+        conn.execute(
+            """INSERT INTO api_calls (timestamp, session_id, destination_host,
+                                       destination_service, request_size_bytes,
+                                       response_size_bytes)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (in_window_iso, "test-sess", "api.anthropic.com", "anthropic_api", 1000, 2000),
+        )
+        conn.commit()
+
+        # (a) `_parse_capture_ts` correctly handles the production format
+        parsed = _parse_capture_ts(in_window_iso)
+        assert parsed is not None, "production isoformat must parse"
+        assert abs(parsed - in_window_dt.timestamp()) < 1.0, (
+            f"parsed epoch {parsed} should match input {in_window_dt.timestamp()}"
+        )
+
+        # (b) the row is included in the 24h window aggregation
+        result = correlate_asset_activity(conn, "chrome-test", window="24h", capture_ok=True)
+        assert result.data_status == "ok", (
+            f"row in production format must be aggregated; got data_status={result.data_status!r}"
+        )
+        hosts = [d["host"] for d in result.top_destinations]
+        assert "api.anthropic.com" in hosts, (
+            f"production-format row must appear in top_destinations; got {hosts!r}"
+        )
+
+        # (c) last_seen reflects the production-format row
+        assert result.last_seen is not None
+        assert abs(result.last_seen - in_window_dt.timestamp()) < 1.0
+
+        conn.close()
