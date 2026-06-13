@@ -3911,7 +3911,15 @@ async function showAssetDetail(assetId) {
       return;
     }
     var data = await r.json();
-    overlay.innerHTML = renderAssetDetail(data);
+    // Fetch activity in parallel — best-effort; failures are surfaced
+    // as an "(unavailable)" hint, not a blocking error on the detail
+    // view. The activity endpoint inherits the same _check_auth gate.
+    var activity = null;
+    try {
+      var ar = await fetch(API + '/api/asset/' + encodeURIComponent(assetId) + '/activity');
+      if (ar.ok) activity = await ar.json();
+    } catch (e) { /* swallow — best-effort */ }
+    overlay.innerHTML = renderAssetDetail(data, activity);
     document.getElementById('asset-detail-close').addEventListener('click', closeAssetDetail);
   } catch (e) {
     overlay.innerHTML = '<button class="close-btn" id="asset-detail-close">×</button>'
@@ -3924,7 +3932,66 @@ function closeAssetDetail() {
   document.getElementById('asset-detail-overlay').style.display = 'none';
 }
 
-function renderAssetDetail(d) {
+// Per-asset runtime activity rendering. Five data_status states from
+// the P4.3 correlator — each gets a distinct treatment (Q8 rider:
+// `asset_has_no_runtime_correlation` ≠ `correlatable_type_no_activity`
+// per Amendment-C discipline). Server-side did the data fetch; this
+// function only renders. Everything escapes via escHtml/escAttr.
+function renderActivitySection(activity) {
+  if (!activity) {
+    return '<div class="activity-section" style="margin-top:14px;color:var(--text2);font-style:italic;font-size:12px">(activity correlation unavailable)</div>';
+  }
+  var status = activity.data_status || '';
+  var window = activity.window || '24h';
+  var html = '<h4 style="margin:16px 0 4px 0;font-size:12px;color:var(--text2);text-transform:uppercase;letter-spacing:0.04em">Recent activity (last ' + escHtml(window) + ')</h4>';
+
+  if (status === 'asset_has_no_runtime_correlation') {
+    html += '<div style="font-size:12px;color:var(--text2);font-style:italic">'
+      + '(this asset type has no runtime correlation — it\'s an installed software descriptor, not a process with a destination signature)</div>';
+    return html;
+  }
+  if (status === 'capture_off') {
+    html += '<div class="cve-hint cve-hint-warn-low" style="display:block;margin:4px 0">'
+      + 'Activity correlation requires capture enabled. Heartbeat is stale or capture is disabled.</div>';
+    return html;
+  }
+  if (status === 'correlatable_type_no_activity') {
+    html += '<div style="font-size:12px;color:var(--text2);font-style:italic">'
+      + '(no activity observed in this window — the capture layer is recording but this asset\'s expected destinations had zero hits)</div>';
+    return html;
+  }
+
+  // status === "ok"
+  var dests = activity.top_destinations || [];
+  if (dests.length > 0) {
+    html += '<table class="factor-table">';
+    html += '<thead><tr><td style="color:var(--text2);font-size:10px;text-transform:uppercase">Host</td><td style="text-align:right;color:var(--text2);font-size:10px;text-transform:uppercase">Hits</td><td style="text-align:right;color:var(--text2);font-size:10px;text-transform:uppercase">Bytes</td></tr></thead><tbody>';
+    dests.forEach(function (dr) {
+      var kb = (Number(dr.bytes || 0) / 1024).toFixed(0);
+      html += '<tr>'
+        + '<td style="font-family:monospace">' + escHtml(String(dr.host || '')) + '</td>'
+        + '<td>' + escHtml(String(dr.hits || 0)) + '</td>'
+        + '<td>' + escHtml(kb) + ' KB</td>'
+        + '</tr>';
+    });
+    html += '</tbody></table>';
+  }
+  var anomalies = activity.anomalies || [];
+  if (anomalies.length > 0) {
+    html += '<div style="margin-top:6px">';
+    anomalies.forEach(function (a) {
+      var label = (a.kind === 'new_host')
+        ? 'new host: ' + String(a.value || '')
+        : (String(a.kind || '') + ': ' + String(a.value || ''));
+      html += '<span class="cve-hint cve-hint-warn-low" title="appeared after ' + escAttr(String(a.since || '')) + '">'
+        + escHtml(label) + '</span>';
+    });
+    html += '</div>';
+  }
+  return html;
+}
+
+function renderAssetDetail(d, activity) {
   var rf = d.risk_factors || {};
   var contribs = rf.contributions || {};
   var weights = rf.weights || {};
@@ -4027,6 +4094,10 @@ function renderAssetDetail(d) {
   } else if (rf.cve_status === 'ok') {
     html += '<div style="font-size:12px;color:var(--text2);margin-top:8px;font-style:italic">No known vulnerabilities.</div>';
   }
+
+  // P4.3 Runtime activity section (always rendered; per-state content
+  // distinct per Q8 rider).
+  html += renderActivitySection(activity);
 
   return html;
 }
