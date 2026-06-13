@@ -140,18 +140,42 @@ def _compute_max_cve_severity(cves: list[dict] | None) -> float:
 
 
 def _compute_activity_recency(runtime_activity: dict | None) -> float:
-    """Spec §6.1: 100 / 80 / 60 / 30 / 0 by recency bucket. The actual
-    bucketing is the orchestrator's job (it knows clock); this function
-    accepts a pre-computed ``recency_score`` field for Phase 2 testing.
+    """Spec §6.1: 100 / 80 / 60 / 30 / 0 by recency bucket.
 
-    In Phase 2 this is always 0 (P4.3 not shipped). The capability-
-    ladder doc (memory ``project_v022_capability_ladder.md``) is
-    explicit: "no idleness inference from empty runtime_activity" —
-    that's the UI's job (P7.5), NOT the scorer's.
+    Wired by P4.3 (Q9 ratified Rajan 2026-06-12) — reads
+    ``last_seen_seconds`` (seconds-ago, computed by the orchestrator
+    from the activity correlator's ``last_seen`` epoch) and maps to
+    the spec §6.1 buckets:
+
+    - ≤ 1h        → 100 (last hour)
+    - ≤ 24h       → 80
+    - ≤ 7 days    → 60
+    - ≤ 30 days   → 30
+    - > 30 days   → 0 (no recent activity)
+    - missing data → 0 (treated identically — no idleness inference
+      from empty runtime_activity per the capability-ladder doc)
+
+    Backwards-compat: legacy ``recency_score`` field, if present, wins.
+    Used by old test fixtures + Phase 2 scoring tests that pre-date the
+    P4.3 contract; will be removed when those tests are migrated.
     """
     if not runtime_activity:
         return 0.0
-    return float(runtime_activity.get("recency_score", 0))
+    if "recency_score" in runtime_activity and runtime_activity["recency_score"] is not None:
+        return float(runtime_activity["recency_score"])
+    seconds_ago = runtime_activity.get("last_seen_seconds")
+    if seconds_ago is None:
+        return 0.0
+    seconds_ago = float(seconds_ago)
+    if seconds_ago <= 3600:
+        return 100.0
+    if seconds_ago <= 86400:
+        return 80.0
+    if seconds_ago <= 7 * 86400:
+        return 60.0
+    if seconds_ago <= 30 * 86400:
+        return 30.0
+    return 0.0
 
 
 def _check_orphan_derived_tag(ontology_tags: frozenset[OntologyCategory]) -> None:

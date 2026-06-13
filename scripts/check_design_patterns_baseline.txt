@@ -13,23 +13,23 @@ src/claude_monitoring/cleanup.py:104: public function 'count_null_hashes' missin
 src/claude_monitoring/cleanup.py:115: public function 'remove_duplicate_captures' missing docstring
 src/claude_monitoring/cleanup.py:128: public function 'remove_duplicate_visits' missing docstring
 src/claude_monitoring/cleanup.py:141: public function 'remove_empty_sessions' missing docstring
-src/claude_monitoring/dashboard_handler.py:1086: empty 'except Exception: pass' (silently swallowing errors)
-src/claude_monitoring/dashboard_handler.py:1125: empty 'except Exception: pass' (silently swallowing errors)
+src/claude_monitoring/dashboard_handler.py:1092: empty 'except Exception: pass' (silently swallowing errors)
 src/claude_monitoring/dashboard_handler.py:112: public function 'do_GET' missing docstring
-src/claude_monitoring/dashboard_handler.py:1139: empty 'except Exception: pass' (silently swallowing errors)
-src/claude_monitoring/dashboard_handler.py:1202: empty 'except Exception: pass' (silently swallowing errors)
-src/claude_monitoring/dashboard_handler.py:199: public function 'do_POST' missing docstring
-src/claude_monitoring/dashboard_handler.py:2412: empty 'except Exception: pass' (silently swallowing errors)
-src/claude_monitoring/dashboard_handler.py:2429: empty 'except Exception: pass' (silently swallowing errors)
-src/claude_monitoring/dashboard_handler.py:244: public function 'do_OPTIONS' missing docstring
-src/claude_monitoring/dashboard_handler.py:2499: empty 'except Exception: pass' (silently swallowing errors)
-src/claude_monitoring/dashboard_handler.py:2550: empty 'except Exception: pass' (silently swallowing errors)
-src/claude_monitoring/dashboard_handler.py:2692: empty 'except Exception: pass' (silently swallowing errors)
-src/claude_monitoring/dashboard_handler.py:526: empty 'except Exception: pass' (silently swallowing errors)
+src/claude_monitoring/dashboard_handler.py:1131: empty 'except Exception: pass' (silently swallowing errors)
+src/claude_monitoring/dashboard_handler.py:1145: empty 'except Exception: pass' (silently swallowing errors)
+src/claude_monitoring/dashboard_handler.py:1208: empty 'except Exception: pass' (silently swallowing errors)
+src/claude_monitoring/dashboard_handler.py:205: public function 'do_POST' missing docstring
+src/claude_monitoring/dashboard_handler.py:2453: empty 'except Exception: pass' (silently swallowing errors)
+src/claude_monitoring/dashboard_handler.py:2470: empty 'except Exception: pass' (silently swallowing errors)
+src/claude_monitoring/dashboard_handler.py:250: public function 'do_OPTIONS' missing docstring
+src/claude_monitoring/dashboard_handler.py:2540: empty 'except Exception: pass' (silently swallowing errors)
+src/claude_monitoring/dashboard_handler.py:2591: empty 'except Exception: pass' (silently swallowing errors)
+src/claude_monitoring/dashboard_handler.py:2733: empty 'except Exception: pass' (silently swallowing errors)
 src/claude_monitoring/dashboard_handler.py:532: empty 'except Exception: pass' (silently swallowing errors)
-src/claude_monitoring/dashboard_handler.py:709: empty 'except Exception: pass' (silently swallowing errors)
+src/claude_monitoring/dashboard_handler.py:538: empty 'except Exception: pass' (silently swallowing errors)
+src/claude_monitoring/dashboard_handler.py:715: empty 'except Exception: pass' (silently swallowing errors)
 src/claude_monitoring/dashboard_handler.py:79: public function 'log_message' missing docstring
-src/claude_monitoring/dashboard_handler.py:954: empty 'except Exception: pass' (silently swallowing errors)
+src/claude_monitoring/dashboard_handler.py:960: empty 'except Exception: pass' (silently swallowing errors)
 src/claude_monitoring/db.py:378: empty 'except Exception: pass' (silently swallowing errors)
 src/claude_monitoring/db.py:445: empty 'except Exception: pass' (silently swallowing errors)
 src/claude_monitoring/db.py:74: empty 'except Exception: pass' (silently swallowing errors)

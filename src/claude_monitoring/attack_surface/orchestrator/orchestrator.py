@@ -29,6 +29,10 @@ import sqlite3
 import time
 from dataclasses import dataclass, field
 
+from claude_monitoring.attack_surface.activity import (
+    correlate_asset_activity,
+    expected_hosts_for_source,
+)
 from claude_monitoring.attack_surface.asset import Asset
 from claude_monitoring.attack_surface.cves.dispatcher import CVEDispatcher
 from claude_monitoring.attack_surface.cves.types import CVEResult
@@ -436,13 +440,31 @@ class DiscoveryOrchestrator:
         # Rules: reload from YAML every scan so operator edits take
         # effect immediately (Phase A Q4 option (a) ratified).
         rules = load_curated_rules(DEFAULT_RULES_PATH)
+        # P4.3 Q9 wiring: per-asset runtime activity correlation, fed
+        # into `activity_recency` factor. Only attempts correlation for
+        # assets whose source is in the expected-hosts whitelist;
+        # structural-n/a sources (packages, MCP configs) skip the
+        # correlator entirely. Architect-pass + code-reviewer 2026-06-12
+        # caught the missing integration — without this block the
+        # `_compute_activity_recency` wiring is unreachable from the
+        # scheduled scan path even though scoring.py is internally
+        # correct.
+        runtime_activity_by_asset = self._correlate_activity(assets)
         out: dict[str, tuple[RiskScoreResult, CVEResult | None, frozenset[OntologyCategory]]] = {}
         for asset in assets:
             try:
                 tags = map_asset(asset)
                 cve_result = cves_by_asset.get(asset.id)
                 cves = cve_result.cves if cve_result is not None else None
-                score_result = score_asset_with_rules_and_reputation(asset, tags, rules, rep_dispatcher, cves=cves)
+                runtime_activity = runtime_activity_by_asset.get(asset.id)
+                score_result = score_asset_with_rules_and_reputation(
+                    asset,
+                    tags,
+                    rules,
+                    rep_dispatcher,
+                    cves=cves,
+                    runtime_activity=runtime_activity,
+                )
                 out[asset.id] = (score_result, cve_result, tags)
             except Exception as exc:
                 # Architect Q11: per-item isolation. risk_score stays NULL
@@ -452,6 +474,37 @@ class DiscoveryOrchestrator:
                     asset.id,
                     exc,
                 )
+        return out
+
+    def _correlate_activity(self, assets: list[Asset]) -> dict[str, dict | None]:
+        """Per-asset runtime activity correlation for the scoring path.
+
+        Calls `correlate_asset_activity` for assets whose source has an
+        expected-hosts whitelist; returns
+        `{asset.id: {"last_seen_seconds": float}}` for assets with
+        observed activity, omitting structural-n/a + capture-off cases
+        (scoring will see `runtime_activity=None` → 0 recency).
+
+        Per-item isolation: a correlation failure on asset X must not
+        affect asset Y (`project_v022_per_item_isolation`). Each
+        correlation call is wrapped in try/except.
+        """
+        out: dict[str, dict | None] = {}
+        if self.conn is None:
+            return out
+        # Activity_recency cap-time clock — single now() per scan so
+        # all per-asset bucketing aligns to the same moment.
+        scan_clock = time.time()
+        for asset in assets:
+            if expected_hosts_for_source(asset.source) is None:
+                continue  # Structural n/a — leaves runtime_activity=None.
+            try:
+                result = correlate_asset_activity(self.conn, asset.id, window="24h")
+                if result.last_seen is not None:
+                    seconds_ago = max(0.0, scan_clock - result.last_seen)
+                    out[asset.id] = {"last_seen_seconds": seconds_ago}
+            except Exception as exc:
+                logger.warning("activity correlation failed for %s: %s", asset.id, exc)
         return out
 
     # ------------------------------------------------------------------

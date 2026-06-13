@@ -152,12 +152,18 @@ class DashboardHandler(BaseHTTPRequestHandler):
             "/api/browser/extension-health": self._api_browser_extension_health,
             "/api/assets": self._api_assets,
             "/api/asset_detail": self._api_asset_detail,
+            "/api/asset_activity": self._api_asset_activity,
         }
 
         # Match path prefixes for dynamic routes
         if path.startswith("/api/asset/"):
-            params["id"] = [path.split("/api/asset/", 1)[1]]
-            path = "/api/asset_detail"
+            remainder = path.split("/api/asset/", 1)[1]
+            if remainder.endswith("/activity"):
+                params["id"] = [remainder[: -len("/activity")]]
+                path = "/api/asset_activity"
+            else:
+                params["id"] = [remainder]
+                path = "/api/asset_detail"
         elif path.startswith("/api/browser/session/"):
             params["conversation_id"] = [path.split("/api/browser/session/")[1]]
             path = "/api/browser/session_detail"
@@ -2230,6 +2236,41 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
         payload, status = get_asset_detail(get_thread_db(), params)
         self._send_json(payload, status)
+
+    def _api_asset_activity(self, params):
+        """Per-asset runtime activity correlation — P4.3 (spec §7 + §7.1.1).
+
+        Thin handler: gates `capture_off` on heartbeat health (lifecycle
+        concern, can't live in the data-layer correlator) and delegates
+        the real work to `attack_surface.activity.correlate_asset_activity`.
+        Same `_check_auth` gate as every other `/api/*` route; route
+        registered in `do_GET`'s `routes` dict and path-prefix matched
+        from `/api/asset/<id>/activity`.
+        """
+        from claude_monitoring.attack_surface.activity import correlate_asset_activity
+        from claude_monitoring.lifecycle import HEARTBEAT_STALE_SECONDS, heartbeat_age_seconds
+
+        asset_id = params.get("id", [""])[0]
+        if not asset_id:
+            self._send_json({"error": "missing id"}, 400)
+            return
+        window = params.get("window", ["24h"])[0]
+        hb_age = heartbeat_age_seconds()
+        capture_ok = hb_age is not None and hb_age < HEARTBEAT_STALE_SECONDS
+        try:
+            result = correlate_asset_activity(
+                get_thread_db(),
+                asset_id,
+                window=window,
+                capture_ok=capture_ok,
+            )
+        except ValueError as exc:
+            self._send_json({"error": str(exc)}, 400)
+            return
+        if result.data_status == "asset_not_found":
+            self._send_json({"error": "not found", "id": asset_id}, 404)
+            return
+        self._send_json(result.to_payload())
 
     # ── Report endpoint ────────────────────────────────────────
 
