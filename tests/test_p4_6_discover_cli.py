@@ -138,7 +138,6 @@ class TestArgparseFlagDispatchesRunDiscover:
     def test_discover_flag_exists_in_argparse(self):
         import argparse
 
-
         # Build a fresh parser by reading the help-text registry —
         # the existing main() uses the conventional argparse pattern,
         # so the flag IS visible to argparse.parse_args(["--discover"]).
