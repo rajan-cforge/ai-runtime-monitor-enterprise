@@ -98,6 +98,37 @@ class TestRunDiscoverHelper:
         assert payload["trigger"] == "on_demand"
         assert payload["lock_acquired"] is True
 
+    def test_orchestrator_exception_returns_exit_2_with_error_json(self, tmp_path, monkeypatch, capsys):
+        """If `orchestrator.scan` raises, run_discover catches + logs +
+        returns exit code 2. Stdout carries the error JSON payload."""
+        from claude_monitoring import discovery_scheduler
+
+        db_path = tmp_path / "test.db"
+        init_db(db_path).close()
+        lock_path = tmp_path / ".lock"
+
+        monkeypatch.setattr(discovery_scheduler, "get_db_path", lambda: db_path)
+        monkeypatch.setattr(discovery_scheduler, "default_sources", lambda: [])
+        monkeypatch.setattr(
+            discovery_scheduler,
+            "ScanLock",
+            lambda **kw: ScanLock(lock_path=lock_path),
+        )
+
+        class _BoomOrch:
+            def __init__(self, *_, **__):
+                pass
+
+            def scan(self, *, trigger):
+                raise RuntimeError("simulated discovery crash")
+
+        monkeypatch.setattr(discovery_scheduler, "DiscoveryOrchestrator", _BoomOrch)
+        assert discovery_scheduler.run_discover() == 2
+        captured = capsys.readouterr()
+        payload = json.loads(captured.out.strip().split("\n")[-1])
+        assert payload["error"] == "scan_failed"
+        assert "simulated discovery crash" in payload["detail"]
+
     def test_lock_held_returns_exit_1_and_writes_no_row(self, tmp_path, monkeypatch, capsys):
         from claude_monitoring import discovery_scheduler
 
