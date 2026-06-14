@@ -150,6 +150,14 @@ class TestSchedulerLoop:
         monkeypatch.setattr(discovery_scheduler.time, "sleep", fake_sleep)
         monkeypatch.setattr(discovery_scheduler, "DiscoveryOrchestrator", _FakeOrch)
         monkeypatch.setattr(discovery_scheduler, "default_sources", lambda: [])
+        # P4.5: cadence sleep is now `_compute_next_sleep_seconds()` reading
+        # schedule.toml. Pin it to DISCOVERY_CADENCE for this regression test
+        # so the assertion below stays clock-independent.
+        monkeypatch.setattr(
+            discovery_scheduler,
+            "_compute_next_sleep_seconds",
+            lambda: discovery_scheduler.DISCOVERY_CADENCE,
+        )
 
         with pytest.raises(SystemExit):
             discovery_scheduler.discovery_scheduler_loop()
