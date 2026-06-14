@@ -52,7 +52,9 @@ v0.2.2 — the constants are intentionally hardcoded.
 from __future__ import annotations
 
 import datetime as _dt
+import json
 import logging
+import sys
 import time
 
 from claude_monitoring.attack_surface.orchestrator import (
@@ -191,6 +193,67 @@ def discovery_scheduler_loop() -> None:
                 DISCOVERY_FAILURE_BACKOFF,
             )
             time.sleep(DISCOVERY_FAILURE_BACKOFF)
+
+
+def run_discover(*, json_out: bool = True) -> int:
+    """P4.6: one-shot on-demand discovery scan invoked by
+    ``ai-monitor --discover`` (spec §8.1 CLI access-point).
+
+    Trigger value is ``"on_demand"`` per directive §7.1.2 vocabulary,
+    matching the dashboard "Run scan now" button so both surfaces show
+    up identically in audit + P4.4 history.
+
+    Exit codes:
+      0 — scan ran and completed cleanly
+      1 — ScanLock held by another scan in progress (operator retry)
+      2 — orchestrator raised internally (rare; log + propagate)
+
+    JSON payload to stdout when ``json_out=True`` (default):
+      ``{trigger, lock_acquired, asset_count, per_source, duration_sec,
+      started_at}``. Six keys per Phase A D-json contract.
+    """
+    conn = init_db(get_db_path())
+    try:
+        orchestrator = DiscoveryOrchestrator(
+            sources=default_sources(),
+            lock=ScanLock(),
+            persistence_connection=conn,
+        )
+        try:
+            result = orchestrator.scan(trigger="on_demand")
+        except Exception as exc:
+            _get_logger().warning("discover: scan raised: %s", exc)
+            if json_out:
+                print(json.dumps({"error": "scan_failed", "detail": str(exc)}))
+            return 2
+        if not result.lock_acquired:
+            holder = ScanLock().read_holder_trigger() or "unknown"
+            print(
+                f"discover: scan in progress (holder_trigger={holder}); retry shortly",
+                file=sys.stderr,
+            )
+            return 1
+        if json_out:
+            payload = {
+                "trigger": result.trigger,
+                "lock_acquired": result.lock_acquired,
+                "asset_count": len(result.assets),
+                "per_source": [
+                    {
+                        "name": t.name,
+                        "asset_count": t.asset_count,
+                        "elapsed_sec": t.elapsed_sec,
+                        "outcome": t.last_run_outcome.value,
+                    }
+                    for t in result.per_source
+                ],
+                "duration_sec": result.total_duration_sec,
+                "started_at": result.started_at,
+            }
+            print(json.dumps(payload))
+        return 0
+    finally:
+        conn.close()
 
 
 def finalize_crashed_runs_at_startup() -> int:
