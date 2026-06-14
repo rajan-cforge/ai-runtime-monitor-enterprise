@@ -2086,6 +2086,9 @@ from claude_monitoring.discovery_scheduler import (  # noqa: E402
 from claude_monitoring.discovery_scheduler import (  # noqa: E402
     finalize_crashed_runs_at_startup as _finalize_crashed_runs_at_startup,
 )
+from claude_monitoring.discovery_scheduler import (  # noqa: E402
+    run_discover,
+)
 
 # ─────────────────────────────────────────────────────────────
 # SECTION 11: MAIN ORCHESTRATOR
@@ -2582,8 +2585,21 @@ def main():
         help="Modifier for --install-service: auto-enable system proxy on start",
     )
     parser.add_argument("--restart", action="store_true", help="Stop + start the monitor (clean restart)")
+    # P4.6: on-demand discovery scan per spec §8.1 ("CLI command: `vigil --discover`").
+    # Runs once and exits; does NOT start the daemon. Writes a discovery_runs
+    # row with trigger="on_demand" and emits a JSON summary on stdout.
+    parser.add_argument(
+        "--discover",
+        action="store_true",
+        help="Run a one-shot on-demand discovery scan and exit (spec §8.1).",
+    )
 
     args = parser.parse_args()
+
+    # P4.6 dispatch — handle before the rest so we never start the daemon
+    # accidentally on a `--discover` invocation.
+    if args.discover:
+        sys.exit(run_discover())
 
     if args.port != DASHBOARD_PORT:
         # Update the module-level port if overridden
