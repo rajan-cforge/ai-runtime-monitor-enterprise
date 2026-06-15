@@ -2593,13 +2593,43 @@ def main():
         action="store_true",
         help="Run a one-shot on-demand discovery scan and exit (spec §8.1).",
     )
+    # P5.1a: privacy verification modes per spec §10.7 + directive §7.5.5.
+    # Each runs a one-shot discovery scan with verbose audit logging and
+    # exits; do NOT start the daemon. Mutually exclusive with --discover/
+    # --start/etc. (argparse error if multiple are set).
+    parser.add_argument(
+        "--network-audit",
+        action="store_true",
+        help="Run discovery with verbose process-tree network logging (spec §10.7).",
+    )
+    parser.add_argument(
+        "--read-audit",
+        action="store_true",
+        help="Run discovery with verbose filesystem-read logging (spec §10.7).",
+    )
 
     args = parser.parse_args()
+
+    # Mutual-exclusion guard for the one-shot modes. argparse_mutually_exclusive_group
+    # would also work but the existing parser is flat-flag style; check explicitly.
+    one_shot_modes = sum([args.discover, args.network_audit, args.read_audit])
+    if one_shot_modes > 1:
+        parser.error("--discover / --network-audit / --read-audit are mutually exclusive")
 
     # P4.6 dispatch — handle before the rest so we never start the daemon
     # accidentally on a `--discover` invocation.
     if args.discover:
         sys.exit(run_discover())
+
+    # P5.1a dispatch — same pattern: handle before daemon launch.
+    if args.network_audit:
+        from claude_monitoring.privacy_audit import network_audit_mode
+
+        sys.exit(network_audit_mode())
+    if args.read_audit:
+        from claude_monitoring.privacy_audit import read_audit_mode
+
+        sys.exit(read_audit_mode())
 
     if args.port != DASHBOARD_PORT:
         # Update the module-level port if overridden
