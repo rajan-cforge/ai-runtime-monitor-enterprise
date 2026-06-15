@@ -898,9 +898,13 @@ def db_audit_mode() -> int:
         print()
         unknown_columns: list[tuple[str, str]] = []
         for table in tables:
-            cols = conn.execute(f"PRAGMA table_info({table})").fetchall()
+            # bandit B608: `table` comes from sqlite_master (line above) —
+            # never from user input. Capture-table policy + the
+            # SAFE_COLUMNS_BY_TABLE classification gate prevent any user-
+            # influenced string from reaching here.
+            cols = conn.execute(f"PRAGMA table_info({table})").fetchall()  # nosec B608
             col_names = [c[1] for c in cols]
-            count = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+            count = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]  # nosec B608
             print(f"[{table}]  rows: {count}")
             print(f"  schema: {', '.join(f'{c[1]} ({c[2]})' for c in cols)}")
             if table in CAPTURE_TABLES_NO_SAMPLES:
@@ -908,7 +912,7 @@ def db_audit_mode() -> int:
                 print()
                 continue
             # Sample up to 5 rows.
-            sample_rows = conn.execute(f"SELECT * FROM {table} LIMIT 5").fetchall()
+            sample_rows = conn.execute(f"SELECT * FROM {table} LIMIT 5").fetchall()  # nosec B608
             if not sample_rows:
                 print("  samples: (none)")
                 print()
