@@ -251,6 +251,38 @@ class TestDbAuditMode:
 # ---------------------------------------------------------------------------
 
 
+class TestNonIdentifierTableNameGuard:
+    """Rajan C4 review condition 2026-06-15: db_audit_mode must reject
+    table names that aren't valid Python identifiers BEFORE interpolating
+    them into the PRAGMA / SELECT statements. The SQL still has nosec
+    B608 + sqlite_master provenance — this guard is the explicit second
+    layer the repo's no-f-string-SQL rule asks for."""
+
+    def test_non_identifier_table_name_is_skipped_not_interpolated(self, tmp_path, monkeypatch, capsys):
+        from claude_monitoring import privacy_audit
+        from claude_monitoring.db import init_db
+
+        db_path = tmp_path / "test.db"
+        init_db(db_path).close()
+        # Create a table whose name is NOT a valid Python identifier —
+        # quoted identifier with a hyphen. sqlite_master will list it,
+        # which is exactly the path the guard protects.
+        conn = sqlite3.connect(db_path)
+        conn.execute('CREATE TABLE "bad-name"(id INTEGER)')
+        conn.commit()
+        conn.close()
+        monkeypatch.setattr("claude_monitoring.db.get_db_path", lambda: db_path)
+        rc = privacy_audit.db_audit_mode()
+        captured = capsys.readouterr()
+        assert rc == 0
+        # The guard warning fires.
+        assert "skipping non-identifier table name" in captured.out
+        assert "'bad-name'" in captured.out
+        # And no row count / schema for it (would have required executing
+        # the f-string SQL we're guarding).
+        assert "[bad-name]" not in captured.out
+
+
 class TestClassificationGate:
     """The check_db_audit_classification.py script ensures every column
     in every table is classified. Run it directly here."""

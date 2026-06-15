@@ -898,15 +898,34 @@ def db_audit_mode() -> int:
         print()
         unknown_columns: list[tuple[str, str]] = []
         for table in tables:
-            # bandit B608: `table` comes from sqlite_master (line above) —
-            # never from user input. Capture-table policy + the
-            # SAFE_COLUMNS_BY_TABLE classification gate prevent any user-
-            # influenced string from reaching here.
+            # Identifier guard (Rajan C4 review condition 2026-06-15):
+            # `table` comes from sqlite_master, but the repo's no-f-string-
+            # SQL rule treats any interpolation as a code smell. Reject
+            # anything that isn't a valid Python identifier — captures any
+            # future weirdness without weakening the existing `nosec B608`
+            # provenance comment below. SQLite identifiers are the same
+            # ASCII shape as Python identifiers in this codebase.
+            if not table.isidentifier():
+                print(f"  ! WARNING: skipping non-identifier table name {table!r}")
+                continue
+            # bandit B608: `table` comes from sqlite_master (filter above)
+            # and is guarded by `isidentifier()`. Never from user input.
+            # SAFE_COLUMNS_BY_TABLE + CAPTURE_TABLES_NO_SAMPLES classify
+            # what we encounter; the CI gate keeps them complete.
             cols = conn.execute(f"PRAGMA table_info({table})").fetchall()  # nosec B608
             col_names = [c[1] for c in cols]
             count = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]  # nosec B608
             print(f"[{table}]  rows: {count}")
             print(f"  schema: {', '.join(f'{c[1]} ({c[2]})' for c in cols)}")
+            # Detect unclassified columns from the SCHEMA, not from row cells
+            # — Rajan optional cosmetic 2026-06-15. The previous version
+            # missed unclassified columns on empty tables; this version
+            # catches them regardless of row count.
+            if table not in CAPTURE_TABLES_NO_SAMPLES:
+                table_policy = SAFE_COLUMNS_BY_TABLE.get(table, {})
+                for col_name in col_names:
+                    if col_name not in table_policy:
+                        unknown_columns.append((table, col_name))
             if table in CAPTURE_TABLES_NO_SAMPLES:
                 print("  samples: no samples (capture-table policy)")
                 print()
@@ -921,8 +940,6 @@ def db_audit_mode() -> int:
                 cells: list[str] = []
                 for col_name, raw_value in zip(col_names, row, strict=False):
                     cells.append(f"{col_name}={redact_value_for_display(table, col_name, raw_value)}")
-                    if SAFE_COLUMNS_BY_TABLE.get(table, {}).get(col_name) is None:
-                        unknown_columns.append((table, col_name))
                 print(f"  row: {', '.join(cells)}")
             print()
         if unknown_columns:
