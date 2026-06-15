@@ -2544,7 +2544,7 @@ def _preflight_proxy_start():
 
 
 def _dispatch_one_shot_modes(args) -> None:
-    """P4.6 + P5.1 one-shot modes — bypass daemon launch + sys.exit."""
+    """P4.6 + P5.1 + P5.2 one-shot modes — bypass daemon launch + sys.exit."""
     if args.discover:
         sys.exit(run_discover())
     if args.network_audit or args.read_audit or args.db_audit:
@@ -2555,6 +2555,10 @@ def _dispatch_one_shot_modes(args) -> None:
         if args.read_audit:
             sys.exit(privacy_audit.read_audit_mode())
         sys.exit(privacy_audit.db_audit_mode())
+    if args.export:
+        from claude_monitoring.exports import export_assets_to_destination
+
+        sys.exit(export_assets_to_destination(args.export, args.output))
 
 
 def main():
@@ -2612,14 +2616,17 @@ def main():
     parser.add_argument("--network-audit", action="store_true", help="Process-tree network audit (spec §10.7).")
     parser.add_argument("--read-audit", action="store_true", help="Filesystem-read audit (spec §10.7).")
     parser.add_argument("--db-audit", action="store_true", help="Redacted monitor.db schema audit (spec §10.7).")
+    # P5.2 spec §2.5 — JSON/CSV/Markdown asset-inventory export.
+    parser.add_argument("--export", choices=("json", "csv", "md"), help="Export asset inventory (spec §2.5).")
+    parser.add_argument("--output", help="Write export to PATH instead of stdout (modifier for --export).")
 
     args = parser.parse_args()
 
     # Mutual-exclusion guard for the one-shot modes. argparse_mutually_exclusive_group
     # would also work but the existing parser is flat-flag style; check explicitly.
-    one_shot_modes = sum([args.discover, args.network_audit, args.read_audit, args.db_audit])
+    one_shot_modes = sum([args.discover, args.network_audit, args.read_audit, args.db_audit, bool(args.export)])
     if one_shot_modes > 1:
-        parser.error("--discover / --network-audit / --read-audit / --db-audit are mutually exclusive")
+        parser.error("--discover / --network-audit / --read-audit / --db-audit / --export are mutually exclusive")
 
     # P4.6 + P5.1 dispatch — single helper keeps the argparse module lean.
     _dispatch_one_shot_modes(args)
