@@ -77,7 +77,8 @@ def _compute_next_sleep_seconds(default_seconds: int = CVE_POLL_CADENCE) -> int:
 
 def cve_poll_once() -> int:
     """Single CVE-poll pass. Returns the number of distinct package
-    triples refreshed (0 if nothing to poll).
+    triples refreshed (0 if nothing to poll, or if a kill-switch is
+    active).
 
     Walks ``assets`` for unique ``(ecosystem, package, version)`` triples
     that map to a known OSV.dev ecosystem; calls ``OSVClient.querybatch``
@@ -89,7 +90,28 @@ def cve_poll_once() -> int:
     age; the dashboard surfaces CVE-data-stale through the existing
     `cve_status_hints` renderer. Never stamp a fresh `last_scanned` on
     a failed poll.
+
+    Kill-switch (load-bearing for `docs/PRIVACY-POSTURE.md` Claim 6):
+    fail-closed before the OSVClient is touched. Setting either
+    ``NO_NETWORK=1`` (universal egress kill-switch — also obeyed by
+    reputation and scan-time CVE paths) or ``VIGIL_NO_CVE_FEED=1`` (CVE-
+    specific) suppresses this poll. Any error resolving the kill-switch
+    state ALSO suppresses egress this pass — better a missed cache
+    refresh than an undocumented outbound HTTP request.
     """
+    try:
+        from claude_monitoring.attack_surface.cves.config import cve_feed_disabled
+
+        if cve_feed_disabled():
+            _get_logger().info("cve_poll skipped: kill-switch active (NO_NETWORK or VIGIL_NO_CVE_FEED set)")
+            return 0
+    except Exception as exc:
+        # Fail-closed: if we can't verify the kill-switch state, suppress
+        # egress rather than risk an undocumented outbound call. The next
+        # cadence tick will retry the gate.
+        _get_logger().warning("cve_poll: kill-switch check failed (%s); suppressing this pass fail-closed", exc)
+        return 0
+
     from claude_monitoring.attack_surface.cves.dispatcher import _SOURCE_TO_ECOSYSTEM
     from claude_monitoring.db import get_db_path, init_db
 
