@@ -120,6 +120,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             "/api/session": self._api_session_detail,
             "/api/feed": self._api_feed,
             "/api/stats": self._api_stats,
+            "/api/state-bar": self._api_state_bar,
             "/api/processes": self._api_processes,
             "/api/files": self._api_files,
             "/api/connections": self._api_connections,
@@ -1072,6 +1073,15 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
         items = items[-limit:]
         self._send_json({"events": items})
+
+    def _api_state_bar(self, params):
+        """GET /api/state-bar — state-bar envelope per directive line 222
+        + Round 4 mockup. Cells: monitor / fill_rate / alerts /
+        attack_surface. Helpers live in `dashboard_state_bar` so this
+        file stays under the 2900-line ceiling."""
+        from claude_monitoring import dashboard_state_bar
+
+        self._send_json(dashboard_state_bar.build_envelope(get_thread_db()))
 
     def _api_stats(self, params):
         db = get_thread_db()

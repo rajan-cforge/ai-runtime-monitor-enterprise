@@ -588,6 +588,32 @@ body { background:var(--bg); color:var(--text); font-family:var(--font-sans); fo
          color: var(--v-accent); background: var(--v-accent-bg); padding:2px 5px; border-radius:4px; }
 .v-tab--muted { color: var(--v-text-3); margin-left:auto; }
 
+/* P6.2 — global state bar + sparkline + volstrip (Round 4 mockup §10.5 +
+   fill-rate #6). Verbatim from handoff/vigil.css. */
+.statebar { display:flex; align-items:stretch; gap:0; border:1px solid var(--v-border); border-radius:10px;
+            background: var(--v-surface); margin:14px 24px 24px; overflow-x:auto; scrollbar-width:none; }
+.statebar::-webkit-scrollbar { display:none; }
+.sb { display:flex; align-items:center; gap:10px; padding:11px 18px; border-right:1px solid var(--v-border);
+      cursor:pointer; transition: background var(--v-dur, .15s) var(--v-ease, ease); min-width:0; white-space:nowrap; }
+.sb:hover { background: var(--v-surface-2); }
+.sb--static { cursor:default; } .sb--static:hover { background:none; }
+.sb:last-child { border-right:none; }
+.sb__k { font-size:10px; font-weight:600; text-transform:uppercase; letter-spacing:.07em; color: var(--v-text-3); }
+.sb__v { font-size:13px; font-weight:500; color: var(--v-text); display:flex; align-items:center; gap:7px; white-space:nowrap; }
+.sb__grow { flex:1; border-right:none; cursor:default; }
+.sb__grow:hover { background:none; }
+.spark { display:flex; align-items:flex-end; gap:2px; height:20px; }
+.spark span { width:4px; background: var(--v-cap-elevated, var(--v-text-3)); border-radius:1px; opacity:.5; }
+.spark span.now { opacity:1; background: var(--v-safe, var(--green)); }
+.sb__pct { font-size:15px; font-weight:600; font-variant-numeric:tabular-nums; color: var(--v-safe, var(--green)); }
+.volstrip { display:flex; align-items:center; gap:0; flex-wrap:wrap; font-size:12px; color: var(--v-text-2);
+            margin:14px 24px 16px; padding:2px 4px; }
+.volstrip .vi { padding:4px 14px; border-right:1px solid var(--v-border); white-space:nowrap; cursor:pointer; }
+.volstrip .vi:first-child { padding-left:0; }
+.volstrip .vi:last-child { border-right:none; }
+.volstrip b { color: var(--v-text); font-weight:600; font-variant-numeric:tabular-nums; }
+.volstrip .vi:hover b { color: var(--v-accent); }
+
 /* ==========================================================================
    SEGMENTED CONTROL  (TP/FP, live/historical)
    ========================================================================== */
@@ -699,15 +725,9 @@ body { background:var(--bg); color:var(--text); font-family:var(--font-sans); fo
   </div>
 </header>
 
-<div class="stats" id="stat-cards">
-  <div class="stat-card" onclick="switchTab('explorer')"><div class="label">Sessions</div><div class="value blue" id="st-sessions">-</div><div class="stat-sub" id="st-sessions-sub"></div></div>
-  <div class="stat-card" onclick="switchTab('system')"><div class="label">Active Agents</div><div class="value" id="st-agents">-</div><div class="stat-sub" id="st-agents-sub"></div></div>
-  <div class="stat-card" onclick="switchTab('analytics')"><div class="label">Input Tokens</div><div class="value" id="st-input">-</div></div>
-  <div class="stat-card" onclick="switchTab('analytics')"><div class="label">Output Tokens</div><div class="value" id="st-output">-</div></div>
-  <div class="stat-card" onclick="switchTab('analytics')"><div class="label">Burn Rate</div><div class="value" id="st-burnrate" style="font-size:18px">-</div><div class="stat-sub" id="st-burnrate-sub"></div></div>
-  <div class="stat-card" onclick="document.getElementById('session-source').value='browser';switchTab('explorer');loadSessions()"><div class="label">Browser AI</div><div class="value purple" id="st-browser">-</div><div class="stat-sub" id="st-browser-sub"></div></div>
-  <div class="stat-card" onclick="switchTab('alerts')"><div class="label">Alerts</div><div class="value alert" id="st-alerts">-</div><div class="stat-sub" id="st-alerts-sub"></div></div>
-</div>
+<!-- P6.2 — Volstrip (was at this position pre-P6.2 as 7 stat-cards) is
+     moved BELOW the state bar to match Round 4 mockup order. Placeholder
+     stays here as a no-op anchor so existing scroll positions don't shift. -->
 
 <nav class="v-tabs">
   <button class="v-tab is-active" data-tab="explorer">Session Explorer <span id="tab-live-badge" style="font-size:10px;color:var(--green);font-weight:600;margin-left:4px"></span></button>
@@ -721,6 +741,39 @@ body { background:var(--bg); color:var(--text); font-family:var(--font-sans); fo
   <button class="v-tab" data-tab="assets">Attack Surface <span class="v-tab__new">New</span><span id="tab-assets-badge" class="v-tab__count" style="display:none"></span></button>
   <button class="v-tab" data-tab="alerts">Alerts <span id="tab-alerts-badge" class="v-tab__count v-tab__count--risk v-num" style="display:none"></span></button>
 </nav>
+
+<!-- P6.2 — Global state bar (visible across all tabs) per Round 4 mockup
+     + directive line 222. Four cells: Monitor / Fill rate / Alerts /
+     Attack surface. Loaded by loadStateBar() from /api/state-bar; polled
+     every 10s. Data-truthful posture: null fields render as "—" or
+     "Awaiting data" (D-awaiting-data-on-empty). -->
+<div class="statebar" id="statebar">
+  <div class="sb" title="Open System diagnostics" onclick="switchTab('system')">
+    <span class="v-dot v-dot--live" id="sb-monitor-dot"></span>
+    <span><span class="sb__k">Monitor</span><span class="sb__v" id="sb-monitor-v">—</span></span>
+  </div>
+  <div class="sb" title="Content fill rate — see System" onclick="switchTab('system')">
+    <span class="spark" aria-hidden="true" id="sb-spark"><span></span><span></span><span></span><span></span><span></span><span></span><span class="now"></span></span><!-- /spark -->
+    <span><span class="sb__k">Fill rate · 24h</span><span class="sb__v" id="sb-fill-v"><span class="v-faint">Awaiting data</span></span></span>
+  </div>
+  <div class="sb__grow"></div>
+  <div class="sb" title="Go to Alerts" onclick="switchTab('alerts')">
+    <span><span class="sb__k">Alerts</span><span class="sb__v" id="sb-alerts-v">—</span></span>
+  </div>
+  <div class="sb" title="Open Attack Surface" onclick="switchTab('assets')">
+    <span><span class="sb__k">Attack surface</span><span class="sb__v" id="sb-attack-v">—</span></span>
+  </div>
+</div><!-- /statebar -->
+
+<!-- P6.2 — Volstrip below the state bar (Round 4 mockup order).
+     5 .vi items: Sessions / Agents / Tokens / Burn / Browser AI. -->
+<div class="volstrip" id="volstrip">
+  <span class="vi" onclick="switchTab('explorer')">Sessions <b id="vi-sessions">-</b><span class="v-faint" id="vi-sessions-sub"></span></span>
+  <span class="vi" onclick="switchTab('system')">Agents <b id="vi-agents">-</b><span class="v-faint" id="vi-agents-sub"></span></span>
+  <span class="vi" onclick="switchTab('analytics')">Tokens <b id="vi-tokens-in">-</b> in · <b id="vi-tokens-out">-</b> out</span>
+  <span class="vi" onclick="switchTab('analytics')">Burn <b id="vi-burn">-</b><span class="v-faint" id="vi-burn-sub"></span></span>
+  <span class="vi" onclick="document.getElementById('session-source').value='browser';switchTab('explorer');loadSessions()">Browser AI <b id="vi-browser">-</b><span class="v-faint" id="vi-browser-sub"></span></span>
+</div>
 
 <div class="content">
   <!-- Session Explorer -->
@@ -1307,20 +1360,132 @@ function cleanTitle(s) {
   return t;
 }
 
-// Load stats
+// P6.2 — Relative-time helper. Render epoch as 'just now / 5m ago /
+// 4h ago / 2d ago'. Used by both monitor cell + attack-surface cell.
+function _relativeTime(epochSecs) {
+  if (epochSecs === null || epochSecs === undefined) return null;
+  var diff = Math.floor(Date.now() / 1000) - epochSecs;
+  if (diff < 60) return 'just now';
+  if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
+  if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
+  return Math.floor(diff / 86400) + 'd ago';
+}
+
+// P6.2 — DOM-construction helper. Build a <span> with class+text without
+// going through innerHTML, defense-in-depth against XSS even though the
+// content here is server-generated JSON numbers.
+function _sbSpan(className, text) {
+  var s = document.createElement('span');
+  if (className) s.className = className;
+  if (text !== undefined && text !== null) s.textContent = text;
+  return s;
+}
+function _sbReplaceChildren(el, nodes) {
+  while (el.firstChild) el.removeChild(el.firstChild);
+  for (var i = 0; i < nodes.length; i++) el.appendChild(nodes[i]);
+}
+
+// P6.2 — Load the global state bar from /api/state-bar. Data-truthful:
+// null counts → '—'; null percentage → 'Awaiting data'.
+// D-awaiting-data-on-empty + D-alerts-derivation-mirrors-api-alerts.
+async function loadStateBar() {
+  try {
+    const r = await fetch(API + '/api/state-bar');
+    const d = await r.json();
+
+    // Monitor cell.
+    var mon = d.monitor || {};
+    var monV = document.getElementById('sb-monitor-v');
+    var monDot = document.getElementById('sb-monitor-dot');
+    if (mon.status === 'capturing') {
+      _sbReplaceChildren(monV, [
+        document.createTextNode('Capturing '),
+        _sbSpan('v-faint', '· ' + (_relativeTime(mon.last_seen_ts) || 'just now')),
+      ]);
+      monDot.style.background = 'var(--v-safe, var(--green))';
+    } else if (mon.status === 'idle') {
+      _sbReplaceChildren(monV, [
+        document.createTextNode('Idle '),
+        _sbSpan('v-faint', '· ' + (_relativeTime(mon.last_seen_ts) || 'no traffic yet')),
+      ]);
+      monDot.style.background = 'var(--v-text-2)';
+    } else if (mon.status === 'stopped') {
+      _sbReplaceChildren(monV, [
+        _sbSpan('v-faint', 'Stopped · ' + (_relativeTime(mon.last_seen_ts) || 'unknown')),
+      ]);
+      monDot.style.background = 'var(--v-risk, var(--red))';
+    } else {
+      monV.textContent = '—';
+    }
+
+    // Fill-rate cell.
+    var fr = d.fill_rate || {};
+    var frV = document.getElementById('sb-fill-v');
+    if (fr.percentage === null || fr.percentage === undefined) {
+      _sbReplaceChildren(frV, [_sbSpan('v-faint', 'Awaiting data')]);
+    } else {
+      _sbReplaceChildren(frV, [
+        _sbSpan('sb__pct', fr.percentage + '%'),
+        document.createTextNode(' '),
+        _sbSpan('v-faint', fr.filled + ' of ' + fr.total + ' /v1/messages'),
+      ]);
+    }
+
+    // Sparkline — 7 bars, oldest→newest, last carries .now.
+    var spark = d.fill_rate_sparkline_7d || [];
+    var bars = document.querySelectorAll('#sb-spark > span');
+    for (var i = 0; i < bars.length; i++) {
+      var pct = spark[i];
+      bars[i].style.height = (pct === null || pct === undefined) ? '4px' : Math.max(8, pct) + '%';
+    }
+
+    // Alerts cell. critical_count=null → '—' (NEVER '0 critical' on error).
+    var al = d.alerts || {};
+    var alV = document.getElementById('sb-alerts-v');
+    if (al.critical_count === null || al.critical_count === undefined) {
+      _sbReplaceChildren(alV, [_sbSpan('v-faint', '—')]);
+    } else if (al.critical_count === 0 && al.total_count === 0) {
+      _sbReplaceChildren(alV, [_sbSpan('v-faint', 'No alerts')]);
+    } else {
+      _sbReplaceChildren(alV, [
+        _sbSpan('v-badge v-badge--risk', al.critical_count + ' critical'),
+        document.createTextNode(' '),
+        _sbSpan('v-faint', al.total_count + ' total'),
+      ]);
+    }
+
+    // Attack-surface cell.
+    var as = d.attack_surface || {};
+    var asV = document.getElementById('sb-attack-v');
+    if (as.in_progress) {
+      _sbReplaceChildren(asV, [_sbSpan('v-faint', 'Scanning…')]);
+    } else if (as.last_scan_ts) {
+      var iso = as.last_scan_ts.endsWith('Z') ? as.last_scan_ts : as.last_scan_ts + 'Z';
+      var lastEpoch = Math.floor(Date.parse(iso) / 1000);
+      asV.textContent = 'Scanned ' + _relativeTime(lastEpoch);
+    } else {
+      _sbReplaceChildren(asV, [_sbSpan('v-faint', 'Never scanned')]);
+    }
+  } catch (e) {
+    // Network failure — leave the existing cell values in place.
+  }
+}
+
+// P6.2 — Load stats into the volstrip (was: 7 large stat-card tiles).
+// Same /api/stats source data; just routed to the new .vi spans.
 async function loadStats() {
   try {
     const r = await fetch(API + '/api/stats');
     const d = await r.json();
-    document.getElementById('st-sessions').textContent = d.total_sessions;
+    document.getElementById('vi-sessions').textContent = d.total_sessions;
     // Count active sessions (last 5 minutes)
     try {
       var sr = await fetch(API + '/api/sessions?sort=recent&limit=10');
       var sd = await sr.json();
       var activeCount = (sd.sessions||sd||[]).filter(function(s){return s.last_activity && (Date.now()-new Date(s.last_activity).getTime())<300000}).length;
-      document.getElementById('st-sessions-sub').innerHTML = activeCount > 0 ? '<span style="color:var(--green)">' + activeCount + ' active</span>' : '';
+      document.getElementById('vi-sessions-sub').textContent = activeCount > 0 ? ' · ' + activeCount + ' active' : '';
     } catch(e) {}
-    document.getElementById('st-agents').textContent = d.active_processes;
+    document.getElementById('vi-agents').textContent = d.active_processes;
     // Agent breakdown subtitle
     try {
       var pr = await fetch(API + '/api/processes');
@@ -1331,27 +1496,19 @@ async function loadStats() {
         if (app) agentCounts[app] = (agentCounts[app]||0) + 1;
       });
       var sorted = Object.entries(agentCounts).sort(function(a,b){return b[1]-a[1]});
-      var top4 = sorted.slice(0,4).map(function(e){return e[0]+': '+e[1]}).join(' · ');
-      if (sorted.length > 4) top4 += ' +' + (sorted.length-4) + ' more';
-      document.getElementById('st-agents-sub').textContent = top4;
+      var top2 = sorted.slice(0,2).map(function(e){return e[0]+' '+e[1]}).join(' · ');
+      document.getElementById('vi-agents-sub').textContent = top2 ? ' · ' + top2 : '';
       // Update count to only real agents
       var realCount = sorted.reduce(function(s,e){return s+e[1]},0);
-      document.getElementById('st-agents').textContent = realCount;
+      document.getElementById('vi-agents').textContent = realCount;
     } catch(e) {}
-    document.getElementById('st-input').textContent = fmtNum(d.total_input_tokens);
-    document.getElementById('st-output').textContent = fmtNum(d.total_output_tokens);
-    document.getElementById('st-alerts').textContent = d.total_alerts;
-    // Subtitles
-    try {
-      var critCount = 0;
-      try { var ar = await fetch(API+'/api/alerts?limit=1&severity=critical&confidence=all'); var ad = await ar.json(); critCount = ad.total||0; } catch(e){}
-      document.getElementById('st-alerts-sub').innerHTML = critCount > 0 ? '<span style="color:var(--red)">' + critCount + ' critical</span>' : 'none critical';
-    } catch(e) {}
+    document.getElementById('vi-tokens-in').textContent = fmtNum(d.total_input_tokens);
+    document.getElementById('vi-tokens-out').textContent = fmtNum(d.total_output_tokens);
 
     currentPlanInfo = d.plan_info || {};
 
     // Browser AI with service breakdown
-    const browserEl = document.getElementById('st-browser');
+    const browserEl = document.getElementById('vi-browser');
     if (d.browser_today > 0) {
       browserEl.textContent = d.browser_today + ' visits';
     } else {
@@ -1360,21 +1517,20 @@ async function loadStats() {
     var bd = d.browser_daily || [];
     if (bd.length) {
       var svcs = [...new Set(bd.map(function(b){return b.service}))].slice(0,3);
-      document.getElementById('st-browser-sub').textContent = svcs.join(' · ');
+      document.getElementById('vi-browser-sub').textContent = ' · ' + svcs.join(' · ');
     }
 
     // Burn rate with cost estimate
     const fc = d.forecast || {};
-    const burnEl = document.getElementById('st-burnrate');
+    const burnEl = document.getElementById('vi-burn');
     if (fc.daily_burn_rate > 0) {
       burnEl.textContent = fmtNum(fc.daily_burn_rate) + '/d';
-      burnEl.style.color = fc.burn_trend === 'increasing' ? 'var(--orange)' : fc.burn_trend === 'decreasing' ? 'var(--green)' : 'var(--text)';
       if (fc.days_remaining !== null && fc.days_remaining !== undefined) {
         burnEl.title = fc.days_remaining === 0 ? 'Quota exceeded' : fc.days_remaining + ' days remaining at current rate';
       }
       // Cost estimate: blended Sonnet rate ($3/M in + $15/M out ≈ $9/M blended)
       var dailyCost = (fc.daily_burn_rate * 0.000009).toFixed(2);
-      document.getElementById('st-burnrate-sub').textContent = '~$' + dailyCost + '/day est.';
+      document.getElementById('vi-burn-sub').textContent = ' · ~$' + dailyCost + '/day';
     } else {
       burnEl.textContent = '-';
     }
@@ -2928,10 +3084,14 @@ document.getElementById('session-search').addEventListener('input', () => {
 });
 
 // Initial load & intervals
-loadStats(); loadSessions();
+loadStats(); loadSessions(); loadStateBar();
 statsInterval = setInterval(loadStats, 5000);
 sessionsInterval = setInterval(loadSessions, 5000);
 feedInterval = setInterval(pollFeed, 2000);
+// P6.2 — Poll state bar every 10s. Lighter than /api/stats since it
+// returns a small envelope (no token rollups). One source of truth for
+// monitor / fill-rate / alerts / attack-surface across every tab.
+setInterval(loadStateBar, 10000);
 
 // Deep-link handler: ?session=<id>&turn=<n>&alert=<alert_id> opens the
 // Deep Dive cockpit directly at the right turn and scrolls to the named
