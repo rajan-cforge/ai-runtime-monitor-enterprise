@@ -27,6 +27,7 @@
     invoke them via the shell.
   framework_ref:
     nist_csf: PR.PT-3
+    cis_controls: CIS-2.5
     mitre_attack: T1059
 
 - id: rule_shell_network_combo_001
@@ -40,6 +41,7 @@
     traffic carries arbitrary shell input.
   framework_ref:
     nist_csf: PR.PT-4
+    cis_controls: CIS-12.2
     mitre_attack: T1071
 
 - id: rule_exfil_capable_001
@@ -53,6 +55,7 @@
     can ship sensitive data to an attacker-controlled endpoint.
   framework_ref:
     nist_csf: PR.DS-5
+    cis_controls: CIS-3.13
     mitre_attack: T1567
 
 - id: rule_secrets_network_001
@@ -66,6 +69,7 @@
     endpoint, after which the attacker reuses the credential at will.
   framework_ref:
     nist_csf: PR.DS-5
+    cis_controls: CIS-3.11
     mitre_attack: T1567
 
 - id: rule_shell_secrets_combo_001
@@ -79,6 +83,7 @@
     secret the asset's process can read, violating least privilege.
   framework_ref:
     nist_csf: PR.AC-4
+    cis_controls: CIS-6.8
     mitre_attack: T1552
 
 - id: rule_filesystem_read_network_001
@@ -92,6 +97,7 @@
     attacker-controlled endpoint.
   framework_ref:
     nist_csf: PR.DS-5
+    cis_controls: CIS-3.13
     mitre_attack: T1567
 
 - id: rule_code_execution_network_001
@@ -106,6 +112,7 @@
     results.
   framework_ref:
     nist_csf: PR.PT-4
+    cis_controls: CIS-2.7
     mitre_attack: T1071
 
 - id: rule_unknown_capability_sharpener_001
@@ -120,6 +127,7 @@
     v0.3 introspection or a manifest analysis lands.
   framework_ref:
     nist_csf: ID.SC-2
+    cis_controls: CIS-2.1
     mitre_attack: T1195
 
 # Citation rationale (per P2.5.a1 verdict, 2026-06-07): the pattern
@@ -146,4 +154,5 @@
     re-assertion to land at HIGH (60).
   framework_ref:
     nist_csf: PR.DS-5
+    cis_controls: CIS-6.6
     mitre_attack: T1552
