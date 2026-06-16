@@ -42,6 +42,27 @@ jobs:
       # that doesn't reach the vulnerable code path). Three follow-up
       # chore(deps) PRs queued. NEW advisories not in this list still
       # fail the gate -- this is a per-ID deferral, not a blanket waiver.
+      #
+      # Tornado-6.5.5-wave-2 suppressions (Rajan auth 2026-06-15).
+      # ---------------------------------------------------------------
+      # Same pattern as precedent 6120192 (2026-06-13 11-CVE batch):
+      # tornado is transitive via mitmproxy; the bump is blocked by
+      # mitmproxy 12.2.3's explicit cap `tornado<=6.5.5,>=6.5.0`, so a
+      # direct `tornado>=6.5.6` pin in pyproject would be unresolvable.
+      # See follow-up task `tornado-cve-unsuppress` — remove these three
+      # when a mitmproxy release lifts the cap.
+      #
+      # Reachability — verified, not asserted:
+      #   * `grep -rn 'tornado' src/` returns zero hits (no direct Vigil use)
+      #   * mitmproxy's tornado imports are confined to
+      #     `mitmproxy/tools/web/{master.py,app.py}` (mitmweb UI) and
+      #     `mitmproxy/tools/console/master.py` (TUI). Vigil shells out
+      #     to `mitmdump` only — never mitmweb or mitmproxy console —
+      #     so the tornado-using mitmproxy code paths are never loaded.
+      #   * All three CVEs hit `SimpleAsyncHTTPClient` /
+      #     `CurlAsyncHTTPClient`, classes mitmdump never instantiates.
+      # ---------------------------------------------------------------
+      # revisit when mitmproxy lifts tornado<=6.5.5 cap
       - run: |
           pip-audit --skip-editable --desc \
             --ignore-vuln PYSEC-2026-35 \
@@ -54,7 +75,10 @@ jobs:
             --ignore-vuln CVE-2025-43859 \
             --ignore-vuln CVE-2025-6176 \
             --ignore-vuln CVE-2026-27448 \
-            --ignore-vuln CVE-2026-49854
+            --ignore-vuln CVE-2026-49854 \
+            --ignore-vuln CVE-2026-49853 \
+            --ignore-vuln CVE-2026-49855 \
+            --ignore-vuln GHSA-pw6j-qg29-8w7f
 
   bandit:
     name: bandit (SAST)
