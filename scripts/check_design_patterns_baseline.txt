@@ -15,23 +15,23 @@ src/claude_monitoring/cleanup.py:104: public function 'count_null_hashes' missin
 src/claude_monitoring/cleanup.py:115: public function 'remove_duplicate_captures' missing docstring
 src/claude_monitoring/cleanup.py:128: public function 'remove_duplicate_visits' missing docstring
 src/claude_monitoring/cleanup.py:141: public function 'remove_empty_sessions' missing docstring
-src/claude_monitoring/dashboard_handler.py:1107: empty 'except Exception: pass' (silently swallowing errors)
+src/claude_monitoring/dashboard_handler.py:1118: empty 'except Exception: pass' (silently swallowing errors)
 src/claude_monitoring/dashboard_handler.py:112: public function 'do_GET' missing docstring
-src/claude_monitoring/dashboard_handler.py:1146: empty 'except Exception: pass' (silently swallowing errors)
-src/claude_monitoring/dashboard_handler.py:1160: empty 'except Exception: pass' (silently swallowing errors)
-src/claude_monitoring/dashboard_handler.py:1223: empty 'except Exception: pass' (silently swallowing errors)
-src/claude_monitoring/dashboard_handler.py:211: public function 'do_POST' missing docstring
-src/claude_monitoring/dashboard_handler.py:2497: empty 'except Exception: pass' (silently swallowing errors)
-src/claude_monitoring/dashboard_handler.py:2514: empty 'except Exception: pass' (silently swallowing errors)
-src/claude_monitoring/dashboard_handler.py:256: public function 'do_OPTIONS' missing docstring
-src/claude_monitoring/dashboard_handler.py:2584: empty 'except Exception: pass' (silently swallowing errors)
-src/claude_monitoring/dashboard_handler.py:2635: empty 'except Exception: pass' (silently swallowing errors)
-src/claude_monitoring/dashboard_handler.py:2777: empty 'except Exception: pass' (silently swallowing errors)
-src/claude_monitoring/dashboard_handler.py:538: empty 'except Exception: pass' (silently swallowing errors)
-src/claude_monitoring/dashboard_handler.py:544: empty 'except Exception: pass' (silently swallowing errors)
-src/claude_monitoring/dashboard_handler.py:721: empty 'except Exception: pass' (silently swallowing errors)
+src/claude_monitoring/dashboard_handler.py:1157: empty 'except Exception: pass' (silently swallowing errors)
+src/claude_monitoring/dashboard_handler.py:1171: empty 'except Exception: pass' (silently swallowing errors)
+src/claude_monitoring/dashboard_handler.py:1234: empty 'except Exception: pass' (silently swallowing errors)
+src/claude_monitoring/dashboard_handler.py:212: public function 'do_POST' missing docstring
+src/claude_monitoring/dashboard_handler.py:2508: empty 'except Exception: pass' (silently swallowing errors)
+src/claude_monitoring/dashboard_handler.py:2525: empty 'except Exception: pass' (silently swallowing errors)
+src/claude_monitoring/dashboard_handler.py:257: public function 'do_OPTIONS' missing docstring
+src/claude_monitoring/dashboard_handler.py:2595: empty 'except Exception: pass' (silently swallowing errors)
+src/claude_monitoring/dashboard_handler.py:2646: empty 'except Exception: pass' (silently swallowing errors)
+src/claude_monitoring/dashboard_handler.py:2788: empty 'except Exception: pass' (silently swallowing errors)
+src/claude_monitoring/dashboard_handler.py:539: empty 'except Exception: pass' (silently swallowing errors)
+src/claude_monitoring/dashboard_handler.py:545: empty 'except Exception: pass' (silently swallowing errors)
+src/claude_monitoring/dashboard_handler.py:722: empty 'except Exception: pass' (silently swallowing errors)
 src/claude_monitoring/dashboard_handler.py:79: public function 'log_message' missing docstring
-src/claude_monitoring/dashboard_handler.py:966: empty 'except Exception: pass' (silently swallowing errors)
+src/claude_monitoring/dashboard_handler.py:967: empty 'except Exception: pass' (silently swallowing errors)
 src/claude_monitoring/db.py:378: empty 'except Exception: pass' (silently swallowing errors)
 src/claude_monitoring/db.py:445: empty 'except Exception: pass' (silently swallowing errors)
 src/claude_monitoring/db.py:74: empty 'except Exception: pass' (silently swallowing errors)

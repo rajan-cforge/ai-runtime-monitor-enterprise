@@ -121,6 +121,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             "/api/feed": self._api_feed,
             "/api/stats": self._api_stats,
             "/api/state-bar": self._api_state_bar,
+            "/api/system-tab": self._api_system_tab,
             "/api/processes": self._api_processes,
             "/api/files": self._api_files,
             "/api/connections": self._api_connections,
@@ -1082,6 +1083,16 @@ class DashboardHandler(BaseHTTPRequestHandler):
         from claude_monitoring import dashboard_state_bar
 
         self._send_json(dashboard_state_bar.build_envelope(get_thread_db()))
+
+    def _api_system_tab(self, params):
+        """GET /api/system-tab — System-tab envelope per directive line
+        223-228 + Round 4 mockup. Three sections: staleness_banners,
+        capture_matrix, per_host_capture_rate. Helpers live in
+        `dashboard_system_tab` so this file stays under the 2900-line
+        ceiling."""
+        from claude_monitoring import dashboard_system_tab
+
+        self._send_json(dashboard_system_tab.build_envelope(get_thread_db()))
 
     def _api_stats(self, params):
         db = get_thread_db()

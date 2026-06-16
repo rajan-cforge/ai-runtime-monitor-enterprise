@@ -614,6 +614,78 @@ body { background:var(--bg); color:var(--text); font-family:var(--font-sans); fo
 .volstrip b { color: var(--v-text); font-weight:600; font-variant-numeric:tabular-nums; }
 .volstrip .vi:hover b { color: var(--v-accent); }
 
+/* P6.3 — System tab (Round 4 mockup): section card + staleness banners +
+   capture matrix + per-host capture rate + grouped process table +
+   network table. Verbatim from handoff/vigil.css. */
+.card { background: var(--v-surface); border:1px solid var(--v-border); border-radius:11px; margin-bottom:16px; }
+.card__head { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:15px 18px; border-bottom:1px solid var(--v-border); }
+.card__title { font-size:13px; font-weight:600; letter-spacing:-.005em; display:flex; align-items:center; gap:9px; }
+.card__meta { font-size:11.5px; color: var(--v-text-3); }
+.card__body { padding:6px 18px 14px; }
+.card__body--flush { padding:0; }
+
+.alertbar { display:flex; align-items:flex-start; gap:12px; padding:12px 16px; border-radius:9px; margin:14px 0;
+            border:1px solid var(--v-border); background: var(--v-surface-2); }
+.alertbar__ic { width:18px; height:18px; flex:none; margin-top:1px; }
+.alertbar--warn { background: var(--v-attention-bg, rgba(244,180,0,.12)); border-color: var(--v-attention-border, rgba(244,180,0,.35)); }
+.alertbar--warn .alertbar__ic { color: var(--v-attention, var(--orange)); }
+.alertbar--calm .alertbar__ic { color: var(--v-text-3); }
+.alertbar__t { font-size:13px; font-weight:600; color: var(--v-text); }
+.alertbar__d { font-size:12px; color: var(--v-text-2); margin-top:2px; line-height:1.5; }
+
+.cov { display:inline-flex; align-items:center; gap:6px; font-size:11px; font-weight:600; letter-spacing:.03em;
+       text-transform:uppercase; padding:3px 9px 3px 7px; border-radius:5px; line-height:1; border:1px solid transparent; white-space:nowrap; }
+.cov--full     { color: var(--v-safe, var(--green));      background: var(--v-safe-bg, rgba(46,200,90,.12));      border-color: rgba(46,200,90,.35); }
+.cov--partial  { color: var(--v-attention, var(--orange));background: var(--v-attention-bg, rgba(244,180,0,.12)); border-color: rgba(244,180,0,.35); }
+.cov--envelope { color: var(--v-info, var(--blue));       background: var(--v-info-bg, rgba(91,140,251,.12));     border-color: rgba(91,140,251,.35); }
+.cov--none     { color: var(--v-risk, var(--red));        background: var(--v-risk-bg, rgba(226,85,99,.12));      border-color: rgba(226,85,99,.35); }
+
+.mtx { width:100%; border-collapse:collapse; font-size:13px; }
+.mtx th { text-align:left; font-size:10px; font-weight:600; text-transform:uppercase; letter-spacing:.06em;
+          color: var(--v-text-3); padding:10px 18px; border-bottom:1px solid var(--v-border); }
+.mtx td { padding:13px 18px; border-bottom:1px solid var(--v-border); vertical-align:middle; }
+.mtx tr:last-child td { border-bottom:none; }
+.mtx__surface { font-weight:500; color: var(--v-text); display:flex; align-items:center; gap:10px; }
+.mtx__mech { font-size:11.5px; color: var(--v-text-3); }
+.mtx__gap { font-size:12px; color: var(--v-text-2); line-height:1.45; }
+
+.exrow { display:grid; grid-template-columns:1.4fr 0.8fr 1.1fr auto; align-items:center; gap:16px;
+         padding:13px 18px; border-bottom:1px solid var(--v-border); }
+.exrow:last-child { border-bottom:none; }
+.exhost { font-family: var(--v-mono, monospace); font-size:13px; font-weight:500; color: var(--v-text); display:flex; align-items:center; gap:9px; }
+.exhost__dot { width:8px; height:8px; border-radius:999px; flex:none; }
+.exrate { font-size:12.5px; color: var(--v-text-2); }
+.exrate b { color: var(--v-text); font-weight:600; font-variant-numeric:tabular-nums; }
+.exbars { display:flex; align-items:flex-end; gap:2px; height:22px; }
+.exbars span { width:5px; border-radius:1px; background: var(--v-cap-elevated, var(--v-text-3)); opacity:.5; min-height:2px; }
+.exbars span.zero { background: var(--v-attention, var(--orange)); opacity:.7; }
+.exstate { font-size:12px; display:flex; align-items:center; gap:7px; justify-self:end; white-space:nowrap; }
+
+.ptbl { width:100%; border-collapse:collapse; font-size:12.5px; }
+.ptbl th { text-align:left; font-size:10px; font-weight:600; text-transform:uppercase; letter-spacing:.06em;
+           color: var(--v-text-3); padding:9px 18px; border-bottom:1px solid var(--v-border); }
+.ptbl th.r, .ptbl td.r { text-align:right; font-variant-numeric:tabular-nums; }
+.pgroup { cursor:pointer; }
+.pgroup td { padding:11px 18px; border-bottom:1px solid var(--v-border); background: var(--v-surface); font-weight:500; }
+.pgroup__name { display:flex; align-items:center; gap:10px; color: var(--v-text); }
+.pgroup__chev { width:13px; height:13px; color: var(--v-text-3); transition: transform .15s ease; display:inline-block; }
+.pgroup.is-open .pgroup__chev { transform: rotate(90deg); }
+.pgroup__count { font-size:11px; color: var(--v-text-3); font-weight:500; }
+.pchild { display:none; }
+.pgroup.is-open ~ .pchild[data-pchild] { /* expanded children rendered by JS */ }
+.pchild.is-shown { display: table-row; }
+.pchild td { padding:8px 18px; border-bottom:1px solid var(--v-border); color: var(--v-text-2); background: var(--v-surface-2); }
+.pchild td:first-child { padding-left:42px; }
+.pchild .pid { font-family: var(--v-mono, monospace); font-size:11.5px; color: var(--v-text-3); }
+.runbadge { font-size:10px; font-weight:600; color: var(--v-safe, var(--green)); text-transform:uppercase; letter-spacing:.04em; }
+
+.ntbl { width:100%; border-collapse:collapse; font-size:12px; }
+.ntbl th { text-align:left; font-size:10px; font-weight:600; text-transform:uppercase; letter-spacing:.06em;
+           color: var(--v-text-3); padding:9px 18px; border-bottom:1px solid var(--v-border); }
+.ntbl td { padding:9px 18px; border-bottom:1px solid var(--v-border); color: var(--v-text-2); }
+.ntbl tr:last-child td { border-bottom:none; }
+.ntbl .mono { font-family: var(--v-mono, monospace); color: var(--v-text); }
+
 /* ==========================================================================
    SEGMENTED CONTROL  (TP/FP, live/historical)
    ========================================================================== */
@@ -878,27 +950,63 @@ body { background:var(--bg); color:var(--text); font-family:var(--font-sans); fo
   </div>
 
   <!-- System -->
+  <!-- P6.3 — System tab migrated to Round 4 mockup. Five sections:
+       staleness banners / capture matrix / per-host capture rate /
+       running AI processes (grouped) / network connections.
+       File Activity dropped per D-drop-file-activity (directive
+       line 223-228 doesn't list it; backend file_events untouched). -->
   <div class="panel" id="panel-system">
-    <div class="system-grid">
-      <div class="system-section">
-        <h3>Running AI Processes</h3>
-        <table class="data-table" id="proc-table">
-          <thead><tr><th>PID</th><th>Name</th><th>Source</th><th>CPU%</th><th>MEM%</th><th>Uptime</th><th>Status</th><th>Command</th></tr></thead>
-          <tbody id="proc-tbody"></tbody>
+    <!-- Banners (loader populates from /api/system-tab) -->
+    <div class="v-faint" style="font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px;">Capture health</div>
+    <div id="sys-alertbars"></div>
+
+    <!-- Capture matrix (6 canonical surfaces) -->
+    <div class="card" style="margin-top:20px;">
+      <div class="card__head">
+        <div class="card__title">Capture coverage</div>
+        <span class="card__meta">graphical <span class="v-mono">ai-monitor --status</span></span>
+      </div>
+      <div class="card__body card__body--flush">
+        <table class="mtx">
+          <thead><tr><th>Surface</th><th>Coverage</th><th>Mechanism</th><th>What's missing in v0.2.2</th></tr></thead>
+          <tbody id="sys-mtx-tbody"></tbody>
         </table>
       </div>
-      <div class="system-section">
-        <h3>Network Connections</h3>
-        <table class="data-table" id="conn-table">
-          <thead><tr><th>Time</th><th>Process</th><th>Remote Host</th><th>Port</th><th>Service</th></tr></thead>
-          <tbody id="conn-tbody"></tbody>
+    </div>
+
+    <!-- Browser extension per-host capture rate -->
+    <div class="card" style="margin-top:20px;">
+      <div class="card__head">
+        <div class="card__title">Browser extension</div>
+        <span class="card__meta">per-host capture rate · matched conversation elements per heartbeat</span>
+      </div>
+      <div class="card__body card__body--flush" id="sys-perhost"></div>
+    </div>
+
+    <!-- Running AI processes (grouped by app) -->
+    <div class="card" style="margin-top:20px;">
+      <div class="card__head">
+        <div class="card__title">Running AI processes</div>
+        <span class="card__meta" id="sys-proc-meta">—</span>
+      </div>
+      <div class="card__body card__body--flush">
+        <table class="ptbl">
+          <thead><tr><th>Process</th><th>Source</th><th class="r">CPU</th><th class="r">Mem</th><th class="r">Uptime</th><th></th></tr></thead>
+          <tbody id="sys-ptbl-tbody"></tbody>
         </table>
       </div>
-      <div class="system-section">
-        <h3>Recent File Activity</h3>
-        <table class="data-table" id="file-table">
-          <thead><tr><th>Time</th><th>Operation</th><th>Path</th><th>Size</th></tr></thead>
-          <tbody id="file-tbody"></tbody>
+    </div>
+
+    <!-- Network connections -->
+    <div class="card" style="margin-top:20px;">
+      <div class="card__head">
+        <div class="card__title">Network connections</div>
+        <span class="card__meta">live · AI processes only</span>
+      </div>
+      <div class="card__body card__body--flush">
+        <table class="ntbl">
+          <thead><tr><th>Time</th><th>Process</th><th>Remote host</th><th>Port</th><th>Service</th></tr></thead>
+          <tbody id="sys-ntbl-tbody"></tbody>
         </table>
       </div>
     </div>
@@ -1164,7 +1272,7 @@ function switchTab(name) {
   const tab = document.querySelector('.v-tab[data-tab="'+name+'"]');
   if (tab) tab.classList.add('is-active');
   document.getElementById('panel-' + name).classList.add('active');
-  if (name === 'system') { loadProcesses(); loadConnections(); loadFiles(); }
+  if (name === 'system') { loadProcesses(); loadConnections(); loadSystemTab(); }
   if (name === 'analytics') { loadMCPStats(); }
   if (name === 'insights') { loadInsights(); }
   if (name === 'traffic') { loadTraffic(true); }
@@ -1388,6 +1496,140 @@ function _sbReplaceChildren(el, nodes) {
 // P6.2 — Load the global state bar from /api/state-bar. Data-truthful:
 // null counts → '—'; null percentage → 'Awaiting data'.
 // D-awaiting-data-on-empty + D-alerts-derivation-mirrors-api-alerts.
+// P6.3 — System tab loader. Fetches /api/system-tab + populates three
+// sections (alertbars, capture matrix, per-host capture rate) via DOM
+// construction. No innerHTML — per D-dom-construction-no-innerhtml.
+async function loadSystemTab() {
+  try {
+    const r = await fetch(API + '/api/system-tab');
+    const d = await r.json();
+    _renderStaleBanners(d.staleness_banners || []);
+    _renderCaptureMatrix(d.capture_matrix || []);
+    _renderPerHostRate(d.per_host_capture_rate || []);
+  } catch (e) {
+    // Network failure — leave the section content in place.
+  }
+}
+
+function _renderStaleBanners(banners) {
+  var host = document.getElementById('sys-alertbars');
+  if (!host) return;
+  _sbReplaceChildren(host, []);
+  for (var i = 0; i < banners.length; i++) {
+    var b = banners[i];
+    var bar = document.createElement('div');
+    bar.className = 'alertbar alertbar--' + (b.kind === 'warn' ? 'warn' : 'calm');
+    var ic = document.createElement('div');
+    ic.className = 'alertbar__ic';
+    ic.textContent = b.kind === 'warn' ? '⚠' : 'ⓘ';
+    bar.appendChild(ic);
+    var body = document.createElement('div');
+    var t = _sbSpan('alertbar__t', b.headline || b.hostname);
+    var d = _sbSpan('alertbar__d', b.detail || '');
+    body.appendChild(t);
+    body.appendChild(d);
+    bar.appendChild(body);
+    host.appendChild(bar);
+  }
+}
+
+function _renderCaptureMatrix(rows) {
+  var tbody = document.getElementById('sys-mtx-tbody');
+  if (!tbody) return;
+  _sbReplaceChildren(tbody, []);
+  for (var i = 0; i < rows.length; i++) {
+    var r = rows[i];
+    var tr = document.createElement('tr');
+    var tdSurface = document.createElement('td');
+    var surface = document.createElement('div');
+    surface.className = 'mtx__surface';
+    surface.appendChild(document.createTextNode(r.label || ''));
+    if (r.sublabel) {
+      surface.appendChild(document.createTextNode(' '));
+      surface.appendChild(_sbSpan('v-faint v-mono', r.sublabel));
+    }
+    tdSurface.appendChild(surface);
+    tr.appendChild(tdSurface);
+    var tdCov = document.createElement('td');
+    var cov = document.createElement('span');
+    cov.className = 'cov cov--' + r.coverage;
+    cov.textContent = r.coverage.charAt(0).toUpperCase() + r.coverage.slice(1);
+    tdCov.appendChild(cov);
+    tr.appendChild(tdCov);
+    var tdMech = document.createElement('td');
+    tdMech.className = 'mtx__mech';
+    tdMech.textContent = r.mechanism || '';
+    tr.appendChild(tdMech);
+    var tdGap = document.createElement('td');
+    tdGap.className = 'mtx__gap';
+    tdGap.textContent = r.gap || '';
+    tr.appendChild(tdGap);
+    tbody.appendChild(tr);
+  }
+}
+
+function _renderPerHostRate(rows) {
+  var host = document.getElementById('sys-perhost');
+  if (!host) return;
+  _sbReplaceChildren(host, []);
+  if (rows.length === 0) {
+    var empty = document.createElement('div');
+    empty.style.padding = '13px 18px';
+    empty.appendChild(_sbSpan('v-faint', 'No browser-extension heartbeats yet.'));
+    host.appendChild(empty);
+    return;
+  }
+  for (var i = 0; i < rows.length; i++) {
+    var r = rows[i];
+    var row = document.createElement('div');
+    row.className = 'exrow';
+    // Host name (textContent-only; defends against XSS in hostname).
+    var nameSpan = document.createElement('span');
+    nameSpan.className = 'exhost';
+    var dot = document.createElement('span');
+    dot.className = 'exhost__dot';
+    dot.style.background = r.state === 'healthy' ? 'var(--v-safe, var(--green))'
+                          : r.state === 'selector_drift' ? 'var(--v-attention, var(--orange))'
+                          : 'var(--v-text-3)';
+    nameSpan.appendChild(dot);
+    nameSpan.appendChild(document.createTextNode(r.hostname));
+    row.appendChild(nameSpan);
+    // Rate.
+    var rateSpan = document.createElement('span');
+    rateSpan.className = 'exrate';
+    if (r.matches_per_beat === null || r.matches_per_beat === undefined) {
+      rateSpan.appendChild(_sbSpan('v-faint', 'no beats'));
+    } else {
+      var b = document.createElement('b');
+      b.textContent = r.matches_per_beat.toFixed(1);
+      rateSpan.appendChild(b);
+      rateSpan.appendChild(document.createTextNode(' matches / beat · '));
+      rateSpan.appendChild(_sbSpan('v-faint', (r.total_beats || 0) + ' beats'));
+    }
+    row.appendChild(rateSpan);
+    // Sparkline placeholder (8 bars; flat 50% on healthy, zeroed on selector_drift).
+    var bars = document.createElement('span');
+    bars.className = 'exbars';
+    for (var j = 0; j < 8; j++) {
+      var bar = document.createElement('span');
+      if (r.state === 'selector_drift') bar.className = 'zero';
+      bar.style.height = (r.state === 'healthy' ? '60%' : r.state === 'selector_drift' ? '8%' : '20%');
+      bars.appendChild(bar);
+    }
+    row.appendChild(bars);
+    // State.
+    var stateSpan = document.createElement('span');
+    stateSpan.className = 'exstate';
+    var label = r.state === 'healthy' ? 'Healthy' : r.state === 'selector_drift' ? 'Selector drift' : 'Idle';
+    stateSpan.style.color = r.state === 'healthy' ? 'var(--v-safe)'
+                           : r.state === 'selector_drift' ? 'var(--v-attention)'
+                           : 'var(--v-text-3)';
+    stateSpan.textContent = label;
+    row.appendChild(stateSpan);
+    host.appendChild(row);
+  }
+}
+
 async function loadStateBar() {
   try {
     const r = await fetch(API + '/api/state-bar');
@@ -2092,7 +2334,8 @@ async function loadProcesses() {
   try {
     const r = await fetch(API + '/api/processes');
     const d = await r.json();
-    const tbody = document.getElementById('proc-tbody');
+    const tbody = document.getElementById('sys-ptbl-tbody');
+    if (!tbody) return;
     if (!d.processes.length) {
       tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--text2)">No AI processes detected</td></tr>';
       return;
@@ -2140,7 +2383,8 @@ async function loadConnections() {
   try {
     const r = await fetch(API + '/api/connections');
     const d = await r.json();
-    const tbody = document.getElementById('conn-tbody');
+    const tbody = document.getElementById('sys-ntbl-tbody');
+    if (!tbody) return;
     tbody.innerHTML = d.connections.slice(0,50).map(c =>
       '<tr><td>'+fmtTime(c.timestamp)+'</td><td>'+esc(resolveConnName(c.process_name))+'</td>'
       + '<td>'+esc(resolveEC2(c.remote_host))+'</td><td>'+c.remote_port+'</td>'
@@ -2153,7 +2397,8 @@ async function loadFiles() {
   try {
     const r = await fetch(API + '/api/files?limit=50');
     const d = await r.json();
-    const tbody = document.getElementById('file-tbody');
+    const tbody = document.getElementById('file-tbody');  // P6.3: file-table dropped (D-drop-file-activity); guard for missing element
+    if (!tbody) return;
     var files = d.files.filter(function(f) { return !f.path || !/\.tmp\.\w+/.test(f.path); });
     tbody.innerHTML = files.map(f =>
       '<tr><td>'+fmtTime(f.timestamp)+'</td><td>'+esc(f.operation)+'</td>'
@@ -3092,6 +3337,8 @@ feedInterval = setInterval(pollFeed, 2000);
 // returns a small envelope (no token rollups). One source of truth for
 // monitor / fill-rate / alerts / attack-surface across every tab.
 setInterval(loadStateBar, 10000);
+// P6.3 — Poll system tab every 10s. Cheap envelope (3 SQL reads).
+setInterval(loadSystemTab, 10000);
 
 // Deep-link handler: ?session=<id>&turn=<n>&alert=<alert_id> opens the
 // Deep Dive cockpit directly at the right turn and scrolls to the named
