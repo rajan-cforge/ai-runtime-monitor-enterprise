@@ -22,7 +22,6 @@ from __future__ import annotations
 import sqlite3
 from datetime import datetime, timezone
 
-
 # ---------------------------------------------------------------------------
 # Staleness banner classifier (v021 item #1, mockup .alertbar--warn/--calm)
 # ---------------------------------------------------------------------------
