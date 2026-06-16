@@ -38,10 +38,15 @@ body { background:var(--bg); color:var(--text); font-family:var(--font-sans); fo
 .stat-card .value.purple { color:var(--purple); }
 .stat-sub { font-size:11px; color:var(--text2); margin-top:2px; }
 
-.tabs { display:flex; gap:0; border-bottom:1px solid var(--border); padding:0 24px; background:var(--surface); }
-.tab { padding:10px 20px; cursor:pointer; color:var(--text2); border-bottom:2px solid transparent; font-size:13px; font-weight:500; transition:all 0.2s; }
-.tab:hover { color:var(--text); }
-.tab.active { color:var(--blue); border-bottom-color:var(--blue); }
+/* P6.1 — header + tab nav migrated to vigil.css tokens (Round 4 mockup). */
+.topbar { display:flex; align-items:center; justify-content:space-between; padding:14px 24px; background:var(--surface); border-bottom:1px solid var(--border); }
+.brand { display:flex; align-items:center; gap:12px; }
+.brand__mark { width:32px; height:32px; display:flex; align-items:center; justify-content:center; background:var(--v-accent, #6b8afd); border-radius:6px; }
+.brand__mark svg { width:22px; height:22px; }
+.brand__name { font-size:16px; font-weight:600; color:var(--text); letter-spacing:.01em; }
+.brand__sub { font-size:11px; color:var(--text2); letter-spacing:.02em; }
+.topbar__right { display:flex; align-items:center; gap:14px; }
+.topbar__right > span { font-size:12px; color:var(--text2); display:inline-flex; align-items:center; gap:6px; }
 
 .content { padding:16px 24px; }
 .panel { display:none; }
@@ -579,6 +584,8 @@ body { background:var(--bg); color:var(--text); font-family:var(--font-sans); fo
 .v-tab__count { font-size:var(--v-fs-2xs); font-weight:600; padding:1px 6px;
          border-radius: var(--v-r-full); background: var(--v-surface-3); color: var(--v-text-2); }
 .v-tab__count--risk { background: var(--v-risk-bg); color: var(--v-risk); }
+.v-tab__new { font-size:9px; font-weight:700; letter-spacing:.07em; text-transform:uppercase;
+         color: var(--v-accent); background: var(--v-accent-bg); padding:2px 5px; border-radius:4px; }
 .v-tab--muted { color: var(--v-text-3); margin-left:auto; }
 
 /* ==========================================================================
@@ -654,9 +661,18 @@ body { background:var(--bg); color:var(--text); font-family:var(--font-sans); fo
     <button onclick="document.getElementById('extension-health-banner').style.display='none'" style="background:transparent;border:1px solid #d29922;color:#d29922;border-radius:3px;padding:2px 8px;font-size:11px;cursor:pointer">Dismiss</button>
   </div>
 </div>
-<div class="header">
-  <h1>AI Runtime <span>Monitor</span></h1>
-  <div style="display:flex;gap:12px;align-items:center">
+<header class="topbar">
+  <div class="brand">
+    <div class="brand__mark">
+      <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 2 4 5v6c0 5 3.5 8.5 8 11 4.5-2.5 8-6 8-11V5l-8-3Z" fill="#0b0d12" fill-opacity=".25" stroke="#fff" stroke-width="1.6" stroke-linejoin="round"/><circle cx="12" cy="11" r="2.3" fill="#fff"/></svg>
+    </div>
+    <div>
+      <div class="brand__name">Vigil</div>
+      <div class="brand__sub">Runtime security for AI coding agents</div>
+    </div>
+  </div>
+  <div class="topbar__right">
+    <span><span class="dot"></span>Monitoring</span>
     <div class="export-menu" style="position:relative">
       <button onclick="document.getElementById('export-dropdown').style.display=document.getElementById('export-dropdown').style.display==='block'?'none':'block'" style="background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:5px 12px;color:var(--text);font-size:12px;cursor:pointer">Export</button>
       <div id="export-dropdown" style="display:none;position:absolute;right:0;top:32px;background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:4px 0;min-width:180px;z-index:100;box-shadow:0 4px 12px rgba(0,0,0,0.3)">
@@ -680,9 +696,8 @@ body { background:var(--bg); color:var(--text); font-family:var(--font-sans); fo
         <a onclick="window.location.href=window.withAuthToken(API+'/api/report?days=7&format=markdown')" style="display:block;padding:6px 12px;color:var(--text);font-size:13px;cursor:pointer;text-decoration:none">Weekly Report (Markdown)</a>
       </div>
     </div>
-    <div class="status"><div class="dot"></div><span style="font-size:12px;color:var(--text2)">Monitoring</span></div>
   </div>
-</div>
+</header>
 
 <div class="stats" id="stat-cards">
   <div class="stat-card" onclick="switchTab('explorer')"><div class="label">Sessions</div><div class="value blue" id="st-sessions">-</div><div class="stat-sub" id="st-sessions-sub"></div></div>
@@ -694,18 +709,18 @@ body { background:var(--bg); color:var(--text); font-family:var(--font-sans); fo
   <div class="stat-card" onclick="switchTab('alerts')"><div class="label">Alerts</div><div class="value alert" id="st-alerts">-</div><div class="stat-sub" id="st-alerts-sub"></div></div>
 </div>
 
-<div class="tabs">
-  <div class="tab active" data-tab="explorer">Session Explorer <span id="tab-live-badge" style="font-size:10px;color:var(--green);font-weight:600;margin-left:4px"></span></div>
-  <div class="tab" data-tab="feed">Live Feed</div>
-  <div class="tab" data-tab="analytics">Analytics</div>
-  <div class="tab" data-tab="insights">Insights</div>
-  <div class="tab" data-tab="system">System</div>
-  <div class="tab" data-tab="traffic">API Traffic</div>
-  <div class="tab" data-tab="timeline">Activity Timeline</div>
-  <div class="tab" data-tab="supply-chain">Supply Chain</div>
-  <div class="tab" data-tab="assets">Assets <span id="tab-assets-badge" style="font-size:11px;color:var(--text2);font-weight:normal"></span></div>
-  <div class="tab" data-tab="alerts">Alerts <span id="tab-alerts-badge" style="font-size:11px;color:var(--red);font-weight:normal"></span></div>
-</div>
+<nav class="v-tabs">
+  <button class="v-tab is-active" data-tab="explorer">Session Explorer <span id="tab-live-badge" style="font-size:10px;color:var(--green);font-weight:600;margin-left:4px"></span></button>
+  <button class="v-tab" data-tab="feed">Live Feed</button>
+  <button class="v-tab" data-tab="analytics">Analytics</button>
+  <button class="v-tab" data-tab="insights">Insights</button>
+  <button class="v-tab" data-tab="system">System</button>
+  <button class="v-tab" data-tab="traffic">API Traffic</button>
+  <button class="v-tab" data-tab="timeline">Activity Timeline</button>
+  <button class="v-tab" data-tab="supply-chain">Supply Chain</button>
+  <button class="v-tab" data-tab="assets">Attack Surface <span class="v-tab__new">New</span><span id="tab-assets-badge" class="v-tab__count" style="display:none"></span></button>
+  <button class="v-tab" data-tab="alerts">Alerts <span id="tab-alerts-badge" class="v-tab__count v-tab__count--risk v-num" style="display:none"></span></button>
+</nav>
 
 <div class="content">
   <!-- Session Explorer -->
@@ -1088,12 +1103,13 @@ let currentPlanInfo = {};
 let sessionTitleMap = {};
 let feedInterval, statsInterval, sessionsInterval;
 
-// Tab switching
+// Tab switching. P6.1 migration: nav uses .v-tab/is-active (Round 4 mockup);
+// content panes keep .panel/active untouched (P6.3+ owns panel migration).
 function switchTab(name) {
-  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.v-tab').forEach(t => t.classList.remove('is-active'));
   document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
-  const tab = document.querySelector('.tab[data-tab="'+name+'"]');
-  if (tab) tab.classList.add('active');
+  const tab = document.querySelector('.v-tab[data-tab="'+name+'"]');
+  if (tab) tab.classList.add('is-active');
   document.getElementById('panel-' + name).classList.add('active');
   if (name === 'system') { loadProcesses(); loadConnections(); loadFiles(); }
   if (name === 'analytics') { loadMCPStats(); }
@@ -1104,19 +1120,19 @@ function switchTab(name) {
   if (name === 'supply-chain') { loadSupplyChain(); }
   if (name === 'assets') { loadAssets(0); }
 }
-document.querySelectorAll('.tab').forEach(tab => {
+document.querySelectorAll('.v-tab').forEach(tab => {
   tab.addEventListener('click', () => switchTab(tab.dataset.tab));
 });
 
 // URL-hash → tab activation. Enables `/#assets` to land directly on the
-// Assets tab — useful for deep-links and for headless-Chrome evidence
+// Attack Surface tab — useful for deep-links and for headless-Chrome evidence
 // capture (dashboard-asset-view.a2 screenshot batch).
 function _hashToTab() {
   const h = (window.location.hash || '').replace(/^#/, '').trim();
   if (!h) return;
   // Sanitize: tab name must match an actual tab element (defense-in-depth
   // against an attacker stuffing JS into the hash and hoping for trouble).
-  const safe = document.querySelector('.tab[data-tab="' + CSS.escape(h) + '"]');
+  const safe = document.querySelector('.v-tab[data-tab="' + CSS.escape(h) + '"]');
   if (safe) switchTab(h);
 }
 _hashToTab();
