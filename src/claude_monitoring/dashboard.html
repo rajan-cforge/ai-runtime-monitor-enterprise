@@ -686,6 +686,35 @@ body { background:var(--bg); color:var(--text); font-family:var(--font-sans); fo
 .ntbl tr:last-child td { border-bottom:none; }
 .ntbl .mono { font-family: var(--v-mono, monospace); color: var(--v-text); }
 
+/* P6.4 — API Traffic tab (Round 4 mockup): atbl table + source/content
+   state badges + segmented filter toggle. Verbatim from handoff. */
+.atbl { width:100%; border-collapse:collapse; font-size:12.5px; }
+.atbl th { text-align:left; font-size:10px; font-weight:600; text-transform:uppercase; letter-spacing:.06em;
+           color: var(--v-text-3); padding:9px 18px; border-bottom:1px solid var(--v-border); }
+.atbl th.r, .atbl td.r { text-align:right; font-variant-numeric:tabular-nums; }
+.atbl td { padding:8px 18px; border-bottom:1px solid var(--v-border); color: var(--v-text-2); }
+.atbl tr:last-child td { border-bottom:none; }
+.atbl tr:hover td { background: var(--v-surface-2); }
+.atbl .path { font-family: var(--v-mono, monospace); color: var(--v-text); font-size:11.5px; }
+.atbl .ok { color: var(--v-safe, var(--green)); font-weight:600; font-size:11.5px; }
+.atbl .err { color: var(--v-risk, var(--red)); font-weight:600; font-size:11.5px; }
+.atbl tr.is-noise[hidden] { display:none; }
+.atbl tr.is-noise.is-shown { display: table-row; }
+
+.srcbadge { display:inline-block; font-size:10.5px; font-weight:600; text-transform:uppercase; letter-spacing:.05em;
+            padding:2px 7px; border-radius:4px; background: var(--v-surface-3, var(--surface2)); color: var(--v-text-2); border:1px solid var(--v-border); }
+.srcbadge--dual { background: var(--v-accent-bg, rgba(107,138,253,.13)); color: var(--v-accent); border-color: rgba(107,138,253,.35); }
+
+.cstate { display:inline-flex; align-items:center; gap:6px; font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.03em;
+          padding:2px 7px; border-radius:4px; border:1px solid transparent; }
+.cstate--full { color: var(--v-safe, var(--green)); background: var(--v-safe-bg, rgba(46,200,90,.12)); border-color: rgba(46,200,90,.35); }
+.cstate--env  { color: var(--v-info, var(--blue));  background: var(--v-info-bg, rgba(91,140,251,.12)); border-color: rgba(91,140,251,.35); }
+
+.v-seg { display:inline-flex; border:1px solid var(--v-border); border-radius:6px; background: var(--v-surface); padding:2px; }
+.v-seg button { background:transparent; border:none; color: var(--v-text-2); font-size:12px; font-weight:500; padding:6px 12px; border-radius:4px; cursor:pointer; font-family:inherit; }
+.v-seg button.is-on { background: var(--v-accent-bg, rgba(107,138,253,.13)); color: var(--v-accent); }
+.v-seg button:hover:not(.is-on) { color: var(--v-text); }
+
 /* ==========================================================================
    SEGMENTED CONTROL  (TP/FP, live/historical)
    ========================================================================== */
@@ -1013,33 +1042,75 @@ body { background:var(--bg); color:var(--text); font-family:var(--font-sans); fo
   </div>
 
   <!-- API Traffic -->
+  <!-- P6.4 — API Traffic tab migrated to Round 4 mockup. Three counter
+       cards (intercepted / chat_calls / content_captured) + fill-rate;
+       noise-explainer alertbar; v-seg filter toggle (chat / all);
+       atbl table with Source column. Chat rows never hidden; "Show
+       all" reveals every row (TestShowAllRevealsEveryHiddenRow pin). -->
   <div class="panel" id="panel-traffic">
-    <div class="traffic-summary">
-      <div class="traffic-card"><div class="tc-label">&#x1f310; Total API Calls</div><div class="tc-value" id="traffic-total">-</div></div>
-      <div class="traffic-card"><div class="tc-label">&#x23f1; Avg Latency</div><div class="tc-value" id="traffic-latency">-</div></div>
-      <div class="traffic-card"><div class="tc-label">&#x26a0; Sensitive Calls</div><div class="tc-value" id="traffic-sensitive" style="color:var(--red)">-</div></div>
-      <div class="traffic-card"><div class="tc-label">&#x1f4b0; Claude Code Spend</div><div class="tc-value" id="traffic-cost" style="color:var(--orange)">-</div><div class="tc-sub" style="font-size:11px;color:var(--text2);margin-top:2px">From session logs</div></div>
+    <!-- Three counter cards per directive line 230 -->
+    <div class="stats" style="grid-template-columns:repeat(4,1fr);">
+      <div class="stat stat--quiet">
+        <div class="stat__k">Requests intercepted</div>
+        <div class="stat__v" id="api-intercepted">—</div>
+        <div class="stat__s">all AI-host traffic at the wire</div>
+      </div>
+      <div class="stat stat--accent">
+        <div class="stat__k">Chat calls</div>
+        <div class="stat__v" id="api-chat-calls">—</div>
+        <div class="stat__s">actual <span class="v-mono">/v1/messages</span> + <span class="v-mono">/chat/completions</span></div>
+      </div>
+      <div class="stat">
+        <div class="stat__k">Content captured</div>
+        <div class="stat__v" id="api-content-captured">—</div>
+        <div class="stat__s" id="api-fill-rate-sub"><span class="v-faint">Awaiting data</span></div>
+      </div>
+      <div class="stat stat--quiet">
+        <div class="stat__k">Claude Code spend</div>
+        <div class="stat__v" id="traffic-cost" style="color:var(--v-attention);">—</div>
+        <div class="stat__s">from session logs</div>
+      </div>
     </div>
-    <div id="traffic-banner"></div>
-    <div style="overflow-x:auto">
-      <table class="traffic-table" id="traffic-table">
-        <thead>
-          <tr>
-            <th onclick="sortTraffic('timestamp')">Timestamp <span class="sort-arrow" id="sort-timestamp">&#x25BC;</span></th>
-            <th onclick="sortTraffic('service')">Service <span class="sort-arrow" id="sort-service"></span></th>
-            <th onclick="sortTraffic('model')">Model <span class="sort-arrow" id="sort-model"></span></th>
-            <th onclick="sortTraffic('input_tokens')">Input Tokens <span class="sort-arrow" id="sort-input_tokens"></span></th>
-            <th onclick="sortTraffic('output_tokens')">Output Tokens <span class="sort-arrow" id="sort-output_tokens"></span></th>
-            <th onclick="sortTraffic('latency')">Latency <span class="sort-arrow" id="sort-latency"></span></th>
-            <th onclick="sortTraffic('status')">Status <span class="sort-arrow" id="sort-status"></span></th>
-            <th>Source</th>
-          </tr>
-        </thead>
-        <tbody id="traffic-tbody"></tbody>
-      </table>
+
+    <!-- Noise filter explainer (rendered iff intercepted > chat_calls) -->
+    <div class="alertbar alertbar--calm" id="api-noise-banner" style="margin-top:0;display:none;">
+      <div>
+        <div class="alertbar__t" id="api-noise-headline">— of — intercepted requests are infrastructure</div>
+        <div class="alertbar__d">Environment polling, OAuth and profile lookups. Hidden by default to keep this view scannable. Toggle "Show all" to inspect.</div>
+      </div>
     </div>
-    <div class="traffic-load-more" id="traffic-load-more" style="display:none">
-      <button onclick="loadTraffic(false)" style="background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:8px 24px;color:var(--text);font-size:13px;cursor:pointer">Load More</button>
+
+    <!-- Filter toggle + source column note -->
+    <div class="v-row-flex v-gap-3" style="margin:16px 0 12px;display:flex;align-items:center;gap:12px;">
+      <div class="v-seg" data-apifilter>
+        <button class="is-on" data-filter="chat" onclick="setApiFilter('chat')">Chat calls <span class="v-faint" id="api-seg-chat">—</span></button>
+        <button data-filter="all" onclick="setApiFilter('all')">All requests <span class="v-faint" id="api-seg-all">—</span></button>
+      </div>
+      <div style="flex:1;"></div>
+      <span class="v-faint" style="font-size:11.5px;">Source column always shown</span>
+    </div>
+
+    <div class="card" style="margin-bottom:0;">
+      <div class="card__body card__body--flush">
+        <table class="atbl" data-atbl>
+          <thead>
+            <tr>
+              <th>Time</th>
+              <th>Service</th>
+              <th>Endpoint</th>
+              <th class="r">Tokens</th>
+              <th class="r">Latency</th>
+              <th>Status</th>
+              <th>Source</th>
+              <th>Content</th>
+            </tr>
+          </thead>
+          <tbody id="atbl-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="traffic-load-more" id="traffic-load-more" style="display:none;margin-top:12px;">
+      <button onclick="loadTraffic(false)" style="background:var(--v-surface-2);border:1px solid var(--v-border);border-radius:4px;padding:8px 24px;color:var(--v-text);font-size:13px;cursor:pointer">Load More</button>
     </div>
   </div>
 
@@ -1275,7 +1346,7 @@ function switchTab(name) {
   if (name === 'system') { loadProcesses(); loadConnections(); loadSystemTab(); }
   if (name === 'analytics') { loadMCPStats(); }
   if (name === 'insights') { loadInsights(); }
-  if (name === 'traffic') { loadTraffic(true); }
+  if (name === 'traffic') { loadTraffic(true); loadTrafficSummary(); }
   if (name === 'timeline') { loadTimeline(); }
   if (name === 'alerts') { loadAlerts(); }
   if (name === 'supply-chain') { loadSupplyChain(); }
@@ -1298,6 +1369,23 @@ function _hashToTab() {
 }
 _hashToTab();
 window.addEventListener('hashchange', _hashToTab);
+
+// P6.4 — deep-link the API Traffic filter via `?apifilter=all`. Same
+// rationale as `_hashToTab`: lets us point Chrome at a specific UI state
+// for fixture capture without scripting clicks. Allowed values are
+// validated against the segment buttons' data-filter attribute.
+function _searchToFilter() {
+  try {
+    var sp = new URLSearchParams(window.location.search || '');
+    var v = sp.get('apifilter');
+    if (!v) return;
+    var btn = document.querySelector('.v-seg[data-apifilter] button[data-filter="' + CSS.escape(v) + '"]');
+    if (btn) setApiFilter(v);
+  } catch (e) {
+    // Older browsers without URLSearchParams — silently no-op.
+  }
+}
+_searchToFilter();
 
 // Format numbers
 function fmtNum(n) {
@@ -1499,6 +1587,77 @@ function _sbReplaceChildren(el, nodes) {
 // P6.3 — System tab loader. Fetches /api/system-tab + populates three
 // sections (alertbars, capture matrix, per-host capture rate) via DOM
 // construction. No innerHTML — per D-dom-construction-no-innerhtml.
+// P6.4 — Load API Traffic summary (counter cards). DOM construction only
+// (D-dom-construction-no-innerhtml). Data-truthful: percentage=null →
+// "Awaiting data". Header K reconciles to count of .cstate--full rendered
+// rows by construction (judge p6.4.a2 D-content-captured-one-predicate).
+async function loadTrafficSummary() {
+  try {
+    const r = await fetch(API + '/api/traffic/summary');
+    const d = await r.json();
+    const s = d.summary || {};
+    const setNum = function(id, v) {
+      var el = document.getElementById(id);
+      if (!el) return;
+      el.textContent = (v === null || v === undefined) ? '—' : v;
+    };
+    setNum('api-intercepted', s.intercepted);
+    setNum('api-chat-calls', s.chat_calls);
+    setNum('api-content-captured', s.content_captured);
+    // Fill-rate subtitle.
+    var sub = document.getElementById('api-fill-rate-sub');
+    if (sub) {
+      _sbReplaceChildren(sub, []);
+      if (s.fill_rate_24h_pct === null || s.fill_rate_24h_pct === undefined) {
+        sub.appendChild(_sbSpan('v-faint', 'Awaiting data'));
+      } else {
+        var b = document.createElement('b');
+        b.textContent = s.fill_rate_24h_pct + '%';
+        b.style.color = 'var(--v-safe, var(--green))';
+        sub.appendChild(b);
+        sub.appendChild(document.createTextNode(' 24h fill rate'));
+      }
+    }
+    // Update segmented-control counts.
+    setNum('api-seg-chat', s.chat_calls);
+    setNum('api-seg-all', s.intercepted);
+    // Noise banner: render iff intercepted > chat_calls.
+    var banner = document.getElementById('api-noise-banner');
+    var headline = document.getElementById('api-noise-headline');
+    if (banner && headline && s.intercepted && s.chat_calls !== null && s.intercepted > s.chat_calls) {
+      var noise = s.intercepted - s.chat_calls;
+      headline.textContent = noise + ' of ' + s.intercepted + ' intercepted requests are infrastructure';
+      banner.style.display = 'flex';
+    } else if (banner) {
+      banner.style.display = 'none';
+    }
+  } catch (e) {
+    // Network failure — leave the existing cell values in place.
+  }
+}
+
+// P6.4 — Segmented filter toggle (chat vs all). Shows / hides .is-noise
+// rows in the atbl. Pinned by TestShowAllRevealsEveryHiddenRow.
+function setApiFilter(mode) {
+  var seg = document.querySelector('.v-seg[data-apifilter]');
+  if (!seg) return;
+  var buttons = seg.querySelectorAll('button');
+  buttons.forEach(function(b) {
+    if (b.dataset.filter === mode) b.classList.add('is-on');
+    else b.classList.remove('is-on');
+  });
+  var rows = document.querySelectorAll('#atbl-tbody tr.is-noise');
+  rows.forEach(function(tr) {
+    if (mode === 'all') {
+      tr.classList.add('is-shown');
+      tr.removeAttribute('hidden');
+    } else {
+      tr.classList.remove('is-shown');
+      tr.setAttribute('hidden', '');
+    }
+  });
+}
+
 async function loadSystemTab() {
   try {
     const r = await fetch(API + '/api/system-tab');
@@ -3920,31 +4079,18 @@ let trafficHasMore = false;
 async function loadTraffic(reset) {
   if (reset) { trafficOffset = 0; trafficData = []; }
   try {
-    // Load stats
-    const statsR = await fetch(API + '/api/traffic/stats');
-    const stats = await statsR.json();
-    document.getElementById('traffic-total').textContent = fmtNum(stats.total_calls || 0);
-    document.getElementById('traffic-latency').textContent = (stats.avg_latency || 0).toFixed(0) + 'ms';
-    document.getElementById('traffic-cost').textContent = '$' + (stats.total_cost || 0).toFixed(2);
-    var sensCount = stats.sensitive_calls || stats.total_sensitive || 0;
-    var sensEl = document.getElementById('traffic-sensitive');
-    sensEl.textContent = sensCount;
-    sensEl.style.cursor = sensCount > 0 ? 'pointer' : 'default';
-    sensEl.title = sensCount > 0 ? 'Click to filter sensitive calls' : '';
-    sensEl.onclick = sensCount > 0 ? function() {
-      window._trafficSensitiveOnly = !window._trafficSensitiveOnly;
-      sensEl.style.background = window._trafficSensitiveOnly ? 'rgba(248,81,73,0.15)' : '';
-      renderTrafficTable();
-    } : null;
-
-    // Proxy status banner
-    const banner = document.getElementById('traffic-banner');
-    if ((stats.total_calls || 0) > 0) {
-      banner.className = 'traffic-banner active';
-      banner.innerHTML = '&#x2705; Proxy Active &mdash; ' + fmtNum(stats.total_calls) + ' API calls captured';
-    } else {
-      banner.className = 'traffic-banner inactive';
-      banner.textContent = 'No traffic data \u2014 Enable deep capture with `claude-watch --start`';
+    // P6.4 — The legacy counter cards (traffic-total/latency/sensitive/
+    // banner) were retired; counter values now come from
+    // /api/traffic/summary via loadTrafficSummary. /api/traffic/stats is
+    // still used here for the Claude Code spend card, which mirrors
+    // session-log cost rather than per-request capture.
+    try {
+      const statsR = await fetch(API + '/api/traffic/stats');
+      const stats = await statsR.json();
+      var costEl = document.getElementById('traffic-cost');
+      if (costEl) costEl.textContent = '$' + (stats.total_cost || 0).toFixed(2);
+    } catch (e) {
+      // stats endpoint failure — leave cost card on default '—' value.
     }
 
     // Load traffic rows
@@ -3964,73 +4110,298 @@ async function loadTraffic(reset) {
   }
 }
 
+// P6.4 — Client-side mirror of dashboard_api_traffic.is_chat_call_path
+// + is_noise_row. Pinned by D-content-captured-one-predicate (judge
+// p6.4.a2): used for row state encoding AND noise classification.
+function _isChatCallPath(p) {
+  if (!p) return false;
+  return p.indexOf('/v1/messages') === 0 || p.indexOf('/chat/completions') >= 0;
+}
+function _isNoiseRow(c) {
+  if (_isChatCallPath(c.endpoint_path)) return false;
+  var status = c.http_status || 0;
+  if (status >= 400) return true;
+  var path = c.endpoint_path || '';
+  var markers = ['/v1/environments/', '/v1/organizations/', '/profile', '/oauth', '/telemetry'];
+  for (var i = 0; i < markers.length; i++) {
+    if (path.indexOf(markers[i]) >= 0) return true;
+  }
+  return false;
+}
+
+// P6.4 — Render the atbl rows via DOM construction (no innerHTML on
+// user-controlled values per D-dom-construction-no-innerhtml). 8-column
+// shape: Time / Service / Endpoint / Tokens / Latency / Status / Source /
+// Content. Noise rows get `.is-noise` and start hidden; chat-call rows are
+// NEVER hidden (TestShowAllRevealsEveryHiddenRow pin). Content cell uses
+// `.cstate--full` iff is_content_captured (header K reconciles by
+// construction).
 function renderTrafficTable() {
-  const tbody = document.getElementById('traffic-tbody');
+  var tbody = document.getElementById('atbl-tbody');
+  if (!tbody) return;
+  while (tbody.firstChild) tbody.removeChild(tbody.firstChild);
+
   if (!trafficData.length) {
-    tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--text2);padding:32px">No API traffic data available</td></tr>';
+    var trEmpty = document.createElement('tr');
+    var tdEmpty = document.createElement('td');
+    tdEmpty.colSpan = 8;
+    tdEmpty.style.textAlign = 'center';
+    tdEmpty.style.color = 'var(--text2)';
+    tdEmpty.style.padding = '32px';
+    tdEmpty.textContent = 'No API traffic data available';
+    trEmpty.appendChild(tdEmpty);
+    tbody.appendChild(trEmpty);
     return;
   }
 
   var filtered = trafficData;
   if (window._trafficSensitiveOnly) {
-    filtered = filtered.filter(function(c) { return (c.sensitive_pattern_count||0) > 0 || (c.sensitive_patterns && c.sensitive_patterns !== '[]' && c.sensitive_patterns !== ''); });
+    filtered = filtered.filter(function(c) {
+      return (c.sensitive_pattern_count || 0) > 0
+        || (c.sensitive_patterns && c.sensitive_patterns !== '[]' && c.sensitive_patterns !== '');
+    });
   }
-  tbody.innerHTML = filtered.map(function(c, idx) {
-    // Normalize field names (DB uses http_status/destination_service/latency_ms)
+
+  // Determine current filter mode (chat by default per spec line 230).
+  var seg = document.querySelector('.v-seg[data-apifilter] button.is-on');
+  var filterMode = (seg && seg.dataset.filter) ? seg.dataset.filter : 'chat';
+
+  filtered.forEach(function(c, idx) {
+    var path = c.endpoint_path || '';
+    var isChat = _isChatCallPath(path);
+    var isNoise = _isNoiseRow(c);
+    var captured = isChat && (c.input_tokens || 0) > 0;
+
     var rawStatus = c.http_status || c.status || 0;
     var rawLatency = c.latency_ms || c.latency || 0;
     var isProxy = rawLatency > 0;
-    var status = isProxy ? String(rawStatus) : (rawStatus ? String(rawStatus) : '200');
+    var statusStr = isProxy ? String(rawStatus) : (rawStatus ? String(rawStatus) : '200');
     var service = c.destination_service || c.service || '-';
-    var latencyStr = isProxy ? rawLatency.toFixed(0) + 'ms' : '\u2014';
+    var latencyStr = isProxy ? rawLatency.toFixed(0) + 'ms' : '—';
     var isBrowserProxy = (c.source === 'browser_proxy');
-    var sourceLabel = isBrowserProxy ? 'WEB' : (isProxy ? 'API' : 'Log');
-    var sourceTip = isBrowserProxy ? 'Browser AI metadata (no content parsed)'
+    var sourceLabel = isBrowserProxy ? 'EXT' : (isProxy ? 'PROXY' : 'LOG');
+    var sourceTip = isBrowserProxy ? 'Browser extension capture'
       : (isProxy ? 'API call captured via HTTPS proxy' : 'Reconstructed from session logs');
     var tools = c.tool_calls;
-    if (typeof tools === 'string') { try { tools = JSON.parse(tools); } catch(e) { tools = []; } }
+    if (typeof tools === 'string') { try { tools = JSON.parse(tools); } catch (e) { tools = []; } }
     if (!Array.isArray(tools)) tools = [];
     var sensitive = c.sensitive_patterns;
-    if (typeof sensitive === 'string' && sensitive) { try { sensitive = JSON.parse(sensitive); } catch(e) { sensitive = sensitive.split(',').map(function(s){return s.trim()}).filter(Boolean); } }
+    if (typeof sensitive === 'string' && sensitive) {
+      try { sensitive = JSON.parse(sensitive); }
+      catch (e) { sensitive = sensitive.split(',').map(function(s) { return s.trim(); }).filter(Boolean); }
+    }
     if (!Array.isArray(sensitive)) sensitive = [];
+    var hasSensitive = sensitive.length > 0;
 
-    const statusColor = status.startsWith('2') || status === 'ok' ? 'var(--green)' : status === 'error' || status.startsWith('4') || status.startsWith('5') ? 'var(--red)' : 'var(--text2)';
-    const hasSensitive = sensitive.length > 0;
-    const srcColor = isBrowserProxy ? 'var(--orange)' : (isProxy ? 'var(--cyan)' : 'var(--text2)');
-    const mainRow = '<tr class="expandable" onclick="toggleTrafficDetail(' + idx + ')">'
-      + '<td>' + fmtTimestamp(c.timestamp) + '</td>'
-      + '<td>' + esc(service) + '</td>'
-      + '<td>' + esc(humanModelName(c.model || '-')) + '</td>'
-      + '<td>' + fmtNum(c.input_tokens || 0) + '</td>'
-      + '<td>' + fmtNum(c.output_tokens || 0) + '</td>'
-      + '<td>' + latencyStr + '</td>'
-      + '<td><span style="color:' + statusColor + '">' + esc(status || '\u2014') + '</span>'
-      + (hasSensitive ? ' <span style="color:var(--red)">&#x26a0;</span>' : '') + '</td>'
-      + '<td><span style="color:' + srcColor + ';font-size:11px" title="' + sourceTip + '">' + sourceLabel + '</span></td>'
-      + '</tr>';
+    var tr = document.createElement('tr');
+    tr.className = 'expandable';
+    if (isNoise) {
+      tr.classList.add('is-noise');
+      if (filterMode === 'chat') tr.setAttribute('hidden', '');
+      else tr.classList.add('is-shown');
+    }
+    tr.addEventListener('click', (function(i) { return function() { toggleTrafficDetail(i); }; })(idx));
 
-    const toolsList = tools.map(function(t) { return '<span class="badge" style="background:var(--surface2);color:var(--orange);margin:2px">' + esc(typeof t === 'string' ? t : t.name || t) + '</span>'; }).join('') || '<span style="color:var(--text2)">None</span>';
-    const sensitiveHtml = hasSensitive
-      ? '<div class="sensitive-flag">&#x26a0; ' + esc(sensitive.join(', ')) + '</div>'
-      : '<span style="color:var(--text2)">None detected</span>';
-    const sessionLink = c.session_id
-      ? '<a style="color:var(--cyan);cursor:pointer;text-decoration:none" onclick="event.stopPropagation();openDeepDive(\'' + c.session_id + '\')">' + esc(c.session_id.substring(0, 12)) + '...</a>'
-      : '<span style="color:var(--text2)">-</span>';
+    var tdTime = document.createElement('td');
+    tdTime.textContent = fmtTimestamp(c.timestamp);
+    tr.appendChild(tdTime);
 
-    const detailRow = '<tr class="traffic-row-detail" id="traffic-detail-' + idx + '">'
-      + '<td colspan="8"><div class="traffic-detail-grid">'
-      + '<div><div class="td-label">Last User Message</div><div class="td-value" style="max-height:80px;overflow-y:auto;white-space:pre-wrap;word-break:break-word;font-size:12px;font-family:var(--font-mono)">' + (c.last_user_msg_preview ? esc(c.last_user_msg_preview) : '<span style="color:var(--text2)">' + (isProxy ? '-' : 'View session for full transcript') + '</span>') + '</div></div>'
-      + '<div><div class="td-label">Assistant Response</div><div class="td-value" style="max-height:80px;overflow-y:auto;white-space:pre-wrap;word-break:break-word;font-size:12px;font-family:var(--font-mono)">' + esc(c.assistant_msg_preview || '-') + '</div></div>'
-      + '<div><div class="td-label">Tool Calls</div><div class="td-value">' + toolsList + '</div></div>'
-      + '<div><div class="td-label">Sensitive Patterns</div><div class="td-value">' + sensitiveHtml + '</div></div>'
-      + '<div><div class="td-label">Cache Tokens</div><div class="td-value">' + fmtNum(c.cache_read_tokens||0) + ' read / ' + fmtNum(c.cache_write_tokens||0) + ' write</div></div>'
-      + '<div><div class="td-label">Est. Cost</div><div class="td-value">' + (c.estimated_cost_usd ? '$' + Number(c.estimated_cost_usd).toFixed(4) : '-') + '</div></div>'
-      + '<div><div class="td-label">Result</div><div class="td-value">' + (c.stop_reason === 'max_tokens' ? '<span style="color:var(--red);font-weight:600">Truncated (max_tokens)</span>' : c.stop_reason === 'tool_use' ? '<span style="color:var(--blue)">Tool call</span>' : c.stop_reason ? '<span style="color:var(--green)">' + esc(c.stop_reason) + '</span>' : '-') + '</div></div>'
-      + '<div><div class="td-label">Session</div><div class="td-value">' + sessionLink + '</div></div>'
-      + '</div></td></tr>';
+    var tdService = document.createElement('td');
+    tdService.textContent = service;
+    tr.appendChild(tdService);
 
-    return mainRow + detailRow;
-  }).join('');
+    var tdEndpoint = document.createElement('td');
+    tdEndpoint.className = 'v-mono';
+    tdEndpoint.textContent = path || humanModelName(c.model || '-');
+    tr.appendChild(tdEndpoint);
+
+    var tdTokens = document.createElement('td');
+    tdTokens.className = 'r';
+    var inTok = c.input_tokens || 0;
+    var outTok = c.output_tokens || 0;
+    tdTokens.textContent = (inTok || outTok)
+      ? (fmtNum(inTok) + ' / ' + fmtNum(outTok))
+      : '—';
+    tr.appendChild(tdTokens);
+
+    var tdLatency = document.createElement('td');
+    tdLatency.className = 'r';
+    tdLatency.textContent = latencyStr;
+    tr.appendChild(tdLatency);
+
+    var tdStatus = document.createElement('td');
+    var statusSpan = document.createElement('span');
+    var statusColor = (statusStr.charAt(0) === '2' || statusStr === 'ok') ? 'var(--green)'
+      : (statusStr === 'error' || statusStr.charAt(0) === '4' || statusStr.charAt(0) === '5') ? 'var(--red)'
+      : 'var(--text2)';
+    statusSpan.style.color = statusColor;
+    statusSpan.textContent = statusStr || '—';
+    tdStatus.appendChild(statusSpan);
+    if (hasSensitive) {
+      var warn = document.createElement('span');
+      warn.style.color = 'var(--red)';
+      warn.style.marginLeft = '4px';
+      warn.textContent = '⚠';
+      tdStatus.appendChild(warn);
+    }
+    tr.appendChild(tdStatus);
+
+    var tdSource = document.createElement('td');
+    var srcBadge = document.createElement('span');
+    srcBadge.className = isBrowserProxy ? 'srcbadge srcbadge--dual' : 'srcbadge';
+    srcBadge.title = sourceTip;
+    srcBadge.textContent = sourceLabel;
+    tdSource.appendChild(srcBadge);
+    tr.appendChild(tdSource);
+
+    var tdContent = document.createElement('td');
+    var cstate = document.createElement('span');
+    if (captured) {
+      cstate.className = 'cstate cstate--full';
+      cstate.textContent = 'captured';
+      cstate.title = 'Body parsed; tokens counted';
+    } else if (isChat) {
+      cstate.className = 'cstate cstate--env';
+      cstate.textContent = 'envelope only';
+      cstate.title = 'Chat call seen but body not parsed (auth failure, streaming drop)';
+    } else {
+      cstate.className = 'cstate cstate--env';
+      cstate.textContent = 'n/a';
+      cstate.title = 'Non-chat infrastructure traffic';
+    }
+    tdContent.appendChild(cstate);
+    tr.appendChild(tdContent);
+
+    tbody.appendChild(tr);
+
+    // Detail row (collapsible). Built via DOM construction.
+    var trDetail = document.createElement('tr');
+    trDetail.className = 'traffic-row-detail';
+    trDetail.id = 'traffic-detail-' + idx;
+    var tdDetail = document.createElement('td');
+    tdDetail.colSpan = 8;
+    var grid = document.createElement('div');
+    grid.className = 'traffic-detail-grid';
+
+    var addCell = function(label, valueText, builder) {
+      var cell = document.createElement('div');
+      var lab = document.createElement('div');
+      lab.className = 'td-label';
+      lab.textContent = label;
+      cell.appendChild(lab);
+      var val = document.createElement('div');
+      val.className = 'td-value';
+      if (builder) {
+        builder(val);
+      } else {
+        val.textContent = valueText;
+      }
+      cell.appendChild(val);
+      grid.appendChild(cell);
+    };
+
+    addCell('Last User Message', null, function(val) {
+      val.style.maxHeight = '80px';
+      val.style.overflowY = 'auto';
+      val.style.whiteSpace = 'pre-wrap';
+      val.style.wordBreak = 'break-word';
+      val.style.fontSize = '12px';
+      val.style.fontFamily = 'var(--font-mono)';
+      if (c.last_user_msg_preview) {
+        val.textContent = c.last_user_msg_preview;
+      } else {
+        var faint = document.createElement('span');
+        faint.style.color = 'var(--text2)';
+        faint.textContent = isProxy ? '-' : 'View session for full transcript';
+        val.appendChild(faint);
+      }
+    });
+    addCell('Assistant Response', null, function(val) {
+      val.style.maxHeight = '80px';
+      val.style.overflowY = 'auto';
+      val.style.whiteSpace = 'pre-wrap';
+      val.style.wordBreak = 'break-word';
+      val.style.fontSize = '12px';
+      val.style.fontFamily = 'var(--font-mono)';
+      val.textContent = c.assistant_msg_preview || '-';
+    });
+    addCell('Tool Calls', null, function(val) {
+      if (tools.length === 0) {
+        var f = document.createElement('span');
+        f.style.color = 'var(--text2)';
+        f.textContent = 'None';
+        val.appendChild(f);
+      } else {
+        tools.forEach(function(t) {
+          var b = document.createElement('span');
+          b.className = 'badge';
+          b.style.background = 'var(--surface2)';
+          b.style.color = 'var(--orange)';
+          b.style.margin = '2px';
+          b.textContent = (typeof t === 'string') ? t : (t && t.name) || String(t);
+          val.appendChild(b);
+        });
+      }
+    });
+    addCell('Sensitive Patterns', null, function(val) {
+      if (hasSensitive) {
+        var flag = document.createElement('div');
+        flag.className = 'sensitive-flag';
+        flag.textContent = '⚠ ' + sensitive.join(', ');
+        val.appendChild(flag);
+      } else {
+        var f = document.createElement('span');
+        f.style.color = 'var(--text2)';
+        f.textContent = 'None detected';
+        val.appendChild(f);
+      }
+    });
+    addCell('Cache Tokens', fmtNum(c.cache_read_tokens || 0) + ' read / ' + fmtNum(c.cache_write_tokens || 0) + ' write');
+    addCell('Est. Cost', c.estimated_cost_usd ? '$' + Number(c.estimated_cost_usd).toFixed(4) : '-');
+    addCell('Result', null, function(val) {
+      if (c.stop_reason === 'max_tokens') {
+        var s = document.createElement('span');
+        s.style.color = 'var(--red)';
+        s.style.fontWeight = '600';
+        s.textContent = 'Truncated (max_tokens)';
+        val.appendChild(s);
+      } else if (c.stop_reason === 'tool_use') {
+        var s = document.createElement('span');
+        s.style.color = 'var(--blue)';
+        s.textContent = 'Tool call';
+        val.appendChild(s);
+      } else if (c.stop_reason) {
+        var s = document.createElement('span');
+        s.style.color = 'var(--green)';
+        s.textContent = c.stop_reason;
+        val.appendChild(s);
+      } else {
+        val.textContent = '-';
+      }
+    });
+    addCell('Session', null, function(val) {
+      if (c.session_id) {
+        var a = document.createElement('a');
+        a.style.color = 'var(--cyan)';
+        a.style.cursor = 'pointer';
+        a.style.textDecoration = 'none';
+        a.textContent = c.session_id.substring(0, 12) + '...';
+        a.addEventListener('click', (function(sid) {
+          return function(ev) { ev.stopPropagation(); openDeepDive(sid); };
+        })(c.session_id));
+        val.appendChild(a);
+      } else {
+        var f = document.createElement('span');
+        f.style.color = 'var(--text2)';
+        f.textContent = '-';
+        val.appendChild(f);
+      }
+    });
+
+    tdDetail.appendChild(grid);
+    trDetail.appendChild(tdDetail);
+    tbody.appendChild(trDetail);
+  });
 }
 
 function toggleTrafficDetail(idx) {
