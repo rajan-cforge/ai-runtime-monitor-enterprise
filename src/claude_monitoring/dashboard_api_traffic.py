@@ -30,14 +30,6 @@ _CHAT_CALL_PATHS = (
     "/v1/chat/completions",
 )
 
-_NOISE_PATH_MARKERS = (
-    "/v1/environments/",
-    "/v1/organizations/",
-    "/profile",
-    "/oauth",
-    "/telemetry",
-)
-
 
 def is_chat_call_path(endpoint_path: str | None) -> bool:
     """True iff the endpoint path matches the v0.2.2 chat-call shape.
@@ -71,25 +63,21 @@ def is_content_captured(row) -> bool:
 def is_noise_row(row) -> bool:
     """Hide non-chat infrastructure noise by default.
 
-    Chat-call rows are NEVER hidden — they are the operator's primary
-    signal (including 4xx failures). Per judge p6.4.a2 ratification, this
-    is the deliberate operator-facing-UX interpretation of directive
-    line 230's literal "hide empty rows": hide non-chat infrastructure
-    only.
+    P6.4.1 fix: the named-marker rule was structurally undershooting
+    in production (real Anthropic infra paths like
+    `/api/event_logging/v2/batch`, `/api/claude_code_grove`,
+    `/api/claude_cli/bootstrap`, `/api/eval/*`, `/mcp-registry/*` and
+    desktop-update polls never matched the 5 hard-coded markers, so
+    the alertbar promise "Hidden by default" was a lie in the wild).
+    The simpler, structural rule: noise = anything that is not a
+    chat-call path. Reconciles 1:1 with the counter math
+    (`intercepted - chat_calls == noise hidden`). Failed (4xx) chat
+    calls remain visible because the chat-path guard fires first.
 
     "Show all" toggle MUST reveal every hidden row — pinned by
     `TestShowAllRevealsEveryHiddenRow`.
     """
-    if is_chat_call_path(row["endpoint_path"]):
-        return False
-    status = row["http_status"]
-    if status is not None and status >= 400:
-        return True
-    path = row["endpoint_path"] or ""
-    for marker in _NOISE_PATH_MARKERS:
-        if marker in path:
-            return True
-    return False
+    return not is_chat_call_path(row["endpoint_path"])
 
 
 def compute_traffic_summary(conn) -> dict:

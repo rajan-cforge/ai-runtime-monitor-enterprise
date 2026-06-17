@@ -1076,7 +1076,7 @@ body { background:var(--bg); color:var(--text); font-family:var(--font-sans); fo
     <div class="alertbar alertbar--calm" id="api-noise-banner" style="margin-top:0;display:none;">
       <div>
         <div class="alertbar__t" id="api-noise-headline">— of — intercepted requests are infrastructure</div>
-        <div class="alertbar__d">Environment polling, OAuth and profile lookups. Hidden by default to keep this view scannable. Toggle "Show all" to inspect.</div>
+        <div class="alertbar__d">Non-chat traffic — event logging, profile lookups, OAuth refreshes, MCP registry polls, app-update checks. Hidden by default to keep this view scannable. Toggle "Show all" to inspect.</div>
       </div>
     </div>
 
@@ -4118,15 +4118,12 @@ function _isChatCallPath(p) {
   return p.indexOf('/v1/messages') === 0 || p.indexOf('/chat/completions') >= 0;
 }
 function _isNoiseRow(c) {
-  if (_isChatCallPath(c.endpoint_path)) return false;
-  var status = c.http_status || 0;
-  if (status >= 400) return true;
-  var path = c.endpoint_path || '';
-  var markers = ['/v1/environments/', '/v1/organizations/', '/profile', '/oauth', '/telemetry'];
-  for (var i = 0; i < markers.length; i++) {
-    if (path.indexOf(markers[i]) >= 0) return true;
-  }
-  return false;
+  // P6.4.1 — noise ≡ NOT chat-call path. Mirrors the Python
+  // `is_noise_row` post-fix. The named-marker list missed real
+  // Anthropic infra paths (claude_code_grove, claude_cli/bootstrap,
+  // event_logging, mcp-registry, desktop polls) so the "Hidden by
+  // default" promise didn't hold in production.
+  return !_isChatCallPath(c.endpoint_path);
 }
 
 // P6.4 — Render the atbl rows via DOM construction (no innerHTML on
