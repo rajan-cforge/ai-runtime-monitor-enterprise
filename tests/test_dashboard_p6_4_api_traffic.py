@@ -180,11 +180,34 @@ class TestIsNoiseRow:
         row = {"endpoint_path": "/v1/oauth/token", "input_tokens": 0, "http_status": 200}
         assert dashboard_api_traffic.is_noise_row(row) is True
 
-    def test_non_chat_200_non_infra_is_not_noise(self):
-        """A non-chat 200 with no infra marker (e.g. /v1/usage) is
-        uninteresting but not noisy — visible."""
+    def test_anthropic_event_logging_is_noise(self):
+        """P6.4.1 regression pin — real Anthropic Claude Code path
+        that the original 5-marker rule missed in production."""
+        row = {"endpoint_path": "/api/event_logging/v2/batch", "input_tokens": 0, "http_status": 200}
+        assert dashboard_api_traffic.is_noise_row(row) is True
+
+    def test_claude_code_grove_is_noise(self):
+        row = {"endpoint_path": "/api/claude_code_grove", "input_tokens": 0, "http_status": 200}
+        assert dashboard_api_traffic.is_noise_row(row) is True
+
+    def test_claude_cli_bootstrap_is_noise(self):
+        row = {"endpoint_path": "/api/claude_cli/bootstrap?entrypoint=local-agent", "input_tokens": 0, "http_status": 200}
+        assert dashboard_api_traffic.is_noise_row(row) is True
+
+    def test_mcp_registry_poll_is_noise(self):
+        row = {"endpoint_path": "/mcp-registry/v0/servers?cursor=foo", "input_tokens": 0, "http_status": 200}
+        assert dashboard_api_traffic.is_noise_row(row) is True
+
+    def test_desktop_update_poll_is_noise(self):
+        row = {"endpoint_path": "/api/desktop/darwin/universal/squirrel/update", "input_tokens": 0, "http_status": 200}
+        assert dashboard_api_traffic.is_noise_row(row) is True
+
+    def test_non_chat_200_unknown_path_is_noise(self):
+        """P6.4.1 — was previously False (only 5 markers triggered
+        noise). Now the structural rule applies: any non-chat path
+        is noise by default. Operator toggles "All requests" to see."""
         row = {"endpoint_path": "/v1/usage", "input_tokens": 0, "http_status": 200}
-        assert dashboard_api_traffic.is_noise_row(row) is False
+        assert dashboard_api_traffic.is_noise_row(row) is True
 
 
 # ---------------------------------------------------------------------------
@@ -314,10 +337,10 @@ class TestShowAllRevealsEveryHiddenRow:
         chat_only_visible = [r for r in rows if not dashboard_api_traffic.is_noise_row(r)]
         all_visible = list(rows)  # show-all reveals everything
 
-        # Chat filter hides infra; chat rows are ALL visible (incl 401) +
-        # non-chat 200 with no infra marker (/v1/usage) also stays visible.
-        # = 4 chat rows + 1 /v1/usage non-noise row = 5 visible by default.
-        assert len(chat_only_visible) == 5
+        # P6.4.1 structural rule: chat filter shows ONLY chat-call paths.
+        # Every non-chat row is noise (including the historical /v1/usage
+        # case). 4 chat rows = 4 visible by default.
+        assert len(chat_only_visible) == 4
         # Show-all reveals every row in api_calls (no permanent hides).
         assert len(all_visible) == 12
 
