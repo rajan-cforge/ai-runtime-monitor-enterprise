@@ -732,6 +732,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
             sort_key = {"recent": "last_activity", "newest": "start_time"}.get(sort, "last_activity")
             sessions.sort(key=lambda s: s.get(sort_key, "") or "", reverse=True)
 
+        from claude_monitoring.dashboard_session_explorer import enrich_session_row
+
+        sessions = [enrich_session_row(db, s) for s in sessions]  # P6.5
         self._send_json({"sessions": sessions})
 
     def _api_session_detail(self, params):
