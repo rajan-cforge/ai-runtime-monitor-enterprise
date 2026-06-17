@@ -122,6 +122,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             "/api/stats": self._api_stats,
             "/api/state-bar": self._api_state_bar,
             "/api/system-tab": self._api_system_tab,
+            "/api/traffic/summary": self._api_traffic_summary,
             "/api/processes": self._api_processes,
             "/api/files": self._api_files,
             "/api/connections": self._api_connections,
@@ -1093,6 +1094,17 @@ class DashboardHandler(BaseHTTPRequestHandler):
         from claude_monitoring import dashboard_system_tab
 
         self._send_json(dashboard_system_tab.build_envelope(get_thread_db()))
+
+    def _api_traffic_summary(self, params):
+        """GET /api/traffic/summary — API Traffic counter envelope per
+        directive line 230. Three counters (intercepted / chat_calls /
+        content_captured) + 24h fill rate. Helpers live in
+        `dashboard_api_traffic`. Per judge p6.4.a2 the predicate is
+        verbatim from P6.2's `filled` so the header counter, the row
+        badge, and the state-bar fill-rate cannot drift."""
+        from claude_monitoring import dashboard_api_traffic
+
+        self._send_json(dashboard_api_traffic.build_envelope(get_thread_db()))
 
     def _api_stats(self, params):
         db = get_thread_db()
