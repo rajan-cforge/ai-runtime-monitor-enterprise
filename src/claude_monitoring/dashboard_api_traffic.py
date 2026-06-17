@@ -30,6 +30,7 @@ _CHAT_CALL_PATHS = (
     "/v1/chat/completions",
 )
 
+
 def is_chat_call_path(endpoint_path: str | None) -> bool:
     """True iff the endpoint path matches the v0.2.2 chat-call shape.
 

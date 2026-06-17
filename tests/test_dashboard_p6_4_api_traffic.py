@@ -191,7 +191,11 @@ class TestIsNoiseRow:
         assert dashboard_api_traffic.is_noise_row(row) is True
 
     def test_claude_cli_bootstrap_is_noise(self):
-        row = {"endpoint_path": "/api/claude_cli/bootstrap?entrypoint=local-agent", "input_tokens": 0, "http_status": 200}
+        row = {
+            "endpoint_path": "/api/claude_cli/bootstrap?entrypoint=local-agent",
+            "input_tokens": 0,
+            "http_status": 200,
+        }
         assert dashboard_api_traffic.is_noise_row(row) is True
 
     def test_mcp_registry_poll_is_noise(self):
