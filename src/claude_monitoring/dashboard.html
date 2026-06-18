@@ -719,6 +719,10 @@ body { background:var(--bg); color:var(--text); font-family:var(--font-sans); fo
 .topo--full { color: var(--v-safe, var(--green)); background: var(--v-safe-bg, rgba(46,200,90,.12)); border-color: rgba(46,200,90,.35); }
 .topo--env  { color: var(--v-info, var(--blue));  background: var(--v-info-bg, rgba(91,140,251,.12)); border-color: rgba(91,140,251,.35); }
 .topo--none { color: var(--v-text-3, var(--text2)); background: var(--v-surface-3, var(--surface2)); border-color: var(--v-border); opacity: 0.7; }
+/* P6.5.1 — JSONL/transcript capture badge (R-p651-1). Neutral/info
+   palette — JSONL capture is real but distinct from proxy
+   content-capture (no per-call tokens, no fill-rate contribution). */
+.topo--jsonl { color: var(--v-info, var(--blue)); background: var(--v-info-bg, rgba(91,140,251,.12)); border-color: rgba(91,140,251,.35); }
 /* recency = "last captured Xm ago" with optional warn glyph */
 .recency { display:inline-flex; align-items:center; gap:4px; font-size:11px; color: var(--v-text-3, var(--text2)); }
 .recency--warn { color: var(--v-attention, var(--orange)); font-weight:600; }
@@ -2016,9 +2020,22 @@ async function loadSessions() {
       const recencyTitle = s.recency_warn
         ? 'Capture may have stopped — run \'ai-monitor --status\' to diagnose'
         : 'Last api_calls row timestamp';
+      // P6.5.1 — two-badge model (R-p651-3). The api_calls-derived topo
+      // badge AND the additive JSONL transcript badge can BOTH render.
+      // When topo==='none' AND jsonl, jsonl REPLACES the "Not captured"
+      // badge (the operator-reported pure-CLI fix). When topo is full/env
+      // AND jsonl, BOTH render side-by-side.
+      const renderTopo = !(topo === 'none' && s.jsonl);
+      const jsonlBadge = s.jsonl
+        ? '<span class="topo topo--jsonl" title="Captured via JSONL transcript">' + escHtml('Captured via transcript') + '</span>'
+        : '';
+      const topoBadge = renderTopo
+        ? '<span class="topo topo--' + escAttr(topo) + '">' + escHtml(topoLabel) + '</span>'
+        : '';
       const captureFoot =
           '<div class="sxitem__foot" style="display:flex;align-items:center;gap:8px;margin-top:5px;flex-wrap:wrap;">'
-        + '<span class="topo topo--' + escAttr(topo) + '">' + escHtml(topoLabel) + '</span>'
+        + topoBadge
+        + jsonlBadge
         + '<span class="' + srcClass + '" title="source">' + escHtml(srcLabel) + '</span>'
         + '<span class="' + recencyClass + '" title="' + escAttr(recencyTitle) + '">' + escHtml(recencyText) + '</span>'
         + '</div>';
