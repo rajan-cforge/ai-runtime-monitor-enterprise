@@ -1,0 +1,10 @@
+assistant_response
+bash_progress
+mcp_call
+sensitive_data
+system_event
+thinking
+token_usage
+tool_result
+tool_use
+user_prompt

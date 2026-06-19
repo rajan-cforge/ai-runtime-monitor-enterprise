@@ -1,0 +1,16 @@
+assistant_response
+bash_progress
+browser_ai
+connection
+file_created
+file_deleted
+file_modified
+process_start
+process_stop
+sensitive_data
+system_event
+thinking
+token_usage
+tool_result
+tool_use
+user_prompt
