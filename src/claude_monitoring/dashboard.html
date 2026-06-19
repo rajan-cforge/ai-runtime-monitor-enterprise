@@ -141,29 +141,34 @@ body { background:var(--bg); color:var(--text); font-family:var(--font-sans); fo
 }
 
 /* Live Feed */
-.feed { background:var(--surface); border:1px solid var(--border); border-radius:8px; height:calc(100vh - 260px); overflow-y:auto; font-family:var(--font-mono); font-size:12px; }
+/* P6.6 — Live Feed migrated to .v-* design tokens (judge p6.6.a2 APPROVE 2026-06-18).
+   STRICT scope per directive line 238: token substitutions only — selectors verbatim,
+   markup verbatim, JS verbatim. var(--v-*, var(--old)) fallback chain so undefined
+   v-tokens degrade to pre-migration colors. Pinned by 3 grep-based preservation tests
+   in tests/test_dashboard_p6_6_live_feed.py vs fixtures from origin/main @ 5cc0a2f. */
+.feed { background:var(--v-surface, var(--surface)); border:1px solid var(--v-border, var(--border)); border-radius:8px; height:calc(100vh - 260px); overflow-y:auto; font-family:var(--v-mono, var(--font-mono)); font-size:12px; }
 .feed-controls { display:flex; gap:12px; margin-bottom:8px; align-items:center; }
-.feed-controls label { font-size:12px; color:var(--text2); display:flex; align-items:center; gap:4px; }
-.feed-item { padding:6px 12px; border-bottom:1px solid var(--border); display:flex; gap:12px; align-items:flex-start; }
-.feed-item:hover { background:var(--surface2); }
-.feed-item .time { color:var(--text2); flex-shrink:0; width:80px; }
+.feed-controls label { font-size:12px; color:var(--v-text-2, var(--text2)); display:flex; align-items:center; gap:4px; }
+.feed-item { padding:6px 12px; border-bottom:1px solid var(--v-border, var(--border)); display:flex; gap:12px; align-items:flex-start; }
+.feed-item:hover { background:var(--v-surface-2, var(--surface2)); }
+.feed-item .time { color:var(--v-text-2, var(--text2)); flex-shrink:0; width:80px; }
 .feed-item .icon { flex-shrink:0; width:20px; text-align:center; }
 .feed-item .type { flex-shrink:0; width:100px; font-weight:600; }
-.feed-item .detail { color:var(--text); flex:1; word-break:break-word; }
-.feed-item .session-ctx { color:var(--cyan); font-size:11px; }
-.feed-item.user_prompt .type { color:var(--blue); }
-.feed-item.assistant_response .type { color:var(--green); }
-.feed-item.thinking .type { color:var(--purple); }
-.feed-item.tool_use .type { color:var(--orange); }
-.feed-item.tool_result .type { color:var(--cyan); }
-.feed-item.token_usage .type { color:var(--text2); }
-.feed-item.sensitive_data .type { color:var(--red); }
-.feed-item.sensitive_data { border-left:3px solid var(--red); background:rgba(248,81,73,0.05); }
-.feed-item.tool_use { border-left:3px solid var(--blue); }
-.feed-item.user_prompt { border-left:3px solid var(--blue); }
-.feed-item.process_start .type,.feed-item.process_stop .type { color:var(--purple); }
-.feed-item.connection .type { color:var(--cyan); }
-.feed-item.browser_ai .type { color:var(--purple); }
+.feed-item .detail { color:var(--v-text, var(--text)); flex:1; word-break:break-word; }
+.feed-item .session-ctx { color:var(--v-accent, var(--cyan)); font-size:11px; }
+.feed-item.user_prompt .type { color:var(--v-info, var(--blue)); }
+.feed-item.assistant_response .type { color:var(--v-safe, var(--green)); }
+.feed-item.thinking .type { color:var(--v-purple, var(--purple)); }
+.feed-item.tool_use .type { color:var(--v-warn, var(--orange)); }
+.feed-item.tool_result .type { color:var(--v-accent, var(--cyan)); }
+.feed-item.token_usage .type { color:var(--v-text-2, var(--text2)); }
+.feed-item.sensitive_data .type { color:var(--v-attention, var(--red)); }
+.feed-item.sensitive_data { border-left:3px solid var(--v-attention, var(--red)); background:rgba(248,81,73,0.05); }
+.feed-item.tool_use { border-left:3px solid var(--v-info, var(--blue)); }
+.feed-item.user_prompt { border-left:3px solid var(--v-info, var(--blue)); }
+.feed-item.process_start .type,.feed-item.process_stop .type { color:var(--v-purple, var(--purple)); }
+.feed-item.connection .type { color:var(--v-accent, var(--cyan)); }
+.feed-item.browser_ai .type { color:var(--v-purple, var(--purple)); }
 
 /* Analytics */
 .charts { display:grid; grid-template-columns:1fr 1fr; gap:16px; }

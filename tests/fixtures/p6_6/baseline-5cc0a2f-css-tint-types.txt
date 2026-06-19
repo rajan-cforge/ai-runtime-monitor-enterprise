@@ -1,0 +1,11 @@
+assistant_response
+browser_ai
+connection
+process_start
+process_stop
+sensitive_data
+thinking
+token_usage
+tool_result
+tool_use
+user_prompt
