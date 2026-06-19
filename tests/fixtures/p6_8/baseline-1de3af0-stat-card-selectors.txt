@@ -1,0 +1,7 @@
+.stat-card
+.stat-card .label
+.stat-card .value
+.stat-card .value.alert
+.stat-card .value.blue
+.stat-card .value.purple
+.stat-card:hover

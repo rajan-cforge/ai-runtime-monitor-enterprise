@@ -29,13 +29,22 @@ body { background:var(--bg); color:var(--text); font-family:var(--font-sans); fo
 @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
 
 .stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; padding:16px 24px; }
-.stat-card { background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:16px; cursor:pointer; transition:border-color 0.2s,transform 0.15s; }
-.stat-card:hover { border-color:var(--blue); transform:translateY(-1px); }
-.stat-card .label { font-size:11px; color:var(--text2); text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px; }
+/* P6.8 — Insights tab `.stat-card*` migrated to .v-* design tokens (judge p6.8.a1
+   APPROVE 2026-06-19). Same strict scope as P6.6: selectors verbatim, markup
+   verbatim, JS verbatim. The 3 modifier classes (.value.alert/.blue/.purple)
+   are the load-bearing analog of P6.6's .feed-item.<type> tint set — JS applies
+   them by semantic state. Note: the modifier names `.blue` and `.purple` are
+   HARDCODED color names (pre-existing inconsistency with the P6.6 canonical
+   color → semantic mapping); STRICT scope preserves them verbatim here. Flagged
+   for a deliberate post-Phase-6 cleanup PR per
+   `work-log/2026-06-19-p6.6-semantic-token-carry-forward.md` (never silently). */
+.stat-card { background:var(--v-surface, var(--surface)); border:1px solid var(--v-border, var(--border)); border-radius:8px; padding:16px; cursor:pointer; transition:border-color 0.2s,transform 0.15s; }
+.stat-card:hover { border-color:var(--v-info, var(--blue)); transform:translateY(-1px); }
+.stat-card .label { font-size:11px; color:var(--v-text-2, var(--text2)); text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px; }
 .stat-card .value { font-size:24px; font-weight:700; }
-.stat-card .value.alert { color:var(--red); }
-.stat-card .value.blue { color:var(--blue); }
-.stat-card .value.purple { color:var(--purple); }
+.stat-card .value.alert { color:var(--v-attention, var(--red)); }
+.stat-card .value.blue { color:var(--v-info, var(--blue)); }
+.stat-card .value.purple { color:var(--v-purple, var(--purple)); }
 .stat-sub { font-size:11px; color:var(--text2); margin-top:2px; }
 
 /* P6.1 — header + tab nav migrated to vigil.css tokens (Round 4 mockup). */
