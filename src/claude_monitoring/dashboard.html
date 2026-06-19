@@ -194,9 +194,17 @@ body { background:var(--bg); color:var(--text); font-family:var(--font-sans); fo
 .feed-item.browser_ai .type { color:var(--v-purple, var(--purple)); }
 
 /* Analytics */
+/* P6.7 — Analytics CSS migrated to .v-* design tokens (judge p6.7.a1 APPROVE
+   2026-06-19). Same strict scope as P6.6: selectors verbatim, markup verbatim,
+   JS verbatim. The .chart-card rule definition is intentionally SHARED between
+   #panel-analytics and #panel-insights — preserving the rule preserves the
+   visual for both tabs. Canonical color → semantic-token map in the P6.6
+   convention block above. Pinned by 3 grep-based preservation tests in
+   tests/test_dashboard_p6_7_analytics.py vs fixtures from origin/main @ dbe9950
+   (markup/title pins panel-scoped per p6.7.a1 D-panel-scoped-extraction). */
 .charts { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
-.chart-card { background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:16px; overflow:visible; position:relative; }
-.chart-card h3 { font-size:13px; color:var(--text2); margin-bottom:12px; }
+.chart-card { background:var(--v-surface, var(--surface)); border:1px solid var(--v-border, var(--border)); border-radius:8px; padding:16px; overflow:visible; position:relative; }
+.chart-card h3 { font-size:13px; color:var(--v-text-2, var(--text2)); margin-bottom:12px; }
 .chart-card canvas { max-height:250px; }
 .charts-full { grid-column:1/-1; }
 

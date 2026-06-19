@@ -1,0 +1,8 @@
+chart-browser
+chart-burnrate
+chart-mcp
+chart-models
+chart-tokens
+chart-tools
+forecast-label
+mcp-server-list
