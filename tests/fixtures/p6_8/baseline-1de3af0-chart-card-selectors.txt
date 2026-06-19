@@ -1,0 +1,5 @@
+.chart-card
+.chart-card canvas
+.chart-card h3
+.charts
+.charts-full

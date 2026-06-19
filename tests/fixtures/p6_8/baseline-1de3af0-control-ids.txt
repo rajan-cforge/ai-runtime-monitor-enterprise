@@ -1,0 +1,9 @@
+chart-ins-tools
+ins-avg-tpt
+ins-avg-turns
+ins-files-list
+ins-projects
+ins-projects-tbody
+ins-sessions
+insights-period
+insights-stats
