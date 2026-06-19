@@ -145,7 +145,30 @@ body { background:var(--bg); color:var(--text); font-family:var(--font-sans); fo
    STRICT scope per directive line 238: token substitutions only — selectors verbatim,
    markup verbatim, JS verbatim. var(--v-*, var(--old)) fallback chain so undefined
    v-tokens degrade to pre-migration colors. Pinned by 3 grep-based preservation tests
-   in tests/test_dashboard_p6_6_live_feed.py vs fixtures from origin/main @ 5cc0a2f. */
+   in tests/test_dashboard_p6_6_live_feed.py vs fixtures from origin/main @ 5cc0a2f.
+
+   CANONICAL color → semantic-token map (CONVENTION for P6.7–P6.9, Rajan carry-forward
+   2026-06-19). The grep pins protect selectors + types; the fallback chain HIDES
+   semantic-naming drift (the page still renders the old color whether the v-token is
+   --v-attention or some new --v-danger), so no test fires. Later lens tabs MUST reuse
+   these names rather than mint synonyms.
+
+       --surface      → --v-surface          (panel/card background)
+       --surface2     → --v-surface-2        (hover / inset surface)
+       --border       → --v-border           (1px separator)
+       --text         → --v-text             (body / primary text)
+       --text2        → --v-text-2           (secondary / meta text)
+       --font-mono    → --v-mono             (mono font stack)
+       --red          → --v-attention        (alerts / sensitive data / errors)
+       --blue         → --v-info             (user prompts / informational)
+       --green        → --v-safe             (assistant response / success / OK)
+       --orange       → --v-warn             (warnings / tool use)
+       --cyan         → --v-accent           (links / accents / sessions ctx)
+       --purple       → --v-purple           (thinking / browser AI — holdover; not
+                                              strictly semantic, candidate for a future
+                                              `--v-special` rename via a deliberate
+                                              scope-extension PR, never silently)
+*/
 .feed { background:var(--v-surface, var(--surface)); border:1px solid var(--v-border, var(--border)); border-radius:8px; height:calc(100vh - 260px); overflow-y:auto; font-family:var(--v-mono, var(--font-mono)); font-size:12px; }
 .feed-controls { display:flex; gap:12px; margin-bottom:8px; align-items:center; }
 .feed-controls label { font-size:12px; color:var(--v-text-2, var(--text2)); display:flex; align-items:center; gap:4px; }
