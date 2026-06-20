@@ -1,0 +1,22 @@
+.feed
+.feed-controls
+.feed-controls label
+.feed-item
+.feed-item .detail
+.feed-item .icon
+.feed-item .session-ctx
+.feed-item .time
+.feed-item .type
+.feed-item.assistant_response .type
+.feed-item.browser_ai .type
+.feed-item.connection .type
+.feed-item.sensitive_data
+.feed-item.sensitive_data .type
+.feed-item.thinking .type
+.feed-item.token_usage .type
+.feed-item.tool_result .type
+.feed-item.tool_use
+.feed-item.tool_use .type
+.feed-item.user_prompt
+.feed-item.user_prompt .type
+.feed-item:hover
