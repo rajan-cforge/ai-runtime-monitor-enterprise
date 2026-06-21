@@ -244,18 +244,28 @@ body { background:var(--bg); color:var(--text); font-family:var(--font-sans); fo
 .empty { text-align:center; padding:48px; color:var(--text2); }
 
 /* Alerts */
-.alert-item { background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:12px 16px; margin-bottom:8px; border-left:3px solid var(--red); }
-.alert-item:hover { border-color:var(--red); }
+/* P6.11 — Alerts repaint to .v-* design tokens (judge p6.11.a2 APPROVE
+   2026-06-21). LAST migration in v0.2.2 dashboard cluster. REPAINT-ONLY
+   per STATUS.md Rajan 2026-06-19: live tab controls stay verbatim, mockup
+   Unresolved/All/Muted status filter + per-alert TP/Mute triage + pattern
+   chips are Phase 9 (P9.2/P9.3/P9.4). Render-path no-new-controls guard
+   lives in tests/test_dashboard_p6_11_alerts.py per refined cookbook entry
+   #6 (judge ruling 2026-06-21): source-regex over loadAlerts() body
+   suffices when control markup is literal; DOM-render re-arms when
+   controls become data-driven. Future Phase 9 work re-arms the heavier
+   guard automatically. */
+.alert-item { background:var(--v-surface, var(--surface)); border:1px solid var(--v-border, var(--border)); border-radius:8px; padding:12px 16px; margin-bottom:8px; border-left:3px solid var(--v-attention, var(--red)); }
+.alert-item:hover { border-color:var(--v-attention, var(--red)); }
 .alert-item .alert-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:6px; }
-.alert-item .alert-patterns { font-weight:600; color:var(--red); font-size:13px; }
-.alert-item .alert-meta { font-size:11px; color:var(--text2); }
-.alert-item .alert-context { font-size:12px; color:var(--text2); margin-bottom:4px; }
-.alert-item .alert-snippet { font-size:12px; font-family:var(--font-mono); color:var(--text); background:var(--surface2); padding:8px; border-radius:4px; max-height:80px; overflow-y:auto; white-space:pre-wrap; word-break:break-word; }
-.alert-item .alert-session { font-size:11px; color:var(--cyan); cursor:pointer; }
+.alert-item .alert-patterns { font-weight:600; color:var(--v-attention, var(--red)); font-size:13px; }
+.alert-item .alert-meta { font-size:11px; color:var(--v-text-2, var(--text2)); }
+.alert-item .alert-context { font-size:12px; color:var(--v-text-2, var(--text2)); margin-bottom:4px; }
+.alert-item .alert-snippet { font-size:12px; font-family:var(--v-mono, var(--font-mono)); color:var(--v-text, var(--text)); background:var(--v-surface-2, var(--surface2)); padding:8px; border-radius:4px; max-height:80px; overflow-y:auto; white-space:pre-wrap; word-break:break-word; }
+.alert-item .alert-session { font-size:11px; color:var(--v-accent, var(--cyan)); cursor:pointer; }
 .alert-item .alert-session:hover { text-decoration:underline; }
 .alert-item.dismissed { opacity:0.45; }
-.alert-item .dismiss-btn { background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:2px 8px;color:var(--text2);font-size:11px;cursor:pointer; }
-.alert-item .dismiss-btn:hover { background:var(--red);color:white;border-color:var(--red); }
+.alert-item .dismiss-btn { background:var(--v-surface-2, var(--surface2));border:1px solid var(--v-border, var(--border));border-radius:4px;padding:2px 8px;color:var(--v-text-2, var(--text2));font-size:11px;cursor:pointer; }
+.alert-item .dismiss-btn:hover { background:var(--v-attention, var(--red));color:white;border-color:var(--v-attention, var(--red)); }
 
 /* Source badges */
 .source-badge { display:inline-block; padding:1px 6px; border-radius:3px; font-size:10px; font-weight:600; margin-right:4px; }

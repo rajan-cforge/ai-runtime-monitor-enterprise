@@ -1,0 +1,12 @@
+.alert-item
+.alert-item .alert-context
+.alert-item .alert-header
+.alert-item .alert-meta
+.alert-item .alert-patterns
+.alert-item .alert-session
+.alert-item .alert-session:hover
+.alert-item .alert-snippet
+.alert-item .dismiss-btn
+.alert-item .dismiss-btn:hover
+.alert-item.dismissed
+.alert-item:hover
