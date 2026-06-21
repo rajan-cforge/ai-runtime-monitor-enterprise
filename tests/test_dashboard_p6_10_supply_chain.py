@@ -209,17 +209,34 @@ class TestSupplyChainNoNewControls:
             f"forbids the Phase 9 mockup chips: {chips}"
         )
 
-    def test_button_set_equals_data_cat_toggles(self):
-        """Total <button> count in the panel must equal the 5
-        data-cat toggle buttons. Any new <button> (TP/FP triage, a
-        new menu trigger, anything) trips this."""
+    def test_button_count_equals_immutable_baseline(self):
+        """Total <button> count in the panel must equal the IMMUTABLE
+        baseline count (5 data-cat toggle buttons captured at 767ee61).
+
+        IMPORTANT: this assertion pins against the FIXTURE count, NOT
+        the live data-cat count. An earlier version derived both sides
+        from the live branch HTML — a `<button data-cat="risk-status">`
+        Phase 9 chip would have incremented both sides equally and
+        silently passed. p6.10 code-review + architect-review caught
+        this. The fix locks the expected count to the baseline at
+        PR-creation time; ANY new <button> (with or without data-cat)
+        now trips the pin.
+
+        Blind spot disclosed (architect-review): this counts <button>
+        tags only. A Phase 9 chip rendered as <span class="v-chip"> or
+        <a class="v-chip"> is caught by `test_no_v_chip_elements_in_panel`
+        above, NOT by this pin. The two pins together cover both
+        topologies: tag-agnostic v-chip detection AND tag-specific
+        button-count discipline."""
         panel = _grep_panel_block(_read_branch_html(), "panel-supply-chain")
         buttons = _grep_panel_buttons(panel)
-        data_cat_count = len(_grep_data_cat_values(panel))
-        assert len(buttons) == data_cat_count, (
-            f"<button> count = {len(buttons)} but data-cat count = {data_cat_count}. "
-            f"REPAINT-ONLY allows ONLY the data-cat toggle buttons; any new <button> is "
-            f"out of scope. Buttons found: {buttons}"
+        expected = len(_read_fixture_lines("baseline-767ee61-buttons.txt"))
+        assert len(buttons) == expected, (
+            f"<button> count = {len(buttons)} but immutable baseline = {expected}. "
+            f"REPAINT-ONLY allows ONLY the 5 data-cat toggle buttons captured at "
+            f"the 767ee61 baseline; any new <button> (whether v-chip-styled or not, "
+            f"whether carrying a new data-cat or not) is out of scope. "
+            f"Buttons found: {buttons}"
         )
 
 
