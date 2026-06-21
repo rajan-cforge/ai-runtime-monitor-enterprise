@@ -1,0 +1,7 @@
+alert-category-filter
+alert-confidence-filter
+alert-severity-filter
+alert-show-dismissed
+alerts-count
+alerts-list
+alerts-severity-bar
