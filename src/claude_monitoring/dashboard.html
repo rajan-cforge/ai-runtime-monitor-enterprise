@@ -230,8 +230,16 @@ body { background:var(--bg); color:var(--text); font-family:var(--font-sans); fo
 .badge.browser { background:#1a2d2d; color:var(--cyan); }
 
 .system-grid { display:grid; grid-template-columns:1fr; gap:16px; }
+/* P6.10 — Supply Chain repaint to .v-* design tokens (judge p6.10.a1 APPROVE
+   2026-06-21). REPAINT-ONLY per STATUS.md Rajan 2026-06-19: tab controls stay
+   verbatim, mockup risk-status chips are Phase 9. The .system-section rule
+   definitions are SHARED with #panel-system (P6.3 territory) — preserving them
+   preserves the visual for both consumers. Pinned by 5 grep-anchored
+   preservation tests in tests/test_dashboard_p6_10_supply_chain.py incl. the
+   class-only v-chip injection guard (no-new-controls REAL fix per the
+   p6.10.a1 verdict carry-forward 1). */
 .system-section { margin-bottom:16px; }
-.system-section h3 { font-size:14px; margin-bottom:8px; color:var(--text2); }
+.system-section h3 { font-size:14px; margin-bottom:8px; color:var(--v-text-2, var(--text2)); }
 
 .empty { text-align:center; padding:48px; color:var(--text2); }
 
