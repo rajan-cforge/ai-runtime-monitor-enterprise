@@ -1271,6 +1271,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self._send_json({"connections": [dict(r) for r in rows]})
 
     def _api_alerts(self, params):
+        """Alerts API + P9.2 server-side pattern_counts/filter."""
+        from claude_monitoring.alerts_pattern import derive_and_filter_rows
+
         db = get_thread_db()
         limit = int(params.get("limit", ["50"])[0])
         offset = int(params.get("offset", ["0"])[0])
@@ -1317,6 +1320,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
             for cat in cats:
                 category_counts[cat] = category_counts.get(cat, 0) + 1
             filtered_rows.append((r, data, sev, cats, dismissed, conf))
+
+        # P9.2: pattern_counts (full pre-pagination set) + fail-closed filter.
+        filtered_rows, pattern_counts, pattern_filter_invalid = derive_and_filter_rows(
+            filtered_rows, params.get("pattern", [None])[0]
+        )
 
         # Second pass: paginate
         alerts = []
@@ -1373,8 +1381,16 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 "alerts": alerts,
                 "severity_counts": severity_counts,
                 "category_counts": category_counts,
-                "total": sum(severity_counts.values()),
-                "has_more": len(alerts) >= limit,
+                # P9.2 asymmetry: `severity_counts`/`category_counts` stay
+                # pre-pattern-filter (global severity/tab context); `total`
+                # is post-pattern-filter (pagination denominator).
+                "total": len(filtered_rows),
+                "has_more": offset + len(alerts) < len(filtered_rows),
+                # P9.2: pattern_counts pre-pattern-filter (chip badges stay
+                # truthful even when active). `pattern_filter_invalid` is
+                # fail-closed; alerts=[] enforced above when True.
+                "pattern_counts": pattern_counts,
+                "pattern_filter_invalid": pattern_filter_invalid,
             }
         )
 
