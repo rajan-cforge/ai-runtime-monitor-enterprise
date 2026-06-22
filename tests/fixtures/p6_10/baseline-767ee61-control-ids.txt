@@ -1,9 +1,0 @@
-sc-category-toggle
-sc-intel-bar
-sc-manager
-sc-scan-bar
-sc-search
-sc-stats
-sc-tbody
-sc-thead
-sc-watchlist-indicator

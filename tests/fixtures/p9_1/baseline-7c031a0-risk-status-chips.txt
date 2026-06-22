@@ -1,0 +1,5 @@
+all
+malicious
+vulnerable
+agent_installed
+clean

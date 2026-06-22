@@ -1,0 +1,16 @@
+sc-category-toggle
+sc-intel-bar
+sc-manager
+sc-risk-status-toggle
+sc-rs-agent-installed-n
+sc-rs-all-n
+sc-rs-clean-n
+sc-rs-hint
+sc-rs-malicious-n
+sc-rs-vulnerable-n
+sc-scan-bar
+sc-search
+sc-stats
+sc-tbody
+sc-thead
+sc-watchlist-indicator

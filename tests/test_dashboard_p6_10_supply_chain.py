@@ -125,25 +125,27 @@ def _grep_panel_v_chips(panel_html: str) -> list[str]:
 
 
 class TestSupplyChainControlIds:
-    """Pin 1: the 9 ids inside `#panel-supply-chain` survive. Pinned
-    via balanced-`<div>` extraction.
+    """Pin 1: the ids inside `#panel-supply-chain` are EXACTLY the
+    immutable post-P9.1 baseline (15 ids: 9 original + 1 sc-risk-status-
+    toggle + 5 sc-rs-*-n count spans). Pinned via balanced-`<div>` extraction.
 
-    NOTE: this pin is necessary but NOT sufficient as a REPAINT-ONLY
-    guard. The Phase 9 mockup risk-status chips are
-    `<button class="v-chip">` (class-only, no id, no data-cat) — they
-    would slip past this pin. The real no-new-controls guard lives
-    in `TestSupplyChainNoNewControls` below. See p6.10.a1 verdict
-    carry-forward 1."""
+    Cookbook entry #7 (judge p9.1.a1 ratified 2026-06-21): the baseline
+    fixture was BUMPED from `baseline-767ee61-control-ids.txt` (pre-P9.1,
+    9 ids) to `baseline-7c031a0-control-ids.txt` (post-P9.1, 15 ids) in
+    the SAME PR that lands the new chip controls. This is the
+    legitimate split-then-bump pattern — the bump rides real controls
+    landing alongside, not a bare ceiling raise."""
 
     def test_panel_scoped_control_ids_preserved(self):
-        baseline = _read_fixture_lines("baseline-767ee61-control-ids.txt")
+        baseline = _read_fixture_lines("baseline-7c031a0-control-ids.txt")
         branch = _grep_control_ids(_grep_panel_block(_read_branch_html(), "panel-supply-chain"))
         dropped = baseline - branch
         added = branch - baseline
         assert not dropped, f"control ids DROPPED from #panel-supply-chain: {sorted(dropped)}"
         assert not added, (
             f"control ids ADDED to #panel-supply-chain: {sorted(added)}. "
-            "REPAINT-ONLY scope forbids new controls. Mockup chips are Phase 9 scope."
+            "Per cookbook entry #7, the same PR that lands new ids must update "
+            "this fixture; do NOT silently augment without a baseline bump."
         )
 
 
@@ -199,38 +201,49 @@ class TestSupplyChainNoNewControls:
     to ratify the id-set claim as sufficient; this is the
     correction."""
 
-    def test_no_v_chip_elements_in_panel(self):
-        """The Phase 9 risk-status chips would land as
-        `<button class="v-chip …">` per the mockup. Zero allowed."""
+    def test_v_chip_elements_match_allowlist(self):
+        """REPURPOSED per cookbook entry #7 (judge p9.1.a1 ratified
+        2026-06-21): zero-presence assertion → positive allowlist.
+
+        The panel now contains EXACTLY 5 v-chip elements; each is a
+        `<button class="v-chip">` with `data-risk-status` ∈
+        {all, malicious, vulnerable, agent_installed, clean}. The
+        allowlist is enumerated here AND in the P9.1 file's pin
+        (`TestSupplyChainChipAllowlist`) — defense in depth. Any
+        future v-chip leak (e.g. Phase-9b alert pattern chips
+        landing in the wrong panel) trips this exact-count check."""
         panel = _grep_panel_block(_read_branch_html(), "panel-supply-chain")
         chips = _grep_panel_v_chips(panel)
-        assert chips == [], (
-            f"`v-chip` elements found inside #panel-supply-chain — REPAINT-ONLY scope "
-            f"forbids the Phase 9 mockup chips: {chips}"
+        assert len(chips) == 5, (
+            f"expected EXACTLY 5 v-chip elements in #panel-supply-chain "
+            f"(the P9.1 risk-status set); got {len(chips)}: {chips}. Per "
+            f"cookbook entry #7, the SAME PR that lands a 6th chip must "
+            f"update this allowlist count + the per-value fixture."
         )
 
-    def test_button_count_equals_immutable_baseline(self):
-        """Total <button> count in the panel must equal the IMMUTABLE
-        baseline count (5 data-cat toggle buttons captured at 767ee61).
+    def test_button_count_equals_post_p9_1_baseline(self):
+        """RENAMED + REBASELINED per cookbook entry #7. Total <button>
+        count in the panel must equal the post-P9.1 baseline count (10:
+        5 data-cat toggle + 5 v-chip risk-status). The fixture file
+        captures the count at PR-creation time (`baseline-7c031a0-button-
+        count.txt`).
 
-        IMPORTANT: this assertion pins against the FIXTURE count, NOT
-        the live data-cat count. An earlier version derived both sides
-        from the live branch HTML — a `<button data-cat="risk-status">`
-        Phase 9 chip would have incremented both sides equally and
-        silently passed. p6.10 code-review + architect-review caught
-        this. The fix locks the expected count to the baseline at
-        PR-creation time; ANY new <button> (with or without data-cat)
-        now trips the pin.
+        Cookbook entry #7 rationale: bumping the baseline from 5 to 10
+        is legitimate ONLY because 5 real chips land in the same PR.
+        Bare-ceiling bumps (raising the count without landing the
+        controls) are forbidden — that would silently widen the pin's
+        tolerance. The mutation-prove gate empirically verifies the new
+        ceiling: injecting an 11th `<button>` (any shape) must RED the
+        pin.
 
         Blind spot disclosed (architect-review): this counts <button>
         tags only. A Phase 9 chip rendered as <span class="v-chip"> or
-        <a class="v-chip"> is caught by `test_no_v_chip_elements_in_panel`
-        above, NOT by this pin. The two pins together cover both
-        topologies: tag-agnostic v-chip detection AND tag-specific
-        button-count discipline."""
+        <a class="v-chip"> is caught by `test_v_chip_elements_match_
+        allowlist` above, NOT by this pin. The two pins together
+        cover both topologies."""
         panel = _grep_panel_block(_read_branch_html(), "panel-supply-chain")
         buttons = _grep_panel_buttons(panel)
-        expected = len(_read_fixture_lines("baseline-767ee61-buttons.txt"))
+        expected = int((FIXTURE_DIR / "baseline-7c031a0-button-count.txt").read_text().strip())
         assert len(buttons) == expected, (
             f"<button> count = {len(buttons)} but immutable baseline = {expected}. "
             f"REPAINT-ONLY allows ONLY the 5 data-cat toggle buttons captured at "
