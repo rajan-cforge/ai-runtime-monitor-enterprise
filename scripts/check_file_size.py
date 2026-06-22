@@ -45,7 +45,15 @@ from pathlib import Path
 # ``supply_chain_risk.py`` module. 7 lines of API-shape stayed in the
 # handler — this is the legitimate "split, then bump" pattern, NOT a
 # bare ceiling raise.
-MAX_LINES = 2910
+#
+# 2910 → 2930 on P9.2 alerts-pattern-chips (2026-06-22, judge APPROVE-WITH-FIX
+# ratified) after extracting pattern derivation/filter (4 symbols incl.
+# ``derive_and_filter_rows``) to ``alerts_pattern.py``. 17 lines of API-shape
+# stayed in the handler (param parsing + helper call + new stats keys for
+# pattern_counts / pattern_filter_invalid / corrected total/has_more
+# semantics). Same "split, then bump" pattern; further extraction would
+# fragment the alerts request flow.
+MAX_LINES = 2930
 
 
 def file_line_count(path: Path) -> int:

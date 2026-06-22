@@ -5,3 +5,10 @@ alert-show-dismissed
 alerts-count
 alerts-list
 alerts-severity-bar
+alerts-pattern-all-n
+alerts-pattern-api-key-generic-n
+alerts-pattern-aws-key-n
+alerts-pattern-credit-card-n
+alerts-pattern-github-token-n
+alerts-pattern-private-key-n
+alerts-pattern-toggle

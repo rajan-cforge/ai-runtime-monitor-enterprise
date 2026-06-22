@@ -1,0 +1,6 @@
+all
+aws_key
+github_token
+api_key_generic
+private_key
+credit_card
