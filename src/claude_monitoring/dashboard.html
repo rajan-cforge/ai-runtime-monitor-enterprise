@@ -1235,6 +1235,23 @@ body { background:var(--bg); color:var(--text); font-family:var(--font-sans); fo
         </select>
         <input id="sc-search" placeholder="Search package..." onkeyup="loadSupplyChain()" style="background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:4px 8px;color:var(--text);font-size:12px;flex:1;max-width:250px">
       </div>
+      <!-- P9.1: Supply Chain risk-status chips (judge p9.1.a2 APPROVE 2026-06-21,
+           frontend-design 2026-06-21 row-order ratification). Reuses the canonical
+           .v-chip shipped at lines 815-821 verbatim — zero CSS added in this PR.
+           data-risk-status attribute (compound; avoids collision with session-item
+           severity data-risk at lines 75-78). The 5 chips compose AND with the
+           category toggle above; chips are disabled visually when category !=
+           environment with hint text per frontend-design carry-forward (no auto-
+           switch surprise). Counts in .v-chip__n are set by loadEnvironment() from
+           API stats.by_risk_status. -->
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px;align-items:center" id="sc-risk-status-toggle">
+        <button class="v-chip is-active" data-risk-status="all" onclick="scSetRiskStatus(this)">All <span class="v-chip__n" id="sc-rs-all-n"></span></button>
+        <button class="v-chip" data-risk-status="malicious" onclick="scSetRiskStatus(this)">Malicious <span class="v-chip__n" id="sc-rs-malicious-n"></span></button>
+        <button class="v-chip" data-risk-status="vulnerable" onclick="scSetRiskStatus(this)">Vulnerable <span class="v-chip__n" id="sc-rs-vulnerable-n"></span></button>
+        <button class="v-chip" data-risk-status="agent_installed" onclick="scSetRiskStatus(this)">Agent-installed <span class="v-chip__n" id="sc-rs-agent-installed-n"></span></button>
+        <button class="v-chip" data-risk-status="clean" onclick="scSetRiskStatus(this)">Clean <span class="v-chip__n" id="sc-rs-clean-n"></span></button>
+        <span id="sc-rs-hint" style="font-size:11px;color:var(--v-text-2, var(--text2));font-style:italic;display:none">Risk filters apply to Full Environment</span>
+      </div>
       <table style="table-layout:auto;overflow-x:auto"><thead><tr id="sc-thead"></tr></thead>
         <tbody id="sc-tbody"></tbody>
       </table>
@@ -2719,10 +2736,41 @@ function scSetCategory(btn) {
   btn.classList.add('active');
   btn.style.background = 'var(--blue)';
   btn.style.color = 'white';
+  // P9.1: enable/disable risk-status chips based on category — chips only
+  // apply on environment view today (frontend-design 2026-06-21 ratification).
+  if (typeof scUpdateRiskStatusEnabled === 'function') scUpdateRiskStatusEnabled();
   loadSupplyChain();
   // Scroll to top of table
   var panel = document.getElementById('panel-supply-chain');
   if (panel) panel.scrollTop = 0;
+}
+// P9.1: risk-status chip filter state. AND-composes with category per
+// D-AND-filter-semantics. The `_scRiskStatusFilter` is sent as the
+// `risk_status` query param to /api/supply-chain/environment, which
+// allowlist-validates server-side. Chips ONLY apply on the environment
+// category today (frontend-design 2026-06-21: no auto-switch, disable
+// visually + show hint when not on environment — surfaces the constraint
+// instead of papering over it). Future PRs may extend derivation to
+// other categories.
+var _scRiskStatusFilter = 'all';
+function scSetRiskStatus(btn) {
+  if (btn.disabled) return;
+  _scRiskStatusFilter = btn.dataset.riskStatus;
+  document.querySelectorAll('#sc-risk-status-toggle .v-chip').forEach(function(c) {
+    c.classList.remove('is-active');
+  });
+  btn.classList.add('is-active');
+  loadSupplyChain();
+}
+function scUpdateRiskStatusEnabled() {
+  var onEnv = (_scCategory === 'environment');
+  document.querySelectorAll('#sc-risk-status-toggle .v-chip').forEach(function(c) {
+    c.disabled = !onEnv;
+    c.style.opacity = onEnv ? '' : '0.5';
+    c.style.pointerEvents = onEnv ? '' : 'none';
+  });
+  var hint = document.getElementById('sc-rs-hint');
+  if (hint) hint.style.display = onEnv ? 'none' : '';
 }
 function scRiskBadge(score) {
   if (score >= 6) return '<span class="badge" style="background:transparent;color:var(--orange);border:1px solid var(--orange);font-size:10px" title="Powerful capabilities warrant monitoring">HIGH CAPABILITY</span>';
@@ -2946,20 +2994,50 @@ function semverCompare(installed, fix) {
 async function loadEnvironment(search) {
   try {
     var url = API + '/api/supply-chain/environment';
-    if (search) url += '?search=' + encodeURIComponent(search);
+    var qs = [];
+    if (search) qs.push('search=' + encodeURIComponent(search));
+    // P9.1: send risk_status filter only when non-default; the server
+    // also accepts 'all' as a no-op but omitting it keeps the URL tidy.
+    if (_scRiskStatusFilter && _scRiskStatusFilter !== 'all') {
+      qs.push('risk_status=' + encodeURIComponent(_scRiskStatusFilter));
+    }
+    if (qs.length) url += '?' + qs.join('&');
     var r = await fetch(url);
     var d = await r.json();
     var s = d.stats || {};
     document.getElementById('sc-stats').innerHTML =
       '<span class="badge" style="background:var(--surface2);color:var(--text);border:1px solid var(--border)">Total: <strong>' + s.total + '</strong></span>'
+      + '<span class="badge" style="background:var(--surface2);color:var(--red);border:1px solid var(--border)">Malicious: <strong>' + (s.malicious || 0) + '</strong></span>'
       + '<span class="badge" style="background:var(--surface2);color:var(--red);border:1px solid var(--border)">Vulnerable: <strong>' + s.vulnerable + '</strong></span>'
       + '<span class="badge" style="background:var(--surface2);color:var(--blue);border:1px solid var(--border)">Agent-installed: <strong>' + s.agent_installed + '</strong></span>'
       + '<span class="badge" style="background:var(--surface2);color:var(--green);border:1px solid var(--border)">Clean: <strong>' + s.clean + '</strong></span>';
+    // P9.1: update .v-chip__n count text from stats.by_risk_status.
+    // Uses textContent (NOT innerHTML) per the judge carry-forward on
+    // context-aware escaping. Maps underscored taxonomy keys to the
+    // hyphenated HTML element ids (sc-rs-agent_installed → sc-rs-agent-installed-n).
+    // Bug fix per code-review conf 92: the original `replace(/_/g, '_')` was
+    // a no-op so agent_installed chip count never updated.
+    var byRs = s.by_risk_status || {};
+    ['all', 'malicious', 'vulnerable', 'agent_installed', 'clean'].forEach(function(k) {
+      var el = document.getElementById('sc-rs-' + k.replace(/_/g, '-') + '-n');
+      if (el) el.textContent = (byRs[k] != null) ? String(byRs[k]) : '';
+    });
     var thead = document.getElementById('sc-thead');
     var tbody = document.getElementById('sc-tbody');
     thead.innerHTML = '<th style="min-width:160px">Package</th><th style="min-width:80px">Version</th><th style="min-width:60px">Mgr</th><th style="min-width:120px">Vulns</th><th style="min-width:80px">Source</th><th style="min-width:120px">Capability</th>';
     if (!d.packages || !d.packages.length) {
-      tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text2);padding:32px">No environment data. Click "Scan now" to gather installed packages.</td></tr>';
+      // P9.1 data-truthfulness rider (judge p9.1.a2 ratified): the empty
+      // state distinguishes between (a) AND-filter returned zero rows but
+      // there IS data and (b) the environment was never scanned. The two
+      // surfaces must not look alike. Styled with --v-text-2 per the
+      // shipped semantic palette.
+      var filterActive = (_scRiskStatusFilter && _scRiskStatusFilter !== 'all');
+      if (filterActive && (s.total || 0) > 0) {
+        tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--v-text-2, var(--text2));padding:32px;font-style:italic">No packages match these filters — '
+          + (s.total || 0) + ' total in environment</td></tr>';
+      } else {
+        tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text2);padding:32px">No environment data. Click "Scan now" to gather installed packages.</td></tr>';
+      }
       return;
     }
     // Store for expand

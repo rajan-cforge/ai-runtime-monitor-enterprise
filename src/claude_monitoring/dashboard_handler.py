@@ -62,6 +62,7 @@ from claude_monitoring.constants import (
     TOOL_RISK_MAP,
 )
 from claude_monitoring.db import get_thread_db
+from claude_monitoring.supply_chain_risk import _normalize_risk_status, enrich_and_filter_rows
 from claude_monitoring.utils import is_ai_process, now_iso, scan_sensitive
 
 
@@ -2461,9 +2462,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
         )
 
     def _api_supply_chain_environment(self, params):
-        """Full environment package inventory with vuln + agent cross-reference."""
+        """Environment inventory + P9.1 risk_status derive/filter (see supply_chain_risk)."""
+        from claude_monitoring.threat_intel import is_known_malicious
+
         db = get_thread_db()
         search = params.get("search", [""])[0]
+        risk_filter = _normalize_risk_status(params.get("risk_status", [None])[0])
         conditions = ["1=1"]
         bind = []
         if search:
@@ -2482,6 +2486,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                   ORDER BY vuln_count DESC, agent_installs DESC, ep.package_name
                   LIMIT 500"""  # nosec B608
         rows = db.execute(sql, bind).fetchall()
+        packages_out, per_status_count = enrich_and_filter_rows(rows, is_known_malicious, risk_filter)
 
         total = db.execute(f"SELECT COUNT(*) FROM environment_packages ep WHERE {where}", bind).fetchone()[0]  # nosec B608
         vuln_count = db.execute(
@@ -2493,13 +2498,18 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
         self._send_json(
             {
-                "stats": {
+                "stats": {  # window-derived for by_risk_status consistency; SQL totals as *_in_db
                     "total": total,
-                    "vulnerable": vuln_count,
-                    "agent_installed": agent_count,
-                    "clean": total - vuln_count,
+                    "total_window": sum(per_status_count.values()),
+                    "malicious": per_status_count["malicious"],
+                    "vulnerable": per_status_count["vulnerable"],
+                    "agent_installed": per_status_count["agent_installed"],
+                    "clean": per_status_count["clean"],
+                    "by_risk_status": {"all": sum(per_status_count.values()), **per_status_count},
+                    "total_vulnerable_in_db": vuln_count,
+                    "total_agent_installed_in_db": agent_count,
                 },
-                "packages": [dict(r) for r in rows],
+                "packages": packages_out,
             }
         )
 
