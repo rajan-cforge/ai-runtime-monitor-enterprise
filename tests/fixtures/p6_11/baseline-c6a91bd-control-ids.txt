@@ -12,3 +12,6 @@ alerts-pattern-credit-card-n
 alerts-pattern-github-token-n
 alerts-pattern-private-key-n
 alerts-pattern-toggle
+alerts-triage-all-n
+alerts-triage-toggle
+alerts-triage-unresolved-n

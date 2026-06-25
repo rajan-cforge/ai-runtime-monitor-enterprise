@@ -242,12 +242,12 @@ def init_db(db_path=None):
     except sqlite3.OperationalError:
         pass
 
-    c.execute("""CREATE TABLE IF NOT EXISTS alert_dismissals (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        event_id INTEGER NOT NULL UNIQUE,
-        dismissed_at TEXT NOT NULL,
-        reason TEXT
-    )""")
+    # P9.3 (judge p9.3.a2 APPROVE 2026-06-24): the legacy alert_dismissals
+    # CREATE was removed here. Migration 0.2.2.003 generalizes the table
+    # into alert_triage and DROPs alert_dismissals; leaving the legacy
+    # CREATE TABLE IF NOT EXISTS in init_db() would re-create an empty
+    # alert_dismissals on every daemon restart (split-brain). The
+    # alert_triage table is created exclusively by migration 0.2.2.003.
 
     # Persistent file positions — survives monitor restarts
     c.execute("""CREATE TABLE IF NOT EXISTS file_positions (

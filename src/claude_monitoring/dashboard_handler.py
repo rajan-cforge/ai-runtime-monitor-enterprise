@@ -226,6 +226,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
         post_routes = {
             "/api/alerts/dismiss": self._api_alerts_dismiss,
+            "/api/alerts/triage": self._api_alerts_triage,
+            "/api/alerts/triage/clear": self._api_alerts_triage_clear,
             "/api/browser/ingest": self._api_browser_ingest,
             "/api/browser/heartbeat": self._api_browser_heartbeat,
             "/api/supply-chain/scan": self._api_supply_chain_scan_post,
@@ -264,6 +266,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def _api_alerts_dismiss(self, payload):
+        # P9.3: dismissals are stored in alert_triage with verdict='dismissed'.
+        # External UX contract unchanged (3 reasons; Pin 5 stays green).
         event_id = payload.get("event_id")
         reason = payload.get("reason", "")
         if event_id is None:
@@ -285,14 +289,69 @@ class DashboardHandler(BaseHTTPRequestHandler):
         now = datetime.now(timezone.utc).isoformat()
         try:
             db.execute(
-                "INSERT INTO alert_dismissals (event_id, dismissed_at, reason) VALUES (?, ?, ?)",
-                (event_id, now, reason),
+                "INSERT INTO alert_triage (event_id, verdict, reason, created_at) VALUES (?, 'dismissed', ?, ?)",
+                (event_id, reason, now),
             )
             db.commit()
         except sqlite3.IntegrityError:
-            self._send_json({"error": "alert already dismissed"}, 409)
+            self._send_json({"error": "alert already triaged"}, 409)
             return
         self._send_json({"ok": True, "event_id": event_id, "dismissed_at": now})
+
+    def _api_alerts_triage(self, payload):
+        """P9.3: set/upsert a TP/FP verdict on an alert. `muted` is
+        REJECTED fail-closed until P9.4 ships with its security
+        guardrails (judge p9.3.a2 F3)."""
+        from claude_monitoring.alerts_triage import _normalize_verdict
+
+        event_id = payload.get("event_id")
+        if event_id is None:
+            self._send_json({"error": "event_id is required"}, 400)
+            return
+        try:
+            event_id = int(event_id)
+        except (TypeError, ValueError):
+            self._send_json({"error": "event_id must be an integer"}, 400)
+            return
+        verdict, is_invalid = _normalize_verdict(payload.get("verdict"))
+        if is_invalid or verdict is None:
+            # Invalid or missing verdict → fail-closed. `muted` lands here
+            # (LIVE allowlist rejects it).
+            self._send_json({"error": "verdict must be true_positive, false_positive, or dismissed"}, 400)
+            return
+        db = get_thread_db()
+        row = db.execute(
+            "SELECT id FROM events WHERE id=? AND event_type='sensitive_data'",
+            (event_id,),
+        ).fetchone()
+        if not row:
+            self._send_json({"error": "event not found"}, 404)
+            return
+        now = datetime.now(timezone.utc).isoformat()
+        # Upsert: an operator changing their mind replaces the verdict.
+        db.execute(
+            "INSERT INTO alert_triage (event_id, verdict, reason, created_at) VALUES (?, ?, NULL, ?) "
+            "ON CONFLICT(event_id) DO UPDATE SET verdict=excluded.verdict, created_at=excluded.created_at",
+            (event_id, verdict, now),
+        )
+        db.commit()
+        self._send_json({"ok": True, "event_id": event_id, "verdict": verdict, "created_at": now})
+
+    def _api_alerts_triage_clear(self, payload):
+        """P9.3: clear the triage row for an alert (operator un-labels)."""
+        event_id = payload.get("event_id")
+        if event_id is None:
+            self._send_json({"error": "event_id is required"}, 400)
+            return
+        try:
+            event_id = int(event_id)
+        except (TypeError, ValueError):
+            self._send_json({"error": "event_id must be an integer"}, 400)
+            return
+        db = get_thread_db()
+        db.execute("DELETE FROM alert_triage WHERE event_id=?", (event_id,))
+        db.commit()
+        self._send_json({"ok": True, "event_id": event_id, "cleared": True})
 
     def _api_browser_heartbeat(self, payload):
         """Section 6: receive 60s heartbeats from extension content scripts.
@@ -1271,8 +1330,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self._send_json({"connections": [dict(r) for r in rows]})
 
     def _api_alerts(self, params):
-        """Alerts API + P9.2 server-side pattern_counts/filter."""
-        from claude_monitoring.alerts_pattern import derive_and_filter_rows
+        """Alerts API + P9.2 pattern_counts/filter + P9.3 triage."""
+        from claude_monitoring.alerts_pattern import derive_and_filter_rows as _p92_derive
+        from claude_monitoring.alerts_triage import derive_and_filter_rows as _p93_derive
 
         db = get_thread_db()
         limit = int(params.get("limit", ["50"])[0])
@@ -1284,10 +1344,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
         rows = db.execute(
             """SELECT e.id, e.timestamp, e.session_id, e.data_json,
                       s.title, s.cwd,
-                      d.id AS dismissal_id
+                      t.id AS triage_id, t.verdict AS triage_verdict
                FROM events e
                LEFT JOIN sessions s ON e.session_id = s.session_id
-               LEFT JOIN alert_dismissals d ON e.id = d.event_id
+               LEFT JOIN alert_triage t ON e.id = t.event_id
                WHERE e.event_type='sensitive_data'
                ORDER BY e.id DESC LIMIT 1000"""
         ).fetchall()
@@ -1302,7 +1362,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 data = {}
             sev = data.get("severity", "medium")
             cats = data.get("categories", ["credential"])
-            dismissed = r["dismissal_id"] is not None
+            verdict = r["triage_verdict"]  # None if not triaged
+            dismissed = verdict == "dismissed"
             conf = data.get("confidence", "medium")
 
             if dismissed and not include_dismissed:
@@ -1319,16 +1380,21 @@ class DashboardHandler(BaseHTTPRequestHandler):
             severity_counts[sev] = severity_counts.get(sev, 0) + 1
             for cat in cats:
                 category_counts[cat] = category_counts.get(cat, 0) + 1
-            filtered_rows.append((r, data, sev, cats, dismissed, conf))
+            # P9.3: extend tuple with verdict (column 7) for triage helper.
+            filtered_rows.append((r, data, sev, cats, dismissed, conf, verdict))
 
         # P9.2: pattern_counts (full pre-pagination set) + fail-closed filter.
-        filtered_rows, pattern_counts, pattern_filter_invalid = derive_and_filter_rows(
+        filtered_rows, pattern_counts, pattern_filter_invalid = _p92_derive(
             filtered_rows, params.get("pattern", [None])[0]
+        )
+        # P9.3: verdict_counts (full pre-triage-filter set) + fail-closed filter.
+        filtered_rows, verdict_counts, triage_filter_invalid = _p93_derive(
+            filtered_rows, params.get("triage_filter", [None])[0]
         )
 
         # Second pass: paginate
         alerts = []
-        for idx, (r, data, sev, cats, dismissed, _conf) in enumerate(filtered_rows):
+        for idx, (r, data, sev, cats, dismissed, _conf, verdict) in enumerate(filtered_rows):
             if idx < offset:
                 continue
             if len(alerts) >= limit:
@@ -1372,6 +1438,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 "repeat_count": data.get("repeat_count", 1),
                 "turn_number": turn_count,
                 "dismissed": dismissed,
+                # P9.3: verdict from alert_triage (None if untriaged).
+                "verdict": verdict,
             }
             if package_info is not None:
                 alert_row["package"] = package_info
@@ -1391,6 +1459,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 # fail-closed; alerts=[] enforced above when True.
                 "pattern_counts": pattern_counts,
                 "pattern_filter_invalid": pattern_filter_invalid,
+                # P9.3: verdict_counts pre-triage-filter so chip badges
+                # stay truthful even when Unresolved is active.
+                "verdict_counts": verdict_counts,
+                "triage_filter_invalid": triage_filter_invalid,
             }
         )
 

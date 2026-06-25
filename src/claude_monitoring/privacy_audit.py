@@ -726,11 +726,15 @@ SAFE_COLUMNS_BY_TABLE: dict[str, dict[str, str]] = {
         "description": "raw",
     },
     # Operational / cache tables — case-by-case per Phase A.
-    "alert_dismissals": {
+    # P9.3 schema 0.2.2.003: alert_dismissals → alert_triage. Verdict TEXT
+    # (operator label, no credential content); reason masked as before;
+    # created_at is the audit-trail timestamp.
+    "alert_triage": {
         "id": "raw",
         "event_id": "raw",
-        "dismissed_at": "raw",
+        "verdict": "raw",
         "reason": "masked",
+        "created_at": "raw",
     },
     "extension_heartbeats": {
         "id": "raw",

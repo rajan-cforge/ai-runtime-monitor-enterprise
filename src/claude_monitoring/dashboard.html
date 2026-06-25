@@ -1339,6 +1339,17 @@ body { background:var(--bg); color:var(--text); font-family:var(--font-sans); fo
         <button class="v-chip" data-pattern="private_key" onclick="filterAlertsByPattern('private_key')">Private keys <span class="v-chip__n" id="alerts-pattern-private-key-n"></span></button>
         <button class="v-chip" data-pattern="credit_card" onclick="filterAlertsByPattern('credit_card')">Credit cards <span class="v-chip__n" id="alerts-pattern-credit-card-n"></span></button>
       </div>
+      <!-- P9.3: Alerts triage status chips (judge p9.3.a2 APPROVE 2026-06-24).
+           Reuses .v-chip (dashboard.html:815-821) verbatim — zero CSS. Compound
+           data-triage-filter attribute (distinct from data-pattern, data-risk,
+           data-risk-status). Unresolved (default-active) = the operator todo
+           (verdict-null rows). All = pass-through. Muted excluded (P9.4 R0).
+           verdict_counts from server (dataset-wide, pre-triage-filter) so
+           chip badges stay truthful while a chip is active. -->
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px" id="alerts-triage-toggle">
+        <button class="v-chip is-active" data-triage-filter="unresolved" onclick="setTriageFilter('unresolved')">Unresolved <span class="v-chip__n" id="alerts-triage-unresolved-n"></span></button>
+        <button class="v-chip" data-triage-filter="all" title="Includes all verdicts (TP / FP / dismissed) plus untriaged (no mute yet — deferred to v0.3)." onclick="setTriageFilter('all')">All <span class="v-chip__n" id="alerts-triage-all-n"></span></button>
+      </div>
       <div id="alerts-list" style="max-height:calc(100vh - 320px);overflow-y:auto"></div>
     </div>
   </div>
@@ -3489,6 +3500,8 @@ document.querySelector('#sc-category-toggle button.active').style.color = 'white
 // Alerts panel
 let alertOffset = 0;
 let alertPatternFilter = '';
+// P9.3: triage status filter — default 'unresolved' (operator todo)
+let alertTriageFilter = 'unresolved';
 async function loadAlerts(customOffset) {
   try {
     if (customOffset !== undefined) alertOffset = customOffset;
@@ -3504,6 +3517,10 @@ async function loadAlerts(customOffset) {
     // P9.2: send the server-side pattern filter when active. Reuses the
     // existing `alertPatternFilter` state variable (line 3471).
     if (alertPatternFilter) url += '&pattern=' + encodeURIComponent(alertPatternFilter);
+    // P9.3: send the server-side triage filter. Always sent — defaults to
+    // 'unresolved' (operator todo). Server validates allowlist {unresolved, all};
+    // invalid → fail-closed empty (§4.5 contract).
+    url += '&triage_filter=' + encodeURIComponent(alertTriageFilter);
     const r = await fetch(url);
     const d = await r.json();
     const container = document.getElementById('alerts-list');
@@ -3548,6 +3565,21 @@ async function loadAlerts(customOffset) {
         (c.dataset.pattern === alertPatternFilter));
     });
 
+    // P9.3: update .v-chip__n counts on the triage chip row from
+    // d.verdict_counts (dataset-wide; pre-triage-filter, so the chip
+    // badges stay truthful while one is active).
+    const vc = d.verdict_counts || {};
+    [['unresolved','alerts-triage-unresolved-n'], ['all','alerts-triage-all-n']
+    ].forEach(function(pair) {
+      var el = document.getElementById(pair[1]);
+      if (el) el.textContent = (vc[pair[0]] != null) ? String(vc[pair[0]]) : '';
+    });
+    // P9.3: chip active-state mirrors `alertTriageFilter` (single source of
+    // truth across the chip row + URL query string; no parallel state).
+    document.querySelectorAll('#alerts-triage-toggle .v-chip').forEach(function(c) {
+      c.classList.toggle('is-active', c.dataset.triageFilter === alertTriageFilter);
+    });
+
     if (!d.alerts.length) {
       // P9.2 invalid-pattern empty state (judge p9.2.a2 APPROVE-WITH-FIX
       // §4.5 fail-closed): a non-allowlisted `pattern` param returns
@@ -3588,6 +3620,17 @@ async function loadAlerts(customOffset) {
           + '<button class="dismiss-btn" onclick="event.stopPropagation();dismissAlert('+a.id+',this,\'false_positive\')">False positive</button>'
           + '<button class="dismiss-btn" onclick="event.stopPropagation();dismissAlert('+a.id+',this,\'investigated\')">Investigated</button>'
           + '<button class="dismiss-btn" onclick="event.stopPropagation();dismissAlert('+a.id+',this,\'accepted_risk\')">Accept risk</button>'
+          + '</span>';
+      // P9.3: triage TP/FP per-alert buttons. Distinct `.triage-btn` class
+      // namespaces them from `.dismiss-btn` so CSS can style independently.
+      // Verdict text uses the server-supplied a.verdict directly (never
+      // user input → no XSS surface from this branch). When a verdict is
+      // set, show its state + a Clear button; otherwise show TP/FP buttons.
+      const triageBtns = a.verdict
+        ? '<span class="triage-btn is-on--' + (a.verdict === 'true_positive' ? 'tp' : (a.verdict === 'false_positive' ? 'fp' : 'dismissed')) + '" data-verdict="' + a.verdict + '" style="font-size:11px">Labeled: ' + (a.verdict === 'true_positive' ? 'True positive' : (a.verdict === 'false_positive' ? 'False positive' : 'Dismissed')) + ' <button class="triage-btn-clear" onclick="event.stopPropagation();clearTriage('+a.id+',this)" style="margin-left:6px;font-size:10px">Unlabel</button></span>'
+        : '<span style="display:flex;gap:4px">'
+          + '<button class="triage-btn" onclick="event.stopPropagation();triageAlert('+a.id+',this,\'true_positive\')">True positive</button>'
+          + '<button class="triage-btn" onclick="event.stopPropagation();triageAlert('+a.id+',this,\'false_positive\')">False positive</button>'
           + '</span>';
       // Section 4c: the backend now stores only masked + hashed values, never
       // the raw credential. No Reveal button — masking is not reversible.
@@ -3634,7 +3677,7 @@ async function loadAlerts(customOffset) {
           + '<div style="display:flex;gap:6px;margin-bottom:8px">' + sessionBtn + packageBtn + advisoryBtn + copyBtn + '</div>'
           + (investigationList ? '<div style="font-size:12px;margin-bottom:8px"><div style="color:var(--text2);margin-bottom:4px">Investigation:</div><ul style="margin:0;padding-left:16px;list-style:none">' + investigationList + '</ul></div>' : '')
           + repeatTag
-          + '<div style="margin-top:6px">' + dismissBtns + '</div>'
+          + '<div style="margin-top:6px;display:flex;gap:8px;flex-wrap:wrap">' + dismissBtns + triageBtns + '</div>'
           + '</div>';
       }
 
@@ -3650,7 +3693,7 @@ async function loadAlerts(customOffset) {
         + '<div class="alert-snippet">' + esc(renderSnippet(a.snippet)) + '</div>'
         + repeatTag
         + (a.session_id ? '<div class="alert-session" onclick="openDeepDive(\''+a.session_id+'\', '+(a.turn_number||1)+', '+a.id+')">' + esc(a.session_title) + turnLabel + '</div>' : '')
-        + '<div style="margin-top:6px">' + dismissBtns + '</div>'
+        + '<div style="margin-top:6px;display:flex;gap:8px;flex-wrap:wrap">' + dismissBtns + triageBtns + '</div>'
         + '</div>';
     }).join('');
     window._alertSnippets = window._alertSnippets || {};
@@ -3708,6 +3751,36 @@ function filterAlertsByPattern(p) {
   // `pattern` query param.
   alertPatternFilter = (p === 'all') ? '' : p;
   loadAlerts();
+}
+// P9.3: triage status filter — sets `alertTriageFilter` (single source of
+// truth across the chip row + URL query string; no parallel state).
+function setTriageFilter(f) {
+  alertTriageFilter = f;
+  loadAlerts();
+}
+// P9.3: set a TP/FP verdict on an alert. POST + reload list. Errors are
+// swallowed silently (mirrors existing dismissAlert pattern — to-do for
+// a separate UX-error PR; not in P9.3 scope).
+async function triageAlert(eventId, btn, verdict) {
+  try {
+    const r = await fetch(API + '/api/alerts/triage', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({event_id: eventId, verdict: verdict})
+    });
+    if (r.ok) loadAlerts();
+  } catch(e) {}
+}
+// P9.3: clear an existing verdict (operator un-labels).
+async function clearTriage(eventId, btn) {
+  try {
+    const r = await fetch(API + '/api/alerts/triage/clear', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({event_id: eventId})
+    });
+    if (r.ok) loadAlerts();
+  } catch(e) {}
 }
 async function dismissAlert(eventId, btn, reason) {
   try {
