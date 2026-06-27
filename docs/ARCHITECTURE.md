@@ -584,6 +584,38 @@ All tables live in `~/claude_watch_output/monitor.db` (SQLite, WAL mode).
 | tab_id | INTEGER | Chrome tab ID |
 | window_id | INTEGER | Chrome window ID |
 
+### alert_triage (v0.2.2 P9.3)
+
+Generalizes the legacy `alert_dismissals` table into a per-alert verdict
+table. One row per triaged alert; absence of a row = "unresolved"
+(operator's todo). Migration `0.2.2.003` performs the rename with data
+preservation (existing dismissals copy as `verdict='dismissed'`).
+
+| Column | Type | Description |
+|--------|------|-------------|
+| id | INTEGER PK | Auto-increment |
+| event_id | INTEGER NOT NULL UNIQUE | FK to `events.id` (the alert event) |
+| verdict | TEXT NOT NULL | Operator label ∈ {true_positive, false_positive, dismissed} |
+| reason | TEXT | Dismiss-reason string (only set when verdict='dismissed'; NULL for TP/FP) |
+| created_at | TEXT NOT NULL | ISO 8601 of the operator action |
+
+**Data classification** (per `privacy_audit.py`): `verdict` raw,
+`reason` masked, `created_at` raw. Verdict and timestamp are
+operator-audit-trail with no credential content.
+
+**Forward-compat with v0.3 Mute**: the `verdict` column is plain TEXT
+(no CHECK constraint). When v0.3 reopens P9.4 (Mute), it ADDS `"muted"`
+to the LIVE endpoint allowlist + UI + security guardrails — no
+re-migration needed. P9.3 ships zero mute capability: the endpoint
+rejects `verdict='muted'` fail-closed via `_normalize_verdict`.
+
+**Split-brain closure**: the legacy `CREATE TABLE IF NOT EXISTS
+alert_dismissals` block in `init_db()` was removed in the same PR.
+Without that removal, init_db would resurrect an empty
+alert_dismissals on every daemon restart after the migration DROPped
+it. See `tests/test_alerts_triage_migration.py::TestMigration003ClosesSplitBrain`
+for the regression test.
+
 ### Indexes
 
 - `idx_events_ts` — events(timestamp)

@@ -172,9 +172,7 @@ class TestMigration003ClosesSplitBrain:
         assert not _table_exists(conn, "alert_dismissals"), (
             "precondition: post-init_db, alert_dismissals must NOT exist"
         )
-        assert _table_exists(conn, "alert_triage"), (
-            "precondition: post-init_db, alert_triage must exist"
-        )
+        assert _table_exists(conn, "alert_triage"), "precondition: post-init_db, alert_triage must exist"
         conn.close()
 
         # Step 2: SIMULATED DAEMON RESTART — open the same DB path again.
