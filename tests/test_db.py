@@ -1,6 +1,8 @@
 """Tests for init_db() and database operations."""
 
-from claude_monitoring.db import init_db, insert_api_call
+import sqlite3
+
+from claude_monitoring.db import get_thread_db, init_db, insert_api_call
 
 
 class TestInitDb:
@@ -165,3 +167,57 @@ class TestInsertApiCall:
         record = {"timestamp": "2026-01-01T00:00:00Z"}
         result = insert_api_call(db_path, record)
         assert result is True
+
+
+class TestGetThreadDb:
+    """`get_thread_db` is the per-thread connection helper used by the
+    dashboard handler. Each call returns a new connection with WAL + 30s
+    busy_timeout + Row factory — the same PRAGMA contract `init_db`
+    establishes, mirrored here so dashboard reader threads tolerate the
+    daemon's bulk writes (see db.py:467-470 for the operator-path-demo
+    rationale).
+    """
+
+    def test_returns_connection_with_row_factory(self, tmp_path):
+        """Row factory must be sqlite3.Row so dashboard handlers can use
+        column-name access on query results."""
+        db_path = tmp_path / "test.db"
+        init_db(db_path).close()  # bootstrap the file so get_thread_db can open it
+
+        conn = get_thread_db(db_path)
+        assert conn.row_factory is sqlite3.Row
+        # Verify column-name access works in practice:
+        conn.execute("CREATE TABLE _probe (k TEXT, v INTEGER)")
+        conn.execute("INSERT INTO _probe (k, v) VALUES ('hello', 42)")
+        row = conn.execute("SELECT k, v FROM _probe").fetchone()
+        assert row["k"] == "hello"
+        assert row["v"] == 42
+        conn.close()
+
+    def test_pragmas_applied(self, tmp_path):
+        """WAL journal + NORMAL sync + 30s busy_timeout — mirrors init_db
+        (P4.5 operator-path-demo fix; bulk-write tolerance)."""
+        db_path = tmp_path / "test.db"
+        init_db(db_path).close()
+
+        conn = get_thread_db(db_path)
+        journal_mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
+        assert journal_mode.lower() == "wal"
+        # busy_timeout in ms; init_db sets the file-level value to 30000,
+        # so the per-connection get_thread_db read should observe it.
+        busy_timeout = conn.execute("PRAGMA busy_timeout").fetchone()[0]
+        assert busy_timeout >= 30000, f"busy_timeout {busy_timeout}ms < 30000ms"
+        conn.close()
+
+    def test_separate_connections_per_call(self, tmp_path):
+        """Each get_thread_db() call returns a fresh connection object
+        — the caller (handler) owns its lifecycle. The thread-locality
+        is enforced by the handler's caching layer, not by this helper."""
+        db_path = tmp_path / "test.db"
+        init_db(db_path).close()
+
+        c1 = get_thread_db(db_path)
+        c2 = get_thread_db(db_path)
+        assert c1 is not c2
+        c1.close()
+        c2.close()
