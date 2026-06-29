@@ -273,6 +273,13 @@ class TestAlertsRenderedControlSurface:
             "View Package",
             "Copy Report",
             "Load More",
+            # P9.3 scope-extension (cookbook entry #7 third application,
+            # judge p9.3.a2 APPROVE 2026-06-24): per-alert TP/FP triage +
+            # Unlabel-verdict button (architect post-pass + frontend-design
+            # fold-in 2026-06-25, "Unlabel" preferred over "Clear" for
+            # precision). Mute DEFERRED to v0.3 per release scope.
+            "True positive",
+            "Unlabel",
         }
         dropped = expected - texts
         added = texts - expected

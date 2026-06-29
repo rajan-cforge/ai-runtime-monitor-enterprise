@@ -926,6 +926,117 @@ class TestDashboardAPI:
         dismissed_ids = [a["id"] for a in data["alerts"] if a.get("dismissed")]
         assert alert_id not in dismissed_ids
 
+    # P9.3 (judge p9.3.a2 APPROVE 2026-06-24): /api/alerts/triage set + clear.
+    # Mirrors the dismiss tests above. Coverage motivator — these wire the
+    # new handler methods into the integration test runner so the per-file
+    # ratchet on dashboard_handler.py stays green.
+
+    def test_triage_set_creates_verdict(self, api_server):
+        resp = urlopen(f"{api_server}/api/alerts?include_dismissed=true&triage_filter=all")
+        data = json.loads(resp.read())
+        alert_id = data["alerts"][0]["id"]
+
+        req = Request(
+            f"{api_server}/api/alerts/triage",
+            data=json.dumps({"event_id": alert_id, "verdict": "true_positive"}).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        resp = urlopen(req)
+        assert resp.status == 200
+        result = json.loads(resp.read())
+        assert result["ok"] is True
+        assert result["event_id"] == alert_id
+        assert result["verdict"] == "true_positive"
+
+    def test_triage_muted_rejected_until_p9_4(self, api_server):
+        """P9.3 F3 LIVE-rejection: P9.4 Mute is DEFERRED to v0.3 per Rajan
+        release-scope 2026-06-24. The endpoint MUST reject `verdict='muted'`
+        with a 4xx — P9.3 ships ZERO mute capability."""
+        from urllib.error import HTTPError
+
+        # Need an alert that exists — pick from include_dismissed=true list.
+        resp = urlopen(f"{api_server}/api/alerts?include_dismissed=true&triage_filter=all")
+        data = json.loads(resp.read())
+        alert_id = data["alerts"][0]["id"]
+
+        req = Request(
+            f"{api_server}/api/alerts/triage",
+            data=json.dumps({"event_id": alert_id, "verdict": "muted"}).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with pytest.raises(HTTPError) as exc_info:
+            urlopen(req)
+        assert exc_info.value.code == 400  # _normalize_verdict('muted') → fail-closed
+
+    def test_triage_bad_input_returns_400(self, api_server):
+        from urllib.error import HTTPError
+
+        # Missing event_id
+        req = Request(
+            f"{api_server}/api/alerts/triage",
+            data=json.dumps({"verdict": "true_positive"}).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with pytest.raises(HTTPError) as exc_info:
+            urlopen(req)
+        assert exc_info.value.code == 400
+
+    def test_triage_nonexistent_event_returns_404(self, api_server):
+        from urllib.error import HTTPError
+
+        req = Request(
+            f"{api_server}/api/alerts/triage",
+            data=json.dumps({"event_id": 99999, "verdict": "false_positive"}).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with pytest.raises(HTTPError) as exc_info:
+            urlopen(req)
+        assert exc_info.value.code == 404
+
+    def test_triage_clear_removes_verdict(self, api_server):
+        """POST /api/alerts/triage/clear deletes the verdict row; idempotent
+        (succeeds whether the row existed or not)."""
+        resp = urlopen(f"{api_server}/api/alerts?include_dismissed=true&triage_filter=all")
+        data = json.loads(resp.read())
+        alert_id = data["alerts"][0]["id"]
+
+        # Set a verdict first.
+        req = Request(
+            f"{api_server}/api/alerts/triage",
+            data=json.dumps({"event_id": alert_id, "verdict": "false_positive"}).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        urlopen(req)
+
+        # Clear it.
+        req = Request(
+            f"{api_server}/api/alerts/triage/clear",
+            data=json.dumps({"event_id": alert_id}).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        resp = urlopen(req)
+        assert resp.status == 200
+        result = json.loads(resp.read())
+        assert result["ok"] is True
+        assert result["cleared"] is True
+
+    def test_triage_clear_idempotent_on_missing_row(self, api_server):
+        """Clearing an alert that was never triaged returns success — not 404."""
+        req = Request(
+            f"{api_server}/api/alerts/triage/clear",
+            data=json.dumps({"event_id": 99999}).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        resp = urlopen(req)
+        assert resp.status == 200
+
     def test_severity_counts_correct(self, api_server):
         resp = urlopen(f"{api_server}/api/alerts?include_dismissed=true")
         data = json.loads(resp.read())

@@ -133,9 +133,10 @@ def compute_fill_rate_sparkline_7d(conn) -> list:
 
 
 def compute_alerts_counts(conn) -> dict:
-    """Mirror _api_alerts' derivation (dashboard_handler.py:1236) so the
-    two derivations cannot drift: events JOIN alert_dismissals, severity
-    parsed from data_json in Python.
+    """Mirror _api_alerts' derivation so the two derivations cannot drift:
+    events LEFT JOIN alert_triage on event_id; dismissed = verdict='dismissed'
+    (P9.3 schema migration 0.2.2.003); severity parsed from data_json in
+    Python.
 
     Returns None counts on query failure (UI → "—"); returns 0/0 on an
     empty events table (a true negative). Pinned by
@@ -143,9 +144,9 @@ def compute_alerts_counts(conn) -> dict:
     """
     try:
         rows = conn.execute(
-            """SELECT e.data_json, d.id AS dismissal_id
+            """SELECT e.data_json, t.verdict AS triage_verdict
                FROM events e
-               LEFT JOIN alert_dismissals d ON e.id = d.event_id
+               LEFT JOIN alert_triage t ON e.id = t.event_id
                WHERE e.event_type = 'sensitive_data'"""
         ).fetchall()
     except sqlite3.Error:
@@ -153,7 +154,7 @@ def compute_alerts_counts(conn) -> dict:
     critical = 0
     total = 0
     for r in rows:
-        if r["dismissal_id"] is not None:
+        if r["triage_verdict"] == "dismissed":
             continue  # dismissed; same exclusion _api_alerts applies
         try:
             data = json.loads(r["data_json"])

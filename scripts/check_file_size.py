@@ -53,7 +53,17 @@ from pathlib import Path
 # pattern_counts / pattern_filter_invalid / corrected total/has_more
 # semantics). Same "split, then bump" pattern; further extraction would
 # fragment the alerts request flow.
-MAX_LINES = 2930
+#
+# 2930 → 3000 on P9.3 alerts-triage (2026-06-24, judge APPROVE ratified)
+# after extracting verdict normalization + filter + counts (5 symbols incl.
+# ``derive_and_filter_rows``) to ``alerts_triage.py``. ~68 lines stayed in
+# the handler: two NEW POST endpoints (``_api_alerts_triage`` set/upsert +
+# ``_api_alerts_triage_clear``) — these are naturally handler-resident
+# (HTTP-method dispatch + auth gate + DB write) and cannot move to the
+# pure-Python module without fragmenting the request flow. The dismiss
+# handler also retargeted to ``alert_triage`` (verdict='dismissed'),
+# unchanged in shape.
+MAX_LINES = 3000
 
 
 def file_line_count(path: Path) -> int:

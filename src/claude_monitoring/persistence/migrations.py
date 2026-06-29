@@ -348,6 +348,70 @@ exercises this path.
 """
 
 
+_P9_3_ALERT_TRIAGE_UP_SQL = """\
+CREATE TABLE IF NOT EXISTS alert_triage (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_id INTEGER NOT NULL UNIQUE,
+    verdict TEXT NOT NULL,
+    reason TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS alert_dismissals (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_id INTEGER NOT NULL UNIQUE,
+    dismissed_at TEXT NOT NULL,
+    reason TEXT
+);
+INSERT INTO alert_triage (event_id, verdict, reason, created_at)
+    SELECT event_id, 'dismissed', reason, dismissed_at FROM alert_dismissals;
+DROP TABLE alert_dismissals;
+"""
+"""Up-SQL for v0.2.2.003 — alert_triage generalization of alert_dismissals.
+
+P9.3 (judge p9.3.a2 APPROVE 2026-06-24) per LOCKED phase9 scope lines 49-60.
+
+Generalizes the legacy ``alert_dismissals`` table into ``alert_triage`` with
+an explicit ``verdict`` column ∈ {true_positive, false_positive, dismissed,
+muted}. P9.3 ships ZERO mute capability — the column is plain TEXT (no
+CHECK constraint) so P9.4 lands by adding ``muted`` to the LIVE endpoint
+allowlist + UI affordance + security guardrails, with no re-migration.
+
+Sequence:
+  1. CREATE alert_triage with verdict NOT NULL + created_at audit column.
+  2. INSERT-SELECT existing dismissals → verdict='dismissed'. Reason and
+     dismissed_at (→ created_at) preserved verbatim.
+  3. DROP alert_dismissals.
+
+CRITICAL: the legacy ``CREATE TABLE IF NOT EXISTS alert_dismissals`` block
+in ``db.py:init_db()`` MUST be removed in the same PR — otherwise the DROP
+here is undone on every daemon restart (split-brain). See M6 regression
+test in ``tests/test_alerts_triage_migration.py``.
+
+Foreign-key clause omitted per P0.2 deviation #3 (PRAGMA foreign_keys is
+OFF in db.py); event_id orphans are tolerated like every other table.
+"""
+
+
+_P9_3_ALERT_TRIAGE_DOWN_SQL = """\
+CREATE TABLE IF NOT EXISTS alert_dismissals (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_id INTEGER NOT NULL UNIQUE,
+    dismissed_at TEXT NOT NULL,
+    reason TEXT
+);
+INSERT INTO alert_dismissals (event_id, dismissed_at, reason)
+    SELECT event_id, created_at, reason FROM alert_triage WHERE verdict = 'dismissed';
+DROP TABLE alert_triage;
+"""
+"""Down-SQL for v0.2.2.003.
+
+Reverses the up cleanly. TP/FP rows are intentionally LOST on
+down-migration — restoring the pre-P9.3 state means restoring an absence
+of TP/FP capability. Operators downgrading lose their TP/FP labels but
+keep all their dismissals.
+"""
+
+
 MIGRATIONS: list[Migration] = [
     Migration(
         version="0.2.2.001",
@@ -368,6 +432,16 @@ MIGRATIONS: list[Migration] = [
         ),
         up_sql=_P4_4_HISTORY_RUN_ID_UP_SQL,
         down_sql=_P4_4_HISTORY_RUN_ID_DOWN_SQL,
+    ),
+    Migration(
+        version="0.2.2.003",
+        description=(
+            "P9.3: generalize alert_dismissals into alert_triage "
+            "(verdict ∈ {true_positive, false_positive, dismissed, "
+            "muted}; LIVE endpoint allowlist excludes muted until P9.4)"
+        ),
+        up_sql=_P9_3_ALERT_TRIAGE_UP_SQL,
+        down_sql=_P9_3_ALERT_TRIAGE_DOWN_SQL,
     ),
 ]
 """Ordered registry of migrations.

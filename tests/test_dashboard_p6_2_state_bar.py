@@ -56,9 +56,11 @@ def _seed_sensitive_event(conn, *, severity="medium", dismissed=False, ts_offset
     )
     event_id = cur.lastrowid
     if dismissed:
+        # P9.3 schema (0.2.2.003): dismissals stored in alert_triage with
+        # verdict='dismissed'. External behavior preserved.
         conn.execute(
-            """INSERT INTO alert_dismissals (event_id, dismissed_at, reason)
-               VALUES (?, ?, 'test')""",
+            """INSERT INTO alert_triage (event_id, verdict, reason, created_at)
+               VALUES (?, 'dismissed', 'test', ?)""",
             (event_id, ts_iso),
         )
     conn.commit()
