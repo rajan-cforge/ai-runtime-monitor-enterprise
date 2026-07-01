@@ -1260,7 +1260,20 @@ body { background:var(--bg); color:var(--text); font-family:var(--font-sans); fo
 
   <!-- Assets — attack-surface inventory + risk banding (dashboard-asset-view PR) -->
   <div class="panel" id="panel-assets">
-    <div class="system-section">
+    <!-- P7.1 (Rajan-ratified 2026-06-30): empty-state shell per LOCKED §3.3:293.
+         HIDDEN by default; JS toggles visibility ONLY when `total === 0` so
+         populated installs (auto-scheduled by discovery-scheduler PR #121) do
+         not see 'hasn't scanned yet' rendered over real assets — the §4.5
+         data-truthfulness guard the p7.1.a1 verdict flagged as non-deferrable.
+         Interim rendering below stays live until P7.4 lands the Overview Pane
+         + Tool Sections layout (R0-1 RELOCATE). -->
+    <div id="attack-surface-empty-state" role="status" style="display:none;padding:48px 24px;text-align:center;color:var(--text2)">
+      <div style="font-size:14px;margin-bottom:16px">Vigil hasn't scanned your AI tools yet. Click Discover to begin.</div>
+      <button id="attack-surface-discover-cta" title="Wiring lands in the next release (P7.2)" style="background:var(--blue);color:white;border:none;padding:8px 20px;border-radius:4px;font-size:12px;cursor:pointer">Discover</button>
+    </div>
+    <!-- Interim block: KEPT VERBATIM until P7.4 replaces with Overview Pane
+         + Tool Sections. Rendered for populated installs. -->
+    <div id="attack-surface-interim" class="system-section">
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
         <h3 style="margin:0">Attack-surface Assets</h3>
         <span class="asset-header-counts" id="assets-header-counts"></span>
@@ -1287,6 +1300,7 @@ body { background:var(--bg); color:var(--text); font-family:var(--font-sans); fo
       </div>
       <div id="assets-list" style="border:1px solid var(--border);border-radius:4px;max-height:calc(100vh - 280px);overflow-y:auto"></div>
     </div>
+    <!-- /#attack-surface-interim -->
   </div>
   <div id="asset-detail-overlay" class="asset-detail-overlay" style="display:none"></div>
 
@@ -4857,7 +4871,40 @@ var _assetsLimit = 200;
 var _assetsSourcesSeen = false;
 var _assetsPagerWired = false;
 
+// P7.1 (Rajan-ratified 2026-06-30): loadAssets() is now a ROUTER that gates
+// the empty-state visibility on real DB state — populated installs render
+// the interim block, fresh installs render the LOCKED §3.3 empty state.
+// The direct rendering flow is renamed `_legacyLoadAssets` and called from
+// this router; P7.4 replaces the interim block with the Overview Pane +
+// Tool Sections layout, at which point the legacy path can retire.
 async function loadAssets(offset) {
+  // Code-review 2026-07-01 fold-in: reset the safe defaults BEFORE the probe.
+  // A stale empty-state (from a prior empty-DB render) must not survive into
+  // a probe-failure fall-through — that would revive the exact truthfulness
+  // inversion the p7.1.a1 verdict flagged as non-deferrable.
+  const empty = document.getElementById('attack-surface-empty-state');
+  const interim = document.getElementById('attack-surface-interim');
+  if (empty) empty.style.display = 'none';
+  if (interim) interim.style.display = 'block';
+  try {
+    const probeUrl = API + '/api/attack-surface/assets?limit=1&offset=0';
+    const r = await fetch(probeUrl);
+    if (r.ok) {
+      const d = await r.json();
+      const total = d.total || 0;
+      if (total === 0) {
+        // Fresh install / empty DB → show LOCKED §3.3 empty state.
+        if (empty) empty.style.display = 'block';
+        if (interim) interim.style.display = 'none';
+        return;
+      }
+      // Populated DB → safe defaults already applied above; fall through.
+    }
+  } catch(e) { /* safe defaults already applied; fall through to legacy render */ }
+  return _legacyLoadAssets(offset);
+}
+
+async function _legacyLoadAssets(offset) {
   // Wire pagination buttons via addEventListener (one-time) — matches
   // the .asset-row click wiring below and the comment that follows;
   // never set onclick="..." inline on new code.

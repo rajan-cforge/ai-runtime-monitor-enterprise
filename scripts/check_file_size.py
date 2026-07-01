@@ -63,7 +63,17 @@ from pathlib import Path
 # pure-Python module without fragmenting the request flow. The dismiss
 # handler also retargeted to ``alert_triage`` (verdict='dismissed'),
 # unchanged in shape.
-MAX_LINES = 3000
+#
+# 3000 → 3020 on P7.1 attack-surface-routes (2026-07-01, judge NEEDS-RAJAN
+# ratified → both R0 items resolved: RELOCATE + PRESERVE + populated-install
+# guard). Two new auth-gated route methods (`_api_attack_surface_assets` +
+# `_api_attack_surface_scan_now`); ~13 lines net in the handler. NO new
+# module extraction — these routes are pure delegations to the existing
+# `list_assets` helper (a namespaced alias per LOCKED remaining-plan:91)
+# and a stub for the P7.2 CTA wiring. Extracting 2 delegate-methods to a
+# new module would add more overhead than the code itself. Handler-resident
+# for auth-gate proximity is the right shape.
+MAX_LINES = 3020
 
 
 def file_line_count(path: Path) -> int:

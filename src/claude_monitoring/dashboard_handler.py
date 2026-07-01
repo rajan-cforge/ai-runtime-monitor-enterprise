@@ -159,6 +159,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
             "/api/asset_detail": self._api_asset_detail,
             "/api/asset_activity": self._api_asset_activity,
             "/api/asset_history": self._api_asset_history,
+            # P7.1: namespaced route per LOCKED remaining-plan.md:91.
+            "/api/attack-surface/assets": self._api_attack_surface_assets,
         }
 
         # Match path prefixes for dynamic routes
@@ -232,6 +234,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
             "/api/browser/heartbeat": self._api_browser_heartbeat,
             "/api/supply-chain/scan": self._api_supply_chain_scan_post,
             "/api/supply-chain/intel-refresh": self._api_supply_chain_intel_refresh,
+            # P7.1: Discover CTA route stub; behavior lands in P7.2.
+            "/api/attack-surface/scan-now": self._api_attack_surface_scan_now,
         }
 
         handler = post_routes.get(path)
@@ -2359,6 +2363,22 @@ class DashboardHandler(BaseHTTPRequestHandler):
         from claude_monitoring.attack_surface.dashboard_api import list_assets
 
         self._send_json(list_assets(get_thread_db(), params))
+
+    def _api_attack_surface_assets(self, params):
+        """P7.1 namespaced route; mirrors _api_assets during P7.1→P7.4 (R0-1
+        RELOCATE 2026-06-30). `?source=` preserved via list_assets (R0-2)."""
+        from claude_monitoring.attack_surface.dashboard_api import list_assets
+
+        self._send_json(list_assets(get_thread_db(), params))
+
+    def _api_attack_surface_scan_now(self, _payload):
+        """P7.1 Discover-CTA stub per LOCKED §3.3 step 2; wiring lands in P7.2.
+
+        Returns 501 Not Implemented — architect fold-in 2026-07-01: 202
+        Accepted lies (nothing is queued); 501 is the truthful status for a
+        route registered but not yet wired.
+        """
+        self._send_json({"ok": False, "pending_impl": "P7.2"}, 501)
 
     def _api_asset_detail(self, params):
         """Asset detail — delegates to `attack_surface.dashboard_api.get_asset_detail`."""
