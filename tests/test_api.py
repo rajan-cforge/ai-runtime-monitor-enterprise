@@ -1037,6 +1037,54 @@ class TestDashboardAPI:
         resp = urlopen(req)
         assert resp.status == 200
 
+    # P7.1 (Rajan-ratified 2026-06-30): the two new namespaced routes
+    # `/api/attack-surface/{assets,scan-now}` mirror the interim `/api/assets`
+    # surface during the P7.1→P7.4 transition. HTTP-level tests wire the
+    # handler methods into the integration test runner so per-file coverage
+    # on dashboard_handler.py stays green.
+
+    def test_attack_surface_assets_returns_json_envelope(self, api_server):
+        """`GET /api/attack-surface/assets` mirrors `_api_assets` — same envelope
+        (`rows`, `total`, `limit`, `offset`). Preserves `?source=` per R0-2."""
+        resp = urlopen(f"{api_server}/api/attack-surface/assets?limit=5&offset=0")
+        assert resp.status == 200
+        data = json.loads(resp.read())
+        assert "rows" in data
+        assert "total" in data
+        assert "limit" in data
+        assert "offset" in data
+        assert data["limit"] == 5
+        assert data["offset"] == 0
+
+    def test_attack_surface_assets_source_filter_preserved(self, api_server):
+        """R0-2 ratified PRESERVE: `?source=` filter round-trips via list_assets."""
+        resp = urlopen(f"{api_server}/api/attack-surface/assets?source=python-packages&limit=10")
+        assert resp.status == 200
+        data = json.loads(resp.read())
+        # All rows must be from the requested source
+        for row in data.get("rows", []):
+            assert row.get("source") == "python-packages", (
+                f"?source= filter must apply; got row with source={row.get('source')!r}"
+            )
+
+    def test_attack_surface_scan_now_returns_501(self, api_server):
+        """P7.1 stub returns 501 Not Implemented (architect fold-in: 202 would
+        lie about queuing). CTA wiring lands in P7.2 per LOCKED remaining-plan:92."""
+        from urllib.error import HTTPError
+
+        req = Request(
+            f"{api_server}/api/attack-surface/scan-now",
+            data=json.dumps({}).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with pytest.raises(HTTPError) as exc_info:
+            urlopen(req)
+        assert exc_info.value.code == 501, (
+            f"P7.1 scan-now stub must return 501 Not Implemented (route "
+            f"registered but not wired); got {exc_info.value.code}"
+        )
+
     def test_severity_counts_correct(self, api_server):
         resp = urlopen(f"{api_server}/api/alerts?include_dismissed=true")
         data = json.loads(resp.read())
