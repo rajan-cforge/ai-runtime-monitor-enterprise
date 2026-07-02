@@ -483,12 +483,12 @@ class TestJsSelectorsMatchShippedDom:
         ]
         for line in selector_lines:
             if "data-tool=" in line and "data-tool-section" not in line:
-                assert False, (
+                raise AssertionError(
                     "M8: selector uses mockup attribute `data-tool=` "
                     f"instead of shipped `data-tool-section=`. Line: {line.strip()[:120]}"
                 )
             if "data-sub=" in line:
-                assert False, (
+                raise AssertionError(
                     "M8: selector uses mockup attribute `data-sub=` — "
                     "P7-A shipped flat sections, no sub-attribute. "
                     f"Line: {line.strip()[:120]}"

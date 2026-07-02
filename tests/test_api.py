@@ -1313,6 +1313,21 @@ class TestDashboardAPI:
                 _discovery_scan_state["status"] = "idle"
                 _discovery_scan_state["started_at"] = None
 
+    def test_attack_surface_recent_activity_endpoint_reachable(self, api_server):
+        """P7-B: /api/attack-surface/recent-activity handler is
+        auth-inherited via do_GET._check_auth path. Endpoint always
+        returns 200 with the 3-state envelope; branch depends on
+        heartbeat + DB state (in the test-env this typically yields
+        'off' since no capture heartbeat is running, which exercises the
+        early-return path in the handler)."""
+        resp = urlopen(f"{api_server}/api/attack-surface/recent-activity")
+        assert resp.status == 200
+        data = json.loads(resp.read())
+        assert "capture_status" in data
+        assert data["capture_status"] in ("off", "no_captures_yet", "ok")
+        assert "assets" in data
+        assert isinstance(data["assets"], list)
+
     def test_severity_counts_correct(self, api_server):
         resp = urlopen(f"{api_server}/api/alerts?include_dismissed=true")
         data = json.loads(resp.read())
