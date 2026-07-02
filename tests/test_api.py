@@ -1162,6 +1162,157 @@ class TestDashboardAPI:
         # status is one of the terminal states we defined
         assert data["status"] in ("idle", "running", "done", "error", "skipped_lock_held")
 
+    def test_scan_now_exit_code_1_maps_to_skipped_lock_held(self, api_server, monkeypatch):
+        """Architect INFORMATIONAL fold-in: run_discover exit_code=1 (ScanLock
+        held) → status='skipped_lock_held' with truthful error message
+        (NOT silently 'done'). Covers the runner's exit_code=1 branch."""
+        import time as _t
+
+        from claude_monitoring import discovery_scheduler as _ds
+        from claude_monitoring.dashboard_handler import (
+            _discovery_scan_state,
+            _discovery_scan_state_lock,
+        )
+
+        monkeypatch.setattr(_ds, "run_discover", lambda json_out=True: 1)
+        with _discovery_scan_state_lock:
+            _discovery_scan_state["status"] = "idle"
+
+        req = Request(
+            f"{api_server}/api/attack-surface/scan-now",
+            data=b"{}",
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        urlopen(req).read()
+        # Wait for runner terminal.
+        for _ in range(30):
+            with _discovery_scan_state_lock:
+                s = _discovery_scan_state["status"]
+            if s != "running":
+                break
+            _t.sleep(0.1)
+        with _discovery_scan_state_lock:
+            final_status = _discovery_scan_state["status"]
+            final_error = _discovery_scan_state["error"]
+        assert final_status == "skipped_lock_held", f"got {final_status!r}"
+        assert final_error and "ScanLock" in final_error
+        # Reset for next test.
+        with _discovery_scan_state_lock:
+            _discovery_scan_state["status"] = "idle"
+            _discovery_scan_state["error"] = None
+
+    def test_scan_now_exit_code_2_maps_to_error(self, api_server, monkeypatch):
+        """run_discover exit_code=2 (orchestrator raised) → status='error'
+        with fallback error message. Covers the runner's else branch."""
+        import time as _t
+
+        from claude_monitoring import discovery_scheduler as _ds
+        from claude_monitoring.dashboard_handler import (
+            _discovery_scan_state,
+            _discovery_scan_state_lock,
+        )
+
+        monkeypatch.setattr(_ds, "run_discover", lambda json_out=True: 2)
+        with _discovery_scan_state_lock:
+            _discovery_scan_state["status"] = "idle"
+
+        req = Request(
+            f"{api_server}/api/attack-surface/scan-now",
+            data=b"{}",
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        urlopen(req).read()
+        for _ in range(30):
+            with _discovery_scan_state_lock:
+                s = _discovery_scan_state["status"]
+            if s != "running":
+                break
+            _t.sleep(0.1)
+        with _discovery_scan_state_lock:
+            final_status = _discovery_scan_state["status"]
+            final_error = _discovery_scan_state["error"]
+        assert final_status == "error", f"got {final_status!r}"
+        assert final_error and "exit" in final_error.lower()
+        with _discovery_scan_state_lock:
+            _discovery_scan_state["status"] = "idle"
+            _discovery_scan_state["error"] = None
+
+    def test_scan_now_exception_in_runner_maps_to_error(self, api_server, monkeypatch):
+        """Runner catches unexpected exception from run_discover, marks
+        status='error' with the exception message. Covers try/except branch."""
+        import time as _t
+
+        from claude_monitoring import discovery_scheduler as _ds
+        from claude_monitoring.dashboard_handler import (
+            _discovery_scan_state,
+            _discovery_scan_state_lock,
+        )
+
+        def _raiser(json_out=True):
+            raise RuntimeError("boom-in-runner")
+
+        monkeypatch.setattr(_ds, "run_discover", _raiser)
+        with _discovery_scan_state_lock:
+            _discovery_scan_state["status"] = "idle"
+
+        req = Request(
+            f"{api_server}/api/attack-surface/scan-now",
+            data=b"{}",
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        urlopen(req).read()
+        for _ in range(30):
+            with _discovery_scan_state_lock:
+                s = _discovery_scan_state["status"]
+            if s != "running":
+                break
+            _t.sleep(0.1)
+        with _discovery_scan_state_lock:
+            final_status = _discovery_scan_state["status"]
+            final_error = _discovery_scan_state["error"]
+        assert final_status == "error"
+        assert final_error == "boom-in-runner"
+        with _discovery_scan_state_lock:
+            _discovery_scan_state["status"] = "idle"
+            _discovery_scan_state["error"] = None
+
+    def test_scan_now_returns_409_when_state_running(self, api_server, monkeypatch):
+        """M4 concurrency pin: if _discovery_scan_state.status is already
+        'running', scan-now returns 409 with reason='scan already running'."""
+        from urllib.error import HTTPError
+
+        from claude_monitoring.dashboard_handler import (
+            _discovery_scan_state,
+            _discovery_scan_state_lock,
+        )
+
+        # Simulate a running scan.
+        with _discovery_scan_state_lock:
+            _discovery_scan_state["status"] = "running"
+            _discovery_scan_state["started_at"] = "2026-07-02T00:00:00+00:00"
+
+        try:
+            req = Request(
+                f"{api_server}/api/attack-surface/scan-now",
+                data=b"{}",
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with pytest.raises(HTTPError) as exc:
+                urlopen(req)
+            assert exc.value.code == 409
+            data = json.loads(exc.value.read())
+            assert data.get("ok") is False
+            assert "scan already running" in data.get("reason", "")
+        finally:
+            # Always reset to idle to avoid polluting downstream tests.
+            with _discovery_scan_state_lock:
+                _discovery_scan_state["status"] = "idle"
+                _discovery_scan_state["started_at"] = None
+
     def test_severity_counts_correct(self, api_server):
         resp = urlopen(f"{api_server}/api/alerts?include_dismissed=true")
         data = json.loads(resp.read())
