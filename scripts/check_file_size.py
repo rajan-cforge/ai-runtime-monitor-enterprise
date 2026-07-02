@@ -92,7 +92,20 @@ from pathlib import Path
 # ~123 lines net; ceiling bump to 3160. NO module extraction target: the
 # three methods are the request-flow ingress for the CTA + State B/C endpoints
 # and must stay handler-adjacent for auth-gate proximity + method dispatch.
-MAX_LINES = 3160
+#
+# 3160 → 3180 on P7-B batched components (2026-07-02, judge p7-B.a1 APPROVE
+# C2 both axes; no architect-pass). One new auth-gated GET route
+# `/api/attack-surface/recent-activity` (route-dict entry + 1 delegate
+# method `_api_attack_surface_recent_activity`, ~10 lines total). The
+# delegate imports `get_recent_activity` from
+# `attack_surface/dashboard_api.py` and `HEARTBEAT_STALE_SECONDS` +
+# `heartbeat_age_seconds` from `lifecycle` — the same 3-line
+# capture-health pattern used at handler:2549 for `_api_asset_activity`.
+# No viable extraction target: the delegate must stay handler-adjacent
+# for auth-gate proximity (do_GET._check_auth path) + method dispatch.
+# Real business logic lives in the pure-function `get_recent_activity`
+# module. Handler delta ~15 lines total.
+MAX_LINES = 3180
 
 
 def file_line_count(path: Path) -> int:

@@ -88,6 +88,33 @@ body { background:var(--bg); color:var(--text); font-family:var(--font-sans); fo
 .session-item[data-risk="medium"] { border-left-color:#d97706 !important; }
 .session-item[data-risk="low"]:not(.active) { border-left-color:#6b7280; }
 .risk-badge { padding:2px 6px; border-radius:3px; font-size:0.65em; font-weight:700; text-transform:uppercase; letter-spacing:0.04em; margin-right:4px; }
+/* P7-B (2026-07-02): .atype asset-type icons + .otag ontology tags per
+   LOCKED directive §Phase 7:260/:261 + mockup L80-100. Judge Ask #1 ratified
+   AI Tools 6th shell; T-1/T-2 upgrades pin unknown-tag/unknown-type to
+   VISUALLY DISTINCT fallbacks (not silent standard tier / not --dep). */
+.atype { display:inline-grid; place-items:center; width:30px; height:30px; border-radius:8px; flex:none; background:var(--surface2); border:1px solid var(--border); color:var(--text2); }
+.atype svg { width:16px; height:16px; }
+.atype--sm { width:24px; height:24px; border-radius:6px; }
+.atype--sm svg { width:13px; height:13px; }
+.atype--tool { color:#b9a6ff; }
+.atype--ext { color:#7fb0ef; }
+.atype--mcp { color:#67c2a4; }
+.atype--intg { color:#d9a23f; }
+.atype--dep { color:#9aa3ad; }
+/* T-2 UPGRADE: unknown Asset.type falls back to a NEUTRAL glyph, NOT --dep.
+   Silent-dep fallback mis-classifies unknown assets as dependencies. */
+.atype--unk { color:var(--text2); border-style:dashed; }
+.otag { display:inline-flex; align-items:center; gap:4px; padding:2px 6px; border:1px solid var(--border); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:0.72em; color:var(--text2); margin-right:4px; }
+.otag__d { display:inline-block; width:6px; height:6px; border-radius:50%; background:#6a727b; }
+.otag--pow .otag__d { background:#a78bff; }
+.otag--elev .otag__d { background:#5b93f0; }
+.otag--derived { border-style:dashed; color:var(--text2); }
+.otag--derived .otag__d { background:#ea580c; }
+/* T-1 UPGRADE: unknown ontology tag renders VISUALLY DISTINCT — dashed
+   border + muted color + explicit 'unrecognized tag' tooltip. NOT silently
+   standard tier (that hides scoring-pipeline drift). */
+.otag--unk { border-style:dashed; color:var(--text2); opacity:0.75; }
+.otag--unk .otag__d { background:#9aa3ad; }
 .risk-critical { background:#dc2626; color:white; }
 .risk-high { background:#ea580c; color:white; }
 .risk-medium { background:#d97706; color:white; }
@@ -1327,21 +1354,35 @@ body { background:var(--bg); color:var(--text); font-family:var(--font-sans); fo
           <summary style="padding:12px 16px;cursor:pointer;font-weight:600">All Assets <span id="ov-all-assets-count" style="color:var(--text2);font-weight:400">—</span></summary>
           <div id="attack-surface-all-assets-body" style="padding:0 16px 16px"></div>
         </details>
-        <!-- Per-tool sections populated by P7-B. Shells only here. -->
+        <!-- P7-B (verdict Ask #1 ratified 2026-07-02): AI Tools shell
+             directly below All Assets, before Extensions. Houses assets from
+             the 5 sources that emit type='ai_tool' (ai-apps-info-plist,
+             ai-tool-versions, claude-code-skills, openclaw-skills,
+             ollama-models). -->
+        <details data-tool-section="ai-tools" style="border:1px solid var(--border);border-radius:6px;margin-bottom:8px">
+          <summary style="padding:12px 16px;cursor:pointer;font-weight:600">AI Tools <span id="ov-ai-tools-count" style="color:var(--text2);font-weight:400">—</span></summary>
+          <div id="attack-surface-ai-tools-body" style="padding:0 16px 16px"></div>
+        </details>
+        <!-- Per-tool sections populated by P7-B. -->
         <details data-tool-section="extensions" style="border:1px solid var(--border);border-radius:6px;margin-bottom:8px">
-          <summary style="padding:12px 16px;cursor:pointer;font-weight:600;color:var(--text2)">Extensions <span style="font-weight:400">(populated in P7-B)</span></summary>
+          <summary style="padding:12px 16px;cursor:pointer;font-weight:600">Extensions <span id="ov-extensions-count" style="color:var(--text2);font-weight:400">—</span></summary>
+          <div id="attack-surface-extensions-body" style="padding:0 16px 16px"></div>
         </details>
         <details data-tool-section="mcp-servers" style="border:1px solid var(--border);border-radius:6px;margin-bottom:8px">
-          <summary style="padding:12px 16px;cursor:pointer;font-weight:600;color:var(--text2)">MCP Servers <span style="font-weight:400">(populated in P7-B)</span></summary>
+          <summary style="padding:12px 16px;cursor:pointer;font-weight:600">MCP Servers <span id="ov-mcp-servers-count" style="color:var(--text2);font-weight:400">—</span></summary>
+          <div id="attack-surface-mcp-servers-body" style="padding:0 16px 16px"></div>
         </details>
         <details data-tool-section="integrations" style="border:1px solid var(--border);border-radius:6px;margin-bottom:8px">
-          <summary style="padding:12px 16px;cursor:pointer;font-weight:600;color:var(--text2)">Connected Integrations <span style="font-weight:400">(populated in P7-B)</span></summary>
+          <summary style="padding:12px 16px;cursor:pointer;font-weight:600">Connected Integrations <span id="ov-integrations-count" style="color:var(--text2);font-weight:400">—</span></summary>
+          <div id="attack-surface-integrations-body" style="padding:0 16px 16px"></div>
         </details>
         <details data-tool-section="dependencies" style="border:1px solid var(--border);border-radius:6px;margin-bottom:8px">
-          <summary style="padding:12px 16px;cursor:pointer;font-weight:600;color:var(--text2)">Dependencies <span style="font-weight:400">(populated in P7-B)</span></summary>
+          <summary style="padding:12px 16px;cursor:pointer;font-weight:600">Dependencies <span id="ov-dependencies-count" style="color:var(--text2);font-weight:400">—</span></summary>
+          <div id="attack-surface-dependencies-body" style="padding:0 16px 16px"></div>
         </details>
         <details data-tool-section="recent-activity" style="border:1px solid var(--border);border-radius:6px;margin-bottom:8px">
-          <summary style="padding:12px 16px;cursor:pointer;font-weight:600;color:var(--text2)">Recent Activity <span style="font-weight:400">(populated in P7-B)</span></summary>
+          <summary style="padding:12px 16px;cursor:pointer;font-weight:600">Recent Activity <span id="ov-recent-activity-count" style="color:var(--text2);font-weight:400">—</span></summary>
+          <div id="attack-surface-recent-activity-body" style="padding:0 16px 16px"></div>
         </details>
       </div>
     </div>
@@ -5072,6 +5113,9 @@ function _renderAttackSurfaceOverview(d) {
       });
     });
   }
+  // P7-B: populate Tool Section bodies (fire-and-forget; each section
+  // renders its own empty-state on failure).
+  if (typeof _populateToolSections === 'function') _populateToolSections();
 }
 
 // P7-A State B: poll /api/attack-surface/scan-progress every 1s while
@@ -5129,6 +5173,233 @@ async function triggerAttackSurfaceDiscover(btn) {
     }
   } catch(e) { /* silent per existing CTA pattern; router will retry on next open */ }
   finally { if (btn) btn.disabled = false; }
+}
+
+// ============================================================
+// P7-B Tool Section renderers (2026-07-02, judge p7-B.a1 APPROVE)
+// ============================================================
+
+// OTAG_TIER: maps each of the 10 canonical ontology tags (from
+// ontology/categories.py) to its display tier. 'derived' overrides tier
+// (data_exfiltration_capable is always dashed). Unknown tags render via
+// the T-1 fallback (renderOtag returns .otag--unk marker, NOT silent
+// standard tier — hides scoring-pipeline drift).
+const OTAG_TIER = {
+  code_execution: 'pow',
+  file_system_read: 'pow',
+  file_system_write: 'pow',
+  network_unrestricted: 'pow',
+  secrets_access: 'pow',
+  shell_execute: 'pow',
+  system_modification: 'pow',
+  network_scoped: 'elev',
+  inter_tool_communication: null,   // standard tier — unmodified
+  data_exfiltration_capable: 'derived',
+};
+
+// ATYPE_ICON: maps Asset.type strings to the 5 mockup variants.
+// In-code Asset.type values diverge from spec §7.1 vocabulary; this map
+// normalizes. T-2 pin: unknown Asset.type falls back to 'unk' (NEUTRAL
+// glyph), NOT 'dep' — silent-dep fallback mis-classifies as dependency.
+const ATYPE_ICON = {
+  ai_tool: 'tool',
+  extension: 'ext',
+  mcp_server: 'mcp',
+  claude_desktop_integration: 'intg',
+  homebrew_ai_tool: 'tool',
+  node_package: 'dep',
+  python_package: 'dep',
+  python_dependency: 'dep',
+};
+
+// Inline SVG paths per variant (mockup Vigil Attack Surface.html).
+// --tool uses the monitor-with-stand glyph (mockup L745); the L920
+// overview-legend variant looks visually similar and is not shipped here.
+const ATYPE_SVG = {
+  tool: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="14" rx="2"/><path d="M8 21h8M12 18v3"/></svg>',
+  ext: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>',
+  mcp: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="5" rx="1.5"/><rect x="3" y="14" width="18" height="5" rx="1.5"/><circle cx="7" cy="6.5" r="0.7"/><circle cx="7" cy="16.5" r="0.7"/></svg>',
+  intg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1"/><path d="M14 11a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1"/></svg>',
+  dep: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.7l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.7l7 4a2 2 0 0 0 2 0l7-4a2 2 0 0 0 1-1.7z"/><polyline points="3.3 7 12 12 20.7 7"/><line x1="12" y1="22" x2="12" y2="12"/></svg>',
+  unk: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>',
+};
+
+// Render one .atype icon chip. T-2 pin: unknown type → --unk (neutral),
+// with title tooltip for observability.
+function renderAtype(assetType) {
+  const variant = ATYPE_ICON[assetType] || 'unk';
+  const svg = ATYPE_SVG[variant] || ATYPE_SVG.unk;
+  const title = variant === 'unk' ? ' title="Unknown asset type: ' + escAttr(String(assetType || '')) + '"' : '';
+  return '<span class="atype atype--sm atype--' + variant + '"' + title + '>' + svg + '</span>';
+}
+
+// Render one .otag ontology pill. T-1 pin: unknown ontology tag → .otag--unk
+// (visually distinct, dashed border), with title tooltip for observability.
+function renderOtag(tag) {
+  if (!(tag in OTAG_TIER)) {
+    return '<span class="otag otag--unk" title="Unrecognized ontology tag: ' + escAttr(String(tag)) + '"><span class="otag__d"></span>' + escHtml(String(tag)) + '</span>';
+  }
+  const tier = OTAG_TIER[tag];
+  if (tier === 'derived') {
+    return '<span class="otag otag--derived" title="derived tag (data-exfiltration-capable)"><span class="otag__d"></span>' + escHtml(tag) + '</span>';
+  }
+  const cls = tier ? ' otag--' + tier : '';
+  return '<span class="otag' + cls + '"><span class="otag__d"></span>' + escHtml(tag) + '</span>';
+}
+
+// Render a single asset row inside a tool section body. Reuses render
+// primitives from _legacyLoadAssets/renderAssetRow patterns.
+function _renderToolSectionRow(a) {
+  const badge = a.risk_band ? '<span class="risk-badge risk-' + escAttr(a.risk_band) + '">' + escHtml(a.risk_band) + '</span>' : '<span class="risk-badge risk-unscored">unscored</span>';
+  const tags = Array.isArray(a.ontology_tags) ? a.ontology_tags.map(renderOtag).join('') : '';
+  return '<div style="padding:8px 0;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px" data-asset-id="' + escAttr(a.id) + '">'
+    + renderAtype(a.type)
+    + badge
+    + '<span style="font-weight:600">' + escHtml(a.name) + '</span>'
+    + (a.version ? '<span style="color:var(--text2);font-size:12px">v' + escHtml(a.version) + '</span>' : '')
+    + '<span style="margin-left:auto">' + tags + '</span>'
+    + '</div>';
+}
+
+function _renderEmptyToolSection(msg) {
+  return '<div style="padding:12px 0;color:var(--text2);font-size:13px;font-style:italic">' + escHtml(msg) + '</div>';
+}
+
+// Generic tool-section renderer. Filters assets by predicate; empty
+// state renders distinct copy per section.
+function _renderToolSection(bodyId, countId, assets, predicate, emptyMsg) {
+  const body = document.getElementById(bodyId);
+  const countEl = document.getElementById(countId);
+  if (!body) return;
+  const matches = (assets || []).filter(predicate);
+  if (countEl) countEl.textContent = '(' + matches.length + ')';
+  if (matches.length === 0) {
+    body.innerHTML = _renderEmptyToolSection(emptyMsg);
+    return;
+  }
+  body.innerHTML = matches.map(_renderToolSectionRow).join('');
+}
+
+function _renderAiToolsSection(assets) {
+  _renderToolSection(
+    'attack-surface-ai-tools-body',
+    'ov-ai-tools-count',
+    assets,
+    a => a.type === 'ai_tool' || a.type === 'homebrew_ai_tool',
+    'No AI tools discovered yet.',
+  );
+}
+
+function _renderExtensionsSection(assets) {
+  _renderToolSection(
+    'attack-surface-extensions-body',
+    'ov-extensions-count',
+    assets,
+    a => a.type === 'extension',
+    'No browser or editor extensions discovered yet.',
+  );
+}
+
+function _renderMcpServersSection(assets) {
+  _renderToolSection(
+    'attack-surface-mcp-servers-body',
+    'ov-mcp-servers-count',
+    assets,
+    a => a.type === 'mcp_server',
+    'No MCP servers discovered yet.',
+  );
+}
+
+function _renderIntegrationsSection(assets) {
+  _renderToolSection(
+    'attack-surface-integrations-body',
+    'ov-integrations-count',
+    assets,
+    a => a.type === 'claude_desktop_integration',
+    'No connected integrations discovered yet.',
+  );
+}
+
+// M7 pin: Dependencies renders defer-to-Supply-Chain link, NOT empty body
+// (LOCKED §Phase 7:258 "Dependencies (defers to Supply Chain)"). Rendering
+// an empty list would read as "no dependencies found" — §4.5 inversion.
+function _renderDependenciesSection(assets) {
+  const body = document.getElementById('attack-surface-dependencies-body');
+  const countEl = document.getElementById('ov-dependencies-count');
+  if (!body) return;
+  const matches = (assets || []).filter(a =>
+    a.type === 'node_package' || a.type === 'python_package' || a.type === 'python_dependency'
+  );
+  if (countEl) countEl.textContent = '(' + matches.length + ')';
+  const deferLink = '<div style="padding:8px 0;border-bottom:1px solid var(--border);color:var(--text2);font-size:13px">'
+    + 'Dependency risk analysis lives in the '
+    + '<a href="#" onclick="try{document.querySelector(\'[data-tab=&quot;supply-chain&quot;]\').click()}catch(e){}return false;" style="color:var(--blue)">Supply Chain tab</a>.'
+    + '</div>';
+  const rows = matches.map(_renderToolSectionRow).join('');
+  body.innerHTML = deferLink + rows;
+}
+
+// M5/M6 pin: Recent Activity is 3-state truthful. Fetches
+// /api/attack-surface/recent-activity + distinguishes off /
+// no_captures_yet / ok. Empty list in 'ok' state renders distinct copy
+// ("discovered tools made no observable calls") — never masquerades as
+// "no data".
+async function _renderRecentActivitySection() {
+  const body = document.getElementById('attack-surface-recent-activity-body');
+  const countEl = document.getElementById('ov-recent-activity-count');
+  if (!body) return;
+  try {
+    const r = await fetch(API + '/api/attack-surface/recent-activity');
+    if (!r.ok) throw new Error('http ' + r.status);
+    const d = await r.json();
+    const status = d.capture_status;
+    const assets = Array.isArray(d.assets) ? d.assets : [];
+    if (countEl) countEl.textContent = status === 'ok' ? '(' + assets.length + ')' : '';
+    if (status === 'off') {
+      body.innerHTML = '<div style="padding:12px 0;color:var(--text2);font-size:13px"><strong>Runtime capture is off.</strong> Recent Activity needs mitmproxy running to correlate API calls to discovered tools. Tools may be installed and active — Vigil just can\'t see their calls right now.</div>';
+      return;
+    }
+    if (status === 'no_captures_yet') {
+      body.innerHTML = '<div style="padding:12px 0;color:var(--text2);font-size:13px"><strong>No API calls captured in the last 24h.</strong> Capture is running; discovered tools may be idle, or their traffic hasn\'t hit a monitored host yet.</div>';
+      return;
+    }
+    // 'ok' state.
+    if (assets.length === 0) {
+      body.innerHTML = '<div style="padding:12px 0;color:var(--text2);font-size:13px">Discovered tools made no observable calls in the last 24h.</div>';
+      return;
+    }
+    body.innerHTML = assets.map(a => {
+      const badge = '<span class="risk-badge risk-info">' + escHtml(String(a.call_count_24h || 0)) + ' calls</span>';
+      const ts = a.last_call_ts ? new Date(a.last_call_ts).toLocaleString() : '—';
+      return '<div style="padding:8px 0;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px" data-asset-id="' + escAttr(a.id) + '">'
+        + '<span style="font-weight:600">' + escHtml(a.name) + '</span>'
+        + '<span style="color:var(--text2);font-size:12px">' + escHtml(a.source) + '</span>'
+        + '<span style="margin-left:auto;color:var(--text2);font-size:12px">last: ' + escHtml(ts) + '</span>'
+        + badge
+        + '</div>';
+    }).join('');
+  } catch (e) {
+    body.innerHTML = '<div style="padding:12px 0;color:var(--text2);font-size:13px;font-style:italic">Recent Activity unavailable (endpoint error).</div>';
+  }
+}
+
+// Orchestrator: called from _renderAttackSurfaceOverview after Overview
+// pane is populated. Fetches full asset list once, then dispatches to
+// per-section renderers. Recent Activity fetches independently
+// (different endpoint + truthful 3-state envelope).
+async function _populateToolSections() {
+  try {
+    const r = await fetch(API + '/api/attack-surface/assets?limit=1000&offset=0');
+    if (!r.ok) return;
+    const d = await r.json();
+    const assets = Array.isArray(d.rows) ? d.rows : [];
+    _renderAiToolsSection(assets);
+    _renderExtensionsSection(assets);
+    _renderMcpServersSection(assets);
+    _renderIntegrationsSection(assets);
+    _renderDependenciesSection(assets);
+  } catch (e) { /* silent; section bodies stay empty this cycle */ }
+  _renderRecentActivitySection();
 }
 
 async function _legacyLoadAssets(offset) {

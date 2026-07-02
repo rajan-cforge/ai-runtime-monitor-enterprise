@@ -184,6 +184,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
             # P7-A: State C composite payload + State B polling.
             "/api/attack-surface/overview": self._api_attack_surface_overview,
             "/api/attack-surface/scan-progress": self._api_attack_surface_scan_progress,
+            # P7-B: Recent Activity Tool Section (3-state truthful envelope).
+            "/api/attack-surface/recent-activity": self._api_attack_surface_recent_activity,
         }
 
         # Match path prefixes for dynamic routes
@@ -2507,6 +2509,21 @@ class DashboardHandler(BaseHTTPRequestHandler):
         from claude_monitoring.attack_surface.dashboard_api import get_overview
 
         self._send_json(get_overview(get_thread_db()))
+
+    def _api_attack_surface_recent_activity(self, _params):
+        """P7-B Recent Activity Tool Section — 3-state truthful envelope.
+
+        Auth-gated via do_GET._check_auth path (CF-1). capture_ok computed
+        from heartbeat_age_seconds() using the same threshold as
+        _api_asset_activity (handler:2549) — single source of truth for
+        "is the capture layer recording?".
+        """
+        from claude_monitoring.attack_surface.dashboard_api import get_recent_activity
+        from claude_monitoring.lifecycle import HEARTBEAT_STALE_SECONDS, heartbeat_age_seconds
+
+        hb_age = heartbeat_age_seconds()
+        capture_ok = hb_age is not None and hb_age < HEARTBEAT_STALE_SECONDS
+        self._send_json(get_recent_activity(get_thread_db(), capture_ok=capture_ok))
 
     def _api_attack_surface_scan_progress(self, _params):
         """P7-A State B live per-source polling. Returns a snapshot of
