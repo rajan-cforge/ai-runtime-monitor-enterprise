@@ -250,6 +250,121 @@ class TestRecentActivityEnvelope:
                 f"M5/M6: capture_status='{state}' must be an output value of get_recent_activity."
             )
 
+    def test_off_state_when_capture_ok_false(self):
+        """CF-4 branch coverage: capture_ok=False → 'off' with empty
+        assets. No DB queries required (early return)."""
+        import sqlite3
+
+        from claude_monitoring.attack_surface.dashboard_api import get_recent_activity
+
+        conn = sqlite3.connect(":memory:")
+        try:
+            result = get_recent_activity(conn, capture_ok=False)
+            assert result == {"capture_status": "off", "assets": []}
+        finally:
+            conn.close()
+
+    def test_no_captures_yet_when_no_correlatable_sources(self):
+        """Branch coverage: capture_ok=True, no assets → all_hosts empty
+        → 'no_captures_yet' bootstrap state."""
+        import sqlite3
+
+        from claude_monitoring.attack_surface.dashboard_api import get_recent_activity
+        from claude_monitoring.db import init_db
+
+        db_path = Path("/tmp/p7b_no_corr.db")
+        if db_path.exists():
+            db_path.unlink()
+        conn = init_db(db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            result = get_recent_activity(conn, capture_ok=True)
+            assert result["capture_status"] == "no_captures_yet"
+            assert result["assets"] == []
+        finally:
+            conn.close()
+            db_path.unlink()
+
+    def test_no_captures_yet_when_api_calls_empty(self):
+        """Branch coverage: capture_ok=True + correlatable source but
+        api_calls table empty → 'no_captures_yet' bootstrap."""
+        import sqlite3
+        import time
+
+        from claude_monitoring.attack_surface.dashboard_api import get_recent_activity
+        from claude_monitoring.db import init_db
+
+        db_path = Path("/tmp/p7b_empty_calls.db")
+        if db_path.exists():
+            db_path.unlink()
+        conn = init_db(db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            conn.execute(
+                "INSERT INTO assets (id, type, name, version, source, first_seen, last_seen, "
+                "last_scanned, current_state, ontology_tags, risk_score, risk_band, risk_factors, "
+                "is_vigil_component) VALUES (?, 'extension', 'test-ext', '1.0', 'chromium-extensions', "
+                "?, ?, ?, '{}', '[]', 50.0, 'medium', NULL, 0)",
+                ("test-asset-1", time.time(), time.time(), time.time()),
+            )
+            conn.commit()
+            result = get_recent_activity(conn, capture_ok=True)
+            assert result["capture_status"] == "no_captures_yet"
+            assert result["assets"] == []
+        finally:
+            conn.close()
+            db_path.unlink()
+
+    def test_ok_populated_state_with_matching_call(self):
+        """Branch coverage: capture_ok=True + correlatable source +
+        api_calls has a match in the 24h window → 'ok' with populated
+        assets list."""
+        import sqlite3
+        import time
+        from datetime import datetime, timedelta, timezone
+
+        from claude_monitoring.attack_surface.dashboard_api import get_recent_activity
+        from claude_monitoring.db import init_db
+
+        db_path = Path("/tmp/p7b_ok_pop.db")
+        if db_path.exists():
+            db_path.unlink()
+        conn = init_db(db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            conn.execute(
+                "INSERT INTO assets (id, type, name, version, source, first_seen, last_seen, "
+                "last_scanned, current_state, ontology_tags, risk_score, risk_band, risk_factors, "
+                "is_vigil_component) VALUES (?, 'extension', 'anthropic-caller', '1.0', "
+                "'chromium-extensions', ?, ?, ?, '{}', '[]', 75.0, 'high', NULL, 0)",
+                ("asset-x", time.time(), time.time(), time.time()),
+            )
+            # Insert an api_call for 'api.anthropic.com' (chromium-extensions
+            # has this in expected_hosts) within the 24h window.
+            recent_ts = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+            conn.execute(
+                "INSERT INTO api_calls (timestamp, session_id, turn_id, turn_number, "
+                "destination_host, destination_service, endpoint_path, http_method, "
+                "http_status, model, stream, input_tokens, output_tokens, cache_read_tokens, "
+                "cache_write_tokens, request_size_bytes, response_size_bytes, latency_ms, "
+                "num_messages, system_prompt_chars, tool_call_count, sensitive_pattern_count, "
+                "stop_reason, request_id) VALUES (?, 's', 't', 1, 'api.anthropic.com', "
+                "'anthropic_api', '/v1/messages', 'POST', 200, 'x', 'false', 0, 0, 0, 0, 0, "
+                "0, 0, 0, 0, 0, 0, 'end', 'r1')",
+                (recent_ts,),
+            )
+            conn.commit()
+            result = get_recent_activity(conn, capture_ok=True)
+            assert result["capture_status"] == "ok"
+            assert len(result["assets"]) >= 1
+            found = [a for a in result["assets"] if a["name"] == "anthropic-caller"]
+            assert found, f"Expected asset in results; got {result['assets']!r}"
+            assert found[0]["call_count_24h"] >= 1
+            assert found[0]["last_call_ts"] is not None
+        finally:
+            conn.close()
+            db_path.unlink()
+
     def test_ok_empty_state_reachable_via_get_recent_activity(self):
         """R4 code-review Important fold-in 2026-07-02: the 'ok+empty'
         state must be reachable — else the frontend renderer's dedicated
@@ -369,13 +484,13 @@ class TestJsSelectorsMatchShippedDom:
         for line in selector_lines:
             if "data-tool=" in line and "data-tool-section" not in line:
                 assert False, (
-                    f"M8: selector uses mockup attribute `data-tool=` "
+                    "M8: selector uses mockup attribute `data-tool=` "
                     f"instead of shipped `data-tool-section=`. Line: {line.strip()[:120]}"
                 )
             if "data-sub=" in line:
                 assert False, (
-                    f"M8: selector uses mockup attribute `data-sub=` — "
-                    f"P7-A shipped flat sections, no sub-attribute. "
+                    "M8: selector uses mockup attribute `data-sub=` — "
+                    "P7-A shipped flat sections, no sub-attribute. "
                     f"Line: {line.strip()[:120]}"
                 )
 
