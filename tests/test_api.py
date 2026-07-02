@@ -1067,23 +1067,29 @@ class TestDashboardAPI:
                 f"?source= filter must apply; got row with source={row.get('source')!r}"
             )
 
-    def test_attack_surface_scan_now_returns_501(self, api_server):
-        """P7.1 stub returns 501 Not Implemented (architect fold-in: 202 would
-        lie about queuing). CTA wiring lands in P7.2 per LOCKED remaining-plan:92."""
-        from urllib.error import HTTPError
-
+    def test_attack_surface_scan_now_returns_202_or_409(self, api_server):
+        """P7-A rewired scan-now from 501 stub to real run_discover trigger.
+        Test-env DB has no live scan → expect 202 Accepted with
+        {ok:True, started:True, started_at, trigger:'on_demand'}.
+        (P7.1 shipped 501; P7-A rewire replaces per judge Ask #1 ratification.)"""
         req = Request(
             f"{api_server}/api/attack-surface/scan-now",
             data=json.dumps({}).encode(),
             headers={"Content-Type": "application/json"},
             method="POST",
         )
-        with pytest.raises(HTTPError) as exc_info:
-            urlopen(req)
-        assert exc_info.value.code == 501, (
-            f"P7.1 scan-now stub must return 501 Not Implemented (route "
-            f"registered but not wired); got {exc_info.value.code}"
+        resp = urlopen(req)
+        # 202 = fresh trigger accepted; 409 = concurrent scan blocked us
+        # (test-order dependency; both are truthful responses).
+        assert resp.status in (202, 409), (
+            f"P7-A scan-now must return 202 (accepted) or 409 (concurrent); got {resp.status}"
         )
+        data = json.loads(resp.read())
+        if resp.status == 202:
+            assert data.get("started") is True
+            assert data.get("trigger") == "on_demand"
+        else:
+            assert data.get("ok") is False
 
     def test_severity_counts_correct(self, api_server):
         resp = urlopen(f"{api_server}/api/alerts?include_dismissed=true")

@@ -294,3 +294,89 @@ def get_new_in_24h(db: sqlite3.Connection) -> tuple[dict[str, Any], int]:
     if new_count == 0:
         return {"count": 0, "status": "no_new"}, 200
     return {"count": new_count, "status": "ok"}, 200
+
+
+def get_overview(db: sqlite3.Connection) -> dict[str, Any]:
+    """P7-A State C composite payload (judge Ask #4 ratified 2026-07-01).
+
+    Single endpoint returning everything State C needs to render the
+    Overview pane, so the frontend makes ONE request instead of 4-5:
+      - total: overall asset count
+      - by_band: distribution across 5 scored bands + explicit "unscored"
+        bucket (CF-5: unscored MUST stay distinct — never folds into
+        info/low; sum of scored bands ≤ total, gap = unscored)
+      - top_5: top-5 by risk_score (list row shape, risk_factors stripped)
+      - new_assets_24h: {count, status} per judge p4.4.a3 truthfulness
+      - new_cves_24h: {count:0, status:"unavailable"} in v0.2.2 (§4.5 fix
+        M9: `asset_cves` table is empty; CVEs inline in
+        assets.risk_factors.cves JSON; rendering 0 without the flag would
+        imply "clean" when the truth is "unknown")
+      - last_scan_ts: MAX(completed_at) across all completed discovery_runs
+      - scan_in_progress: same shape as list_assets — in-flight signal
+    """
+    total_row = db.execute("SELECT COUNT(*) FROM assets").fetchone()
+    total = total_row[0] if total_row else 0
+
+    # by_band: per-band histogram + explicit unscored bucket (CF-5).
+    # Aggregation over scored assets by risk_band column; scored total
+    # + unscored bucket exactly reconstructs `total`.
+    band_rows = db.execute(
+        "SELECT risk_band, COUNT(*) FROM assets WHERE risk_band IS NOT NULL GROUP BY risk_band"
+    ).fetchall()
+    by_band: dict[str, int] = {
+        "critical": 0,
+        "high": 0,
+        "medium": 0,
+        "low": 0,
+        "info": 0,
+        "unscored": 0,
+    }
+    for row in band_rows:
+        band = row[0]
+        if band in by_band:
+            by_band[band] = row[1]
+    unscored_row = db.execute("SELECT COUNT(*) FROM assets WHERE risk_band IS NULL").fetchone()
+    by_band["unscored"] = unscored_row[0] if unscored_row else 0
+
+    # top_5: reuse list_assets sort semantics (risk_score DESC NULLS LAST).
+    top_5_rows = db.execute(
+        f"SELECT {_ASSET_COLUMNS} FROM assets "  # nosec B608
+        "ORDER BY (risk_score IS NULL), risk_score DESC, last_scanned DESC "
+        "LIMIT 5"
+    ).fetchall()
+    top_5: list[dict] = []
+    for r in top_5_rows:
+        payload = render_asset_row(r)
+        payload.pop("risk_factors", None)
+        top_5.append(payload)
+
+    # new_assets_24h delegates to the truthfulness-hardened helper.
+    new_assets_payload, _ = get_new_in_24h(db)
+
+    # M9 (Ask #2 ratified): CVE data path unavailable in v0.2.2.
+    new_cves_24h = {"count": 0, "status": "unavailable"}
+
+    # last_scan_ts: MAX completed_at across ALL triggers (per D-no-trigger-filter
+    # from p4.5 state-bar precedent — --discover + scheduled scans both count).
+    last_scan_row = db.execute("SELECT MAX(completed_at) FROM discovery_runs WHERE completed_at IS NOT NULL").fetchone()
+    last_scan_ts = last_scan_row[0] if last_scan_row else None
+
+    # scan_in_progress: reuse list_assets in-flight signal.
+    in_flight_row = db.execute(
+        "SELECT trigger, started_at FROM discovery_runs WHERE completed_at IS NULL ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    scan_in_progress = (
+        None
+        if in_flight_row is None
+        else {"trigger": in_flight_row["trigger"], "started_at": in_flight_row["started_at"]}
+    )
+
+    return {
+        "total": total,
+        "by_band": by_band,
+        "top_5": top_5,
+        "new_assets_24h": new_assets_payload,
+        "new_cves_24h": new_cves_24h,
+        "last_scan_ts": last_scan_ts,
+        "scan_in_progress": scan_in_progress,
+    }

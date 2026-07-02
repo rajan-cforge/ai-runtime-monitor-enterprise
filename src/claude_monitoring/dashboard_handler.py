@@ -73,6 +73,26 @@ class _MonitorProxy:
 
 _monitor = _MonitorProxy()
 
+# P7-A (2026-07-01, judge APPROVE): module-level state store for the
+# discovery-scan CTA. Guards concurrent triggers (409 on race) and
+# surfaces live per-source progress for State B polling. Mirrors the
+# supply-chain _scan_state pattern in monitor.py. Runner thread writes;
+# scan-progress endpoint reads under the lock. CF-3 (verdict carry-
+# forward): the runner MUST clear/mark this on unexpected termination
+# so State B doesn't masquerade as perpetual "scanning".
+_discovery_scan_state: dict = {
+    "status": "idle",  # idle | running | done | error
+    "started_at": None,
+    "finished_at": None,
+    "current_source": None,
+    "completed_sources": [],
+    "total_sources": None,
+    "trigger": None,
+    "error": None,
+    "exit_code": None,
+}
+_discovery_scan_state_lock = threading.Lock()
+
 
 class DashboardHandler(BaseHTTPRequestHandler):
     """HTTP request handler for the dashboard."""
@@ -161,6 +181,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
             "/api/asset_history": self._api_asset_history,
             # P7.1: namespaced route per LOCKED remaining-plan.md:91.
             "/api/attack-surface/assets": self._api_attack_surface_assets,
+            # P7-A: State C composite payload + State B polling.
+            "/api/attack-surface/overview": self._api_attack_surface_overview,
+            "/api/attack-surface/scan-progress": self._api_attack_surface_scan_progress,
         }
 
         # Match path prefixes for dynamic routes
@@ -2372,13 +2395,130 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self._send_json(list_assets(get_thread_db(), params))
 
     def _api_attack_surface_scan_now(self, _payload):
-        """P7.1 Discover-CTA stub per LOCKED §3.3 step 2; wiring lands in P7.2.
+        """P7-A Discover-CTA trigger (judge p7-A.a1 APPROVE 2026-07-01).
 
-        Returns 501 Not Implemented — architect fold-in 2026-07-01: 202
-        Accepted lies (nothing is queued); 501 is the truthful status for a
-        route registered but not yet wired.
+        Rewires the P7.1 501 stub to a real ``run_discover()`` trigger:
+          - success                          → 202 Accepted + started_at
+          - concurrent (state='running' OR   → 409 Conflict + started_at
+            discovery_runs.completed_at IS NULL)
+          - orchestrator error surfaces via  → 500 (per CF-2 mapping;
+            the runner thread updates state; scan-progress reports it)
+
+        Spawns a daemon thread that calls ``run_discover(json_out=False)``
+        so the handler thread returns immediately. Mirrors
+        ``_api_supply_chain_scan_post`` (handler:2803) — the ratified async
+        pattern. Auth-gate inherited via ``do_POST._check_auth`` (CF-1).
         """
-        self._send_json({"ok": False, "pending_impl": "P7.2"}, 501)
+        from claude_monitoring.discovery_scheduler import run_discover
+
+        # Concurrency guard (CF-3): check both the in-memory flag AND the
+        # durable discovery_runs signal. Either being non-idle → 409.
+        db = get_thread_db()
+        in_flight_row = db.execute(
+            "SELECT started_at FROM discovery_runs WHERE completed_at IS NULL ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        with _discovery_scan_state_lock:
+            if _discovery_scan_state["status"] == "running":
+                self._send_json(
+                    {
+                        "ok": False,
+                        "started_at": _discovery_scan_state["started_at"],
+                        "reason": "scan already running",
+                    },
+                    409,
+                )
+                return
+            if in_flight_row is not None:
+                self._send_json(
+                    {
+                        "ok": False,
+                        "started_at": in_flight_row["started_at"],
+                        "reason": "durable scan in progress",
+                    },
+                    409,
+                )
+                return
+            # Acquire the slot.
+            started_at = datetime.now(timezone.utc).isoformat()
+            _discovery_scan_state.update(
+                {
+                    "status": "running",
+                    "started_at": started_at,
+                    "finished_at": None,
+                    "current_source": None,
+                    "completed_sources": [],
+                    "total_sources": None,
+                    "trigger": "on_demand",
+                    "error": None,
+                    "exit_code": None,
+                }
+            )
+
+        def _runner():
+            """CF-3: try/except/finally guarantees state clears on any
+            exit path — no perpetual 'scanning' masquerade."""
+            exit_code = 2
+            error = None
+            try:
+                exit_code = run_discover(json_out=False)
+            except Exception as e:
+                error = str(e)
+                exit_code = 2
+            finally:
+                with _discovery_scan_state_lock:
+                    _discovery_scan_state["exit_code"] = exit_code
+                    # R4 architect INFORMATIONAL fold-in 2026-07-02:
+                    # exit_code 1 (ScanLock held) is DISTINCT from success.
+                    # Silently marking "done" when the scan never ran is a
+                    # §4.5 inversion for anyone debugging "I clicked Discover
+                    # and nothing changed". Reachable via ScanLock TOCTOU
+                    # (spawn-vs-lock-acquire race) or a stale lock file.
+                    if exit_code == 0 and error is None:
+                        _discovery_scan_state["status"] = "done"
+                        _discovery_scan_state["error"] = None
+                    elif exit_code == 1:
+                        _discovery_scan_state["status"] = "skipped_lock_held"
+                        _discovery_scan_state["error"] = (
+                            error or "ScanLock held by another scanner (daemon-scheduler or concurrent CLI --discover)"
+                        )
+                    else:
+                        _discovery_scan_state["status"] = "error"
+                        _discovery_scan_state["error"] = error or ("run_discover exited with code " + str(exit_code))
+                    _discovery_scan_state["finished_at"] = datetime.now(timezone.utc).isoformat()
+
+        threading.Thread(target=_runner, daemon=True, name="AttackSurfaceScan").start()
+        self._send_json(
+            {
+                "ok": True,
+                "started": True,
+                "started_at": started_at,
+                "trigger": "on_demand",
+            },
+            202,
+        )
+
+    def _api_attack_surface_overview(self, _params):
+        """P7-A State C composite payload (judge Ask #4 ratified).
+
+        Single endpoint delegating to ``dashboard_api.get_overview()``.
+        Auth-gated by ``do_GET._check_auth`` (CF-1). Read-only aggregation
+        over existing tables; no new schema, no egress.
+        """
+        from claude_monitoring.attack_surface.dashboard_api import get_overview
+
+        self._send_json(get_overview(get_thread_db()))
+
+    def _api_attack_surface_scan_progress(self, _params):
+        """P7-A State B live per-source polling. Returns a snapshot of
+        the module-level ``_discovery_scan_state`` (deep-copy under lock
+        so the caller can't race writes). Mirrors the supply-chain
+        scan-progress endpoint (handler:2877).
+        """
+        import copy as _copy
+
+        with _discovery_scan_state_lock:
+            snapshot = _copy.deepcopy(_discovery_scan_state)
+        self._send_json(snapshot)
 
     def _api_asset_detail(self, params):
         """Asset detail — delegates to `attack_surface.dashboard_api.get_asset_detail`."""
