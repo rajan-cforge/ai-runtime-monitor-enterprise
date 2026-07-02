@@ -1067,10 +1067,19 @@ class TestDashboardAPI:
                 f"?source= filter must apply; got row with source={row.get('source')!r}"
             )
 
-    def test_attack_surface_scan_now_returns_501(self, api_server):
-        """P7.1 stub returns 501 Not Implemented (architect fold-in: 202 would
-        lie about queuing). CTA wiring lands in P7.2 per LOCKED remaining-plan:92."""
-        from urllib.error import HTTPError
+    def test_attack_surface_scan_now_returns_202_or_409(self, api_server, monkeypatch):
+        """P7-A rewired scan-now from 501 stub to real run_discover trigger.
+        MONKEYPATCH run_discover to a no-op so the HTTP contract is verified
+        WITHOUT actually starting a scan in a background thread — a real scan
+        would pollute shared orchestrator / lock module state and break
+        downstream tests (this was the Ubuntu 3.10/3.11 CI collision root
+        cause).
+        (P7.1 shipped 501; P7-A rewire replaces per judge Ask #1 ratification.)"""
+        import time as _t
+
+        from claude_monitoring import discovery_scheduler as _ds
+
+        monkeypatch.setattr(_ds, "run_discover", lambda json_out=True: 0)
 
         req = Request(
             f"{api_server}/api/attack-surface/scan-now",
@@ -1078,12 +1087,231 @@ class TestDashboardAPI:
             headers={"Content-Type": "application/json"},
             method="POST",
         )
-        with pytest.raises(HTTPError) as exc_info:
-            urlopen(req)
-        assert exc_info.value.code == 501, (
-            f"P7.1 scan-now stub must return 501 Not Implemented (route "
-            f"registered but not wired); got {exc_info.value.code}"
+        resp = urlopen(req)
+        assert resp.status in (202, 409), (
+            f"P7-A scan-now must return 202 (accepted) or 409 (concurrent); got {resp.status}"
         )
+        data = json.loads(resp.read())
+        if resp.status == 202:
+            assert data.get("started") is True
+            assert data.get("trigger") == "on_demand"
+        else:
+            assert data.get("ok") is False
+
+        # Drain the background runner + reset in-memory state so subsequent
+        # tests see a clean idle slate (poll up to 2s for thread completion).
+        from claude_monitoring.dashboard_handler import (
+            _discovery_scan_state,
+            _discovery_scan_state_lock,
+        )
+
+        for _ in range(20):
+            with _discovery_scan_state_lock:
+                if _discovery_scan_state["status"] != "running":
+                    break
+            _t.sleep(0.1)
+        with _discovery_scan_state_lock:
+            _discovery_scan_state["status"] = "idle"
+            _discovery_scan_state["started_at"] = None
+            _discovery_scan_state["finished_at"] = None
+
+    def test_attack_surface_overview_envelope(self, api_server):
+        """P7-A: /api/attack-surface/overview returns composite State C payload
+        with 7 required keys per D-overview-endpoint spec."""
+        resp = urlopen(f"{api_server}/api/attack-surface/overview")
+        assert resp.status == 200
+        data = json.loads(resp.read())
+        required_keys = {
+            "total",
+            "by_band",
+            "top_5",
+            "new_assets_24h",
+            "new_cves_24h",
+            "last_scan_ts",
+            "scan_in_progress",
+        }
+        assert required_keys.issubset(data.keys()), f"Missing keys: {required_keys - data.keys()}"
+        # CF-5: by_band has distinct unscored bucket
+        assert "unscored" in data["by_band"]
+        # M7: top_5 has at most 5 rows
+        assert len(data["top_5"]) <= 5
+        # M9: new_cves_24h always {count:0, status:'unavailable'} in v0.2.2
+        assert data["new_cves_24h"]["count"] == 0
+        assert data["new_cves_24h"]["status"] == "unavailable"
+
+    def test_attack_surface_overview_by_band_sums_to_total(self, api_server):
+        """CF-5 sibling: by_band sums (including unscored) reconcile with total."""
+        resp = urlopen(f"{api_server}/api/attack-surface/overview")
+        data = json.loads(resp.read())
+        bb = data["by_band"]
+        band_sum = bb["critical"] + bb["high"] + bb["medium"] + bb["low"] + bb["info"] + bb["unscored"]
+        assert band_sum <= data["total"], f"by_band sum {band_sum} must be ≤ total {data['total']}"
+
+    def test_attack_surface_scan_progress_returns_snapshot(self, api_server):
+        """P7-A: /api/attack-surface/scan-progress returns the module-level
+        _discovery_scan_state snapshot for State B polling. Idle DB → status='idle'
+        (unless a prior test triggered a scan)."""
+        resp = urlopen(f"{api_server}/api/attack-surface/scan-progress")
+        assert resp.status == 200
+        data = json.loads(resp.read())
+        # Envelope keys expected regardless of state
+        assert "status" in data
+        assert "current_source" in data
+        assert "completed_sources" in data
+        assert "trigger" in data
+        # status is one of the terminal states we defined
+        assert data["status"] in ("idle", "running", "done", "error", "skipped_lock_held")
+
+    def test_scan_now_exit_code_1_maps_to_skipped_lock_held(self, api_server, monkeypatch):
+        """Architect INFORMATIONAL fold-in: run_discover exit_code=1 (ScanLock
+        held) → status='skipped_lock_held' with truthful error message
+        (NOT silently 'done'). Covers the runner's exit_code=1 branch."""
+        import time as _t
+
+        from claude_monitoring import discovery_scheduler as _ds
+        from claude_monitoring.dashboard_handler import (
+            _discovery_scan_state,
+            _discovery_scan_state_lock,
+        )
+
+        monkeypatch.setattr(_ds, "run_discover", lambda json_out=True: 1)
+        with _discovery_scan_state_lock:
+            _discovery_scan_state["status"] = "idle"
+
+        req = Request(
+            f"{api_server}/api/attack-surface/scan-now",
+            data=b"{}",
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        urlopen(req).read()
+        # Wait for runner terminal.
+        for _ in range(30):
+            with _discovery_scan_state_lock:
+                s = _discovery_scan_state["status"]
+            if s != "running":
+                break
+            _t.sleep(0.1)
+        with _discovery_scan_state_lock:
+            final_status = _discovery_scan_state["status"]
+            final_error = _discovery_scan_state["error"]
+        assert final_status == "skipped_lock_held", f"got {final_status!r}"
+        assert final_error and "ScanLock" in final_error
+        # Reset for next test.
+        with _discovery_scan_state_lock:
+            _discovery_scan_state["status"] = "idle"
+            _discovery_scan_state["error"] = None
+
+    def test_scan_now_exit_code_2_maps_to_error(self, api_server, monkeypatch):
+        """run_discover exit_code=2 (orchestrator raised) → status='error'
+        with fallback error message. Covers the runner's else branch."""
+        import time as _t
+
+        from claude_monitoring import discovery_scheduler as _ds
+        from claude_monitoring.dashboard_handler import (
+            _discovery_scan_state,
+            _discovery_scan_state_lock,
+        )
+
+        monkeypatch.setattr(_ds, "run_discover", lambda json_out=True: 2)
+        with _discovery_scan_state_lock:
+            _discovery_scan_state["status"] = "idle"
+
+        req = Request(
+            f"{api_server}/api/attack-surface/scan-now",
+            data=b"{}",
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        urlopen(req).read()
+        for _ in range(30):
+            with _discovery_scan_state_lock:
+                s = _discovery_scan_state["status"]
+            if s != "running":
+                break
+            _t.sleep(0.1)
+        with _discovery_scan_state_lock:
+            final_status = _discovery_scan_state["status"]
+            final_error = _discovery_scan_state["error"]
+        assert final_status == "error", f"got {final_status!r}"
+        assert final_error and "exit" in final_error.lower()
+        with _discovery_scan_state_lock:
+            _discovery_scan_state["status"] = "idle"
+            _discovery_scan_state["error"] = None
+
+    def test_scan_now_exception_in_runner_maps_to_error(self, api_server, monkeypatch):
+        """Runner catches unexpected exception from run_discover, marks
+        status='error' with the exception message. Covers try/except branch."""
+        import time as _t
+
+        from claude_monitoring import discovery_scheduler as _ds
+        from claude_monitoring.dashboard_handler import (
+            _discovery_scan_state,
+            _discovery_scan_state_lock,
+        )
+
+        def _raiser(json_out=True):
+            raise RuntimeError("boom-in-runner")
+
+        monkeypatch.setattr(_ds, "run_discover", _raiser)
+        with _discovery_scan_state_lock:
+            _discovery_scan_state["status"] = "idle"
+
+        req = Request(
+            f"{api_server}/api/attack-surface/scan-now",
+            data=b"{}",
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        urlopen(req).read()
+        for _ in range(30):
+            with _discovery_scan_state_lock:
+                s = _discovery_scan_state["status"]
+            if s != "running":
+                break
+            _t.sleep(0.1)
+        with _discovery_scan_state_lock:
+            final_status = _discovery_scan_state["status"]
+            final_error = _discovery_scan_state["error"]
+        assert final_status == "error"
+        assert final_error == "boom-in-runner"
+        with _discovery_scan_state_lock:
+            _discovery_scan_state["status"] = "idle"
+            _discovery_scan_state["error"] = None
+
+    def test_scan_now_returns_409_when_state_running(self, api_server, monkeypatch):
+        """M4 concurrency pin: if _discovery_scan_state.status is already
+        'running', scan-now returns 409 with reason='scan already running'."""
+        from urllib.error import HTTPError
+
+        from claude_monitoring.dashboard_handler import (
+            _discovery_scan_state,
+            _discovery_scan_state_lock,
+        )
+
+        # Simulate a running scan.
+        with _discovery_scan_state_lock:
+            _discovery_scan_state["status"] = "running"
+            _discovery_scan_state["started_at"] = "2026-07-02T00:00:00+00:00"
+
+        try:
+            req = Request(
+                f"{api_server}/api/attack-surface/scan-now",
+                data=b"{}",
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with pytest.raises(HTTPError) as exc:
+                urlopen(req)
+            assert exc.value.code == 409
+            data = json.loads(exc.value.read())
+            assert data.get("ok") is False
+            assert "scan already running" in data.get("reason", "")
+        finally:
+            # Always reset to idle to avoid polluting downstream tests.
+            with _discovery_scan_state_lock:
+                _discovery_scan_state["status"] = "idle"
+                _discovery_scan_state["started_at"] = None
 
     def test_severity_counts_correct(self, api_server):
         resp = urlopen(f"{api_server}/api/alerts?include_dismissed=true")

@@ -73,7 +73,26 @@ from pathlib import Path
 # and a stub for the P7.2 CTA wiring. Extracting 2 delegate-methods to a
 # new module would add more overhead than the code itself. Handler-resident
 # for auth-gate proximity is the right shape.
-MAX_LINES = 3020
+#
+# 3020 → 3160 on P7-A batched view states (2026-07-02, judge p7-A.a1 APPROVE +
+# C3 escalation on CTA execution-trigger axis; architect-pass MANDATORY).
+# Three method rewires + module-level state store:
+#   (a) _api_attack_surface_scan_now: 501 stub → real trigger. Spawns daemon
+#       thread running run_discover(json_out=False); mirror of the merged
+#       supply-chain precedent. 202 Accepted / 409 Conflict / 500 mapping.
+#       CF-3 try/except/finally guarantees state clears on any exit path.
+#   (b) _api_attack_surface_overview: new composite State C payload
+#       (7 top-level keys) delegating to attack_surface/dashboard_api.get_overview.
+#   (c) _api_attack_surface_scan_progress: new deep-copied snapshot of the
+#       module-level scan-state dict for State B polling (1s cadence).
+# Plus module-level `_discovery_scan_state` dict + `_discovery_scan_state_lock`
+# — CANNOT live inside the class because module reload / instance recreation
+# per-request would break concurrency (state must persist across handler
+# instances). Same rationale as `_monitor._scan_state_lock` for supply-chain.
+# ~123 lines net; ceiling bump to 3160. NO module extraction target: the
+# three methods are the request-flow ingress for the CTA + State B/C endpoints
+# and must stay handler-adjacent for auth-gate proximity + method dispatch.
+MAX_LINES = 3160
 
 
 def file_line_count(path: Path) -> int:

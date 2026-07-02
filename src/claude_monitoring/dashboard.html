@@ -27,6 +27,17 @@ body { background:var(--bg); color:var(--text); font-family:var(--font-sans); fo
 .header .status { display:flex; gap:8px; align-items:center; }
 .header .dot { width:8px; height:8px; border-radius:50%; background:var(--green); animation:pulse 2s infinite; }
 @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+/* P7-A (2026-07-01): State B animations. Skeleton shimmer + spinner used
+   inside #attack-surface-scanning. Copy the LOCKED design brief §12.2.6
+   "acceptable animations" — subtle pulse only, gated on prefers-reduced-
+   motion (mockup line 346). Without the reduced-motion gate, users with
+   vestibular sensitivities see continuous motion — WCAG 2.1 AA regression. */
+@keyframes v-spin { to { transform: rotate(360deg); } }
+@keyframes v-skel-pulse { 0%,100% { background-position: 200% 0; } 50% { background-position: 0 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .skel { animation: none !important; }
+  .scanbar__spin { animation: none !important; }
+}
 
 .stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; padding:16px 24px; }
 /* P6.8 — Insights tab `.stat-card*` migrated to .v-* design tokens (judge p6.8.a1
@@ -1269,10 +1280,75 @@ body { background:var(--bg); color:var(--text); font-family:var(--font-sans); fo
          + Tool Sections layout (R0-1 RELOCATE). -->
     <div id="attack-surface-empty-state" role="status" style="display:none;padding:48px 24px;text-align:center;color:var(--text2)">
       <div style="font-size:14px;margin-bottom:16px">Vigil hasn't scanned your AI tools yet. Click Discover to begin.</div>
-      <button id="attack-surface-discover-cta" title="Wiring lands in the next release (P7.2)" style="background:var(--blue);color:white;border:none;padding:8px 20px;border-radius:4px;font-size:12px;cursor:pointer">Discover</button>
+      <button id="attack-surface-discover-cta" onclick="triggerAttackSurfaceDiscover(this)" style="background:var(--blue);color:white;border:none;padding:8px 20px;border-radius:4px;font-size:12px;cursor:pointer">Discover</button>
     </div>
-    <!-- Interim block: KEPT VERBATIM until P7.4 replaces with Overview Pane
-         + Tool Sections. Rendered for populated installs. -->
+    <!-- P7-A State B (scan-in-progress) per LOCKED directive §Phase 7:256.
+         Scanbar with per-source completion, skeleton loaders, subtle pulse.
+         Animations respect prefers-reduced-motion (LOCKED design brief
+         §12.2.6; mockup line 346). Hidden by default; router toggles. -->
+    <div id="attack-surface-scanning" role="status" style="display:none;padding:20px 0">
+      <div class="scanbar" style="display:flex;align-items:center;gap:12px;padding:12px 16px;border:1px solid var(--border);border-radius:4px;background:var(--surface2)">
+        <span class="scanbar__spin" aria-hidden="true" style="width:12px;height:12px;border:2px solid var(--blue);border-top-color:transparent;border-radius:50%;animation:v-spin 1s linear infinite"></span>
+        <div class="scanbar__t" style="flex:1;font-size:13px;color:var(--text)"><span id="attack-surface-scanbar-copy">Scanning... (starting up)</span></div>
+      </div>
+      <div class="scanbar__sources" id="attack-surface-scanbar-sources" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:12px"></div>
+      <div id="attack-surface-scanning-skeletons" style="margin-top:16px;display:flex;flex-direction:column;gap:8px">
+        <div class="skel skeltool" style="height:32px;border-radius:4px;background:linear-gradient(90deg,var(--surface2) 0%,var(--surface) 50%,var(--surface2) 100%);background-size:200% 100%;animation:v-skel-pulse 1.4s ease-in-out infinite"></div>
+        <div class="skel skeltool" style="height:32px;border-radius:4px;background:linear-gradient(90deg,var(--surface2) 0%,var(--surface) 50%,var(--surface2) 100%);background-size:200% 100%;animation:v-skel-pulse 1.4s ease-in-out infinite"></div>
+        <div class="skel skeltool" style="height:32px;border-radius:4px;background:linear-gradient(90deg,var(--surface2) 0%,var(--surface) 50%,var(--surface2) 100%);background-size:200% 100%;animation:v-skel-pulse 1.4s ease-in-out infinite"></div>
+      </div>
+    </div>
+    <!-- P7-A State C — Overview pane + Tool Sections shell.
+         Overview populated by /api/attack-surface/overview; Tool Sections
+         shell here, populated by P7-B (Extensions / MCP / Integrations /
+         Dependencies / Recent Activity). "All Assets" section carries the
+         R0-1 RELOCATED flat list. All sections default-collapsed per
+         LOCKED design brief §8.3:468 (M10 pin). -->
+    <div id="attack-surface-overview" style="display:none">
+      <div class="v-card" style="padding:16px;border:1px solid var(--border);border-radius:6px;margin-bottom:16px">
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px">
+          <div><div style="font-size:11px;color:var(--text2)">Total assets</div><div id="ov-total" style="font-size:22px;font-weight:600">—</div></div>
+          <div><div style="font-size:11px;color:var(--text2)">Critical</div><div id="ov-critical" style="font-size:22px;font-weight:600;color:#dc2626">—</div></div>
+          <div><div style="font-size:11px;color:var(--text2)">High</div><div id="ov-high" style="font-size:22px;font-weight:600;color:#ea580c">—</div></div>
+          <div><div style="font-size:11px;color:var(--text2)">Medium/Low/Info</div><div id="ov-lower" style="font-size:22px;font-weight:600">—</div></div>
+          <div><div style="font-size:11px;color:var(--text2)">Unscored</div><div id="ov-unscored" style="font-size:22px;font-weight:600;color:var(--text2)">—</div></div>
+          <div><div style="font-size:11px;color:var(--text2)">New (24h)</div><div id="ov-new-24h" style="font-size:22px;font-weight:600">—</div></div>
+          <div><div style="font-size:11px;color:var(--text2)">New CVEs (24h)</div><div id="ov-new-cves" title="CVE first-seen data path lands in a follow-up; count unavailable in v0.2.2" style="font-size:22px;font-weight:600;color:var(--text2)">—</div></div>
+          <div><div style="font-size:11px;color:var(--text2)">Last scan</div><div id="ov-last-scan" style="font-size:13px;color:var(--text2);padding-top:6px">—</div></div>
+        </div>
+      </div>
+      <div style="margin-bottom:8px;font-size:12px;color:var(--text2);text-transform:uppercase;letter-spacing:0.05em">Top 5 risks</div>
+      <div id="ov-top-5" style="border:1px solid var(--border);border-radius:6px;margin-bottom:16px;overflow:hidden"></div>
+      <div style="margin-bottom:8px;font-size:12px;color:var(--text2);text-transform:uppercase;letter-spacing:0.05em">Tool sections</div>
+      <div id="attack-surface-tool-sections">
+        <!-- All Assets (R0-1 RELOCATE placement; default-collapsed unless
+             URL carries ?source= deep-link per R0-2 PRESERVE). -->
+        <details data-tool-section="all-assets" style="border:1px solid var(--border);border-radius:6px;margin-bottom:8px">
+          <summary style="padding:12px 16px;cursor:pointer;font-weight:600">All Assets <span id="ov-all-assets-count" style="color:var(--text2);font-weight:400">—</span></summary>
+          <div id="attack-surface-all-assets-body" style="padding:0 16px 16px"></div>
+        </details>
+        <!-- Per-tool sections populated by P7-B. Shells only here. -->
+        <details data-tool-section="extensions" style="border:1px solid var(--border);border-radius:6px;margin-bottom:8px">
+          <summary style="padding:12px 16px;cursor:pointer;font-weight:600;color:var(--text2)">Extensions <span style="font-weight:400">(populated in P7-B)</span></summary>
+        </details>
+        <details data-tool-section="mcp-servers" style="border:1px solid var(--border);border-radius:6px;margin-bottom:8px">
+          <summary style="padding:12px 16px;cursor:pointer;font-weight:600;color:var(--text2)">MCP Servers <span style="font-weight:400">(populated in P7-B)</span></summary>
+        </details>
+        <details data-tool-section="integrations" style="border:1px solid var(--border);border-radius:6px;margin-bottom:8px">
+          <summary style="padding:12px 16px;cursor:pointer;font-weight:600;color:var(--text2)">Connected Integrations <span style="font-weight:400">(populated in P7-B)</span></summary>
+        </details>
+        <details data-tool-section="dependencies" style="border:1px solid var(--border);border-radius:6px;margin-bottom:8px">
+          <summary style="padding:12px 16px;cursor:pointer;font-weight:600;color:var(--text2)">Dependencies <span style="font-weight:400">(populated in P7-B)</span></summary>
+        </details>
+        <details data-tool-section="recent-activity" style="border:1px solid var(--border);border-radius:6px;margin-bottom:8px">
+          <summary style="padding:12px 16px;cursor:pointer;font-weight:600;color:var(--text2)">Recent Activity <span style="font-weight:400">(populated in P7-B)</span></summary>
+        </details>
+      </div>
+    </div>
+    <!-- Interim block: legacy render path (renamed to All Assets in State C).
+         P7-A router calls _legacyLoadAssets() to populate it. Hidden when
+         State C shows the All Assets section; visible on probe-failure
+         fallback (CF-4). -->
     <div id="attack-surface-interim" class="system-section">
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
         <h3 style="margin:0">Attack-surface Assets</h3>
@@ -4877,31 +4953,182 @@ var _assetsPagerWired = false;
 // The direct rendering flow is renamed `_legacyLoadAssets` and called from
 // this router; P7.4 replaces the interim block with the Overview Pane +
 // Tool Sections layout, at which point the legacy path can retire.
+// P7-A three-state router (judge p7-A.a1 APPROVE 2026-07-01).
+// State-router order — VERIFIED by judge independent-verification #4:
+// scan_in_progress checked BEFORE total===0, so a scan on an empty DB
+// shows State B (not State A). Probe fail → legacy path (CF-4: NEVER
+// State A on probe failure). Safe defaults preserved from p7.1.a2 (empty
+// hidden by default; ID-based selector for the truthfulness invariant).
 async function loadAssets(offset) {
-  // Code-review 2026-07-01 fold-in: reset the safe defaults BEFORE the probe.
-  // A stale empty-state (from a prior empty-DB render) must not survive into
-  // a probe-failure fall-through — that would revive the exact truthfulness
-  // inversion the p7.1.a1 verdict flagged as non-deferrable.
   const empty = document.getElementById('attack-surface-empty-state');
+  const scanning = document.getElementById('attack-surface-scanning');
+  const overview = document.getElementById('attack-surface-overview');
   const interim = document.getElementById('attack-surface-interim');
+  // Reset ALL four state containers to safe defaults BEFORE the probe (CF-6).
   if (empty) empty.style.display = 'none';
+  if (scanning) scanning.style.display = 'none';
+  if (overview) overview.style.display = 'none';
   if (interim) interim.style.display = 'block';
   try {
-    const probeUrl = API + '/api/attack-surface/assets?limit=1&offset=0';
-    const r = await fetch(probeUrl);
+    const r = await fetch(API + '/api/attack-surface/overview');
     if (r.ok) {
       const d = await r.json();
+      // State-router order (verdict finding #4): scan_in_progress FIRST.
+      if (d.scan_in_progress) {
+        if (scanning) scanning.style.display = 'block';
+        if (interim) interim.style.display = 'none';
+        _startAttackSurfaceScanPolling();
+        return;
+      }
       const total = d.total || 0;
       if (total === 0) {
-        // Fresh install / empty DB → show LOCKED §3.3 empty state.
+        // Fresh install / empty DB with no in-flight scan → LOCKED §3.3 State A.
         if (empty) empty.style.display = 'block';
         if (interim) interim.style.display = 'none';
         return;
       }
-      // Populated DB → safe defaults already applied above; fall through.
+      // State C: populated DB. Overview pane populated; Tool Sections shell.
+      if (overview) overview.style.display = 'block';
+      // R4 frontend-design BLOCK fold-in 2026-07-02: relocate the interim block
+      // (which owns #assets-list + filters + pager) INTO the "All Assets"
+      // details body so its contents actually render. Without this move,
+      // renderAssets() writes to a hidden #assets-list — the same
+      // §4.5 registered-route-vs-live-view family as p7.1.a1. Path (B) from
+      // the R4 review: preserves all wired handlers (band+source filter
+      // change events, prev/next pager binding).
+      const allAssetsBody = document.getElementById('attack-surface-all-assets-body');
+      if (allAssetsBody && interim && interim.parentElement !== allAssetsBody) {
+        allAssetsBody.appendChild(interim);
+      }
+      if (interim) interim.style.display = 'block';
+      // R0-2 PRESERVE: `?source=` deep-link auto-expands the All Assets
+      // details AND pre-selects the source filter so the URL points at
+      // something visible (not a collapsed section).
+      _maybeAutoExpandAllAssets();
+      _renderAttackSurfaceOverview(d);
+      // All Assets section: legacy fetch consolidated to
+      // /api/attack-surface/assets (architect DEFER from #157 folded).
+      return _legacyLoadAssets(offset);
     }
-  } catch(e) { /* safe defaults already applied; fall through to legacy render */ }
+  } catch(e) { /* CF-4: safe defaults already applied; fall through to legacy render (NEVER empty state on probe fail) */ }
   return _legacyLoadAssets(offset);
+}
+
+// P7-A R0-2: if the URL carries ?source=<x>, auto-expand the All Assets
+// details section AND pre-select the source filter so the deep-linked
+// asset scope is visible on load (per p7.1.a2 R0-2 PRESERVE ratification;
+// R4 frontend-design fold-in 2026-07-02 — comment claimed the behavior
+// but no code implemented it).
+function _maybeAutoExpandAllAssets() {
+  try {
+    const src = new URLSearchParams(window.location.search).get('source');
+    if (!src) return;
+    const details = document.querySelector('[data-tool-section="all-assets"]');
+    if (details) details.open = true;
+    const filter = document.getElementById('asset-source-filter');
+    if (filter && filter.value !== src) filter.value = src;
+  } catch(e) { /* URL parsing failure is a no-op; details stays collapsed */ }
+}
+
+// P7-A State C: populate Overview pane from /api/attack-surface/overview.
+function _renderAttackSurfaceOverview(d) {
+  const setText = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+  setText('ov-total', String(d.total || 0));
+  const bb = d.by_band || {};
+  setText('ov-critical', String(bb.critical || 0));
+  setText('ov-high', String(bb.high || 0));
+  setText('ov-lower', String((bb.medium || 0) + (bb.low || 0) + (bb.info || 0)));
+  // CF-5: unscored stays distinct — never folds into info/low.
+  setText('ov-unscored', String(bb.unscored || 0));
+  const na = d.new_assets_24h || {};
+  setText('ov-new-24h', na.status === 'no_runs' ? '—' : String(na.count || 0));
+  // M9: New CVEs 24h is always "—" in v0.2.2 (status:"unavailable"). NEVER 0.
+  setText('ov-new-cves', '—');
+  if (d.last_scan_ts) {
+    const el = document.getElementById('ov-last-scan');
+    if (el) el.textContent = new Date(d.last_scan_ts * 1000).toLocaleString();
+  }
+  // Top 5 risks — clickable rows routing to drill-down. Reuses the
+  // existing `showAssetDetail(assetId)` overlay (defined further down
+  // this file). Wiring here rather than deferring to P7-C — the drill-
+  // down overlay already exists (P4.x/P4.4 asset detail); P7-C just
+  // adds the score-breakdown popover on top of it. Not wiring the
+  // click here while showing `cursor:pointer` would be the same
+  // deceptive-affordance §4.5 family caught in the R4 frontend-design
+  // review (N1 fold-in 2026-07-02).
+  const top5 = document.getElementById('ov-top-5');
+  if (top5 && Array.isArray(d.top_5)) {
+    top5.innerHTML = d.top_5.map(a =>
+      '<div class="ov-top-5-row" style="padding:8px 12px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px;cursor:pointer" data-asset-id="' + escAttr(a.id) + '">'
+      + '<span class="risk-badge risk-' + escAttr(a.risk_band || 'unscored') + '">' + esc(a.risk_band || 'unscored') + '</span>'
+      + '<span style="font-weight:600">' + esc(a.name) + '</span>'
+      + '<span style="color:var(--text2);font-size:12px">' + esc(a.source) + '</span>'
+      + '</div>'
+    ).join('');
+    top5.querySelectorAll('.ov-top-5-row').forEach(el => {
+      el.addEventListener('click', () => {
+        const id = el.getAttribute('data-asset-id');
+        if (id && typeof showAssetDetail === 'function') showAssetDetail(id);
+      });
+    });
+  }
+}
+
+// P7-A State B: poll /api/attack-surface/scan-progress every 1s while
+// state = 'running'. Updates the scanbar copy + source pills. Stops when
+// state → done/error/idle (CF-3: dead runner clears state, polling stops).
+let _attackSurfaceScanPollTimer = null;
+function _startAttackSurfaceScanPolling() {
+  if (_attackSurfaceScanPollTimer) return;  // already polling
+  const poll = async () => {
+    try {
+      const r = await fetch(API + '/api/attack-surface/scan-progress');
+      if (r.ok) {
+        const s = await r.json();
+        const copyEl = document.getElementById('attack-surface-scanbar-copy');
+        if (copyEl) {
+          const done = (s.completed_sources || []).length;
+          const total = s.total_sources;
+          // LOCKED design-brief §8.2:460 verbatim: "Scanning... (3 of 12 sources complete)"
+          // Three ASCII dots + parentheses. R4 frontend-design N2 fold-in
+          // 2026-07-02 (was Unicode ellipsis + no parens).
+          if (total) {
+            copyEl.textContent = 'Scanning... (' + done + ' of ' + total + ' sources complete)';
+          } else if (s.current_source) {
+            copyEl.textContent = 'Scanning... (' + s.current_source + ')';
+          } else {
+            copyEl.textContent = 'Scanning... (starting up)';
+          }
+        }
+        if (s.status !== 'running') {
+          clearInterval(_attackSurfaceScanPollTimer);
+          _attackSurfaceScanPollTimer = null;
+          // Re-run the router to move to State C / A.
+          loadAssets(0);
+        }
+      }
+    } catch(e) { /* transient; keep polling */ }
+  };
+  poll();
+  _attackSurfaceScanPollTimer = setInterval(poll, 1000);
+}
+
+// P7-A P7.2 wiring: Discover CTA click → POST /api/attack-surface/scan-now.
+// 202 → move to State B via loadAssets(0); 409 → the router will detect
+// in-flight scan and show State B; 500 → surface via title tooltip.
+async function triggerAttackSurfaceDiscover(btn) {
+  if (btn) btn.disabled = true;
+  try {
+    const r = await fetch(API + '/api/attack-surface/scan-now', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: '{}',
+    });
+    if (r.status === 202 || r.status === 409) {
+      loadAssets(0);
+    }
+  } catch(e) { /* silent per existing CTA pattern; router will retry on next open */ }
+  finally { if (btn) btn.disabled = false; }
 }
 
 async function _legacyLoadAssets(offset) {
@@ -4924,7 +5151,8 @@ async function _legacyLoadAssets(offset) {
   if (band) qs += '&risk_band=' + encodeURIComponent(band);
   if (source) qs += '&source=' + encodeURIComponent(source);
   try {
-    var r = await fetch(API + '/api/assets' + qs);
+    // P7-A: legacy fetch consolidated to namespaced route (architect DEFER-TO-FOLLOWUP from #157 folded).
+    var r = await fetch(API + '/api/attack-surface/assets' + qs);
     if (!r.ok) {
       document.getElementById('assets-list').innerHTML =
         '<div style="padding:16px;color:var(--red)">Failed to load assets (HTTP ' + r.status + ')</div>';

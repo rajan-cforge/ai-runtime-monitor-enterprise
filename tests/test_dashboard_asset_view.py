@@ -399,3 +399,156 @@ class TestRouteRegistration:
         assert hasattr(DashboardHandler, "_api_asset_detail"), (
             "DashboardHandler must expose _api_asset_detail handler method"
         )
+
+
+# ---------------------------------------------------------------------------
+# P7-A: get_overview() unit tests — State C composite payload
+# ---------------------------------------------------------------------------
+
+
+class TestGetOverviewFunction:
+    """Direct-function tests for dashboard_api.get_overview() covering
+    every branch. Complements the /api/attack-surface/overview integration
+    tests in test_api.py; needed for per-file coverage-ratchet since
+    integration tests only exercise the populated-DB happy path."""
+
+    def _empty_db(self, tmp_path):
+        """DB with schema but no asset rows."""
+        db_path = tmp_path / "overview_empty.db"
+        conn = init_db(db_path)
+        conn.row_factory = __import__("sqlite3").Row
+        return conn
+
+    def _populated_db(self, tmp_path):
+        """DB with assets covering every band (5 scored + unscored) so
+        get_overview's by_band aggregation exercises every branch."""
+        import sqlite3
+
+        db_path = tmp_path / "overview_pop.db"
+        conn = init_db(db_path)
+        conn.row_factory = sqlite3.Row
+
+        # 6 assets — 1 per band + 1 unscored — so top_5 exercises the
+        # LIMIT 5 clause AND unscored isn't in top_5.
+        seed = [
+            ("A1", "extension", "asset-1", "1.0", "chrome", "2026-07-02T00:00:00Z", 95.0, "critical"),
+            ("A2", "extension", "asset-2", "1.0", "chrome", "2026-07-02T00:00:00Z", 78.0, "high"),
+            ("A3", "extension", "asset-3", "1.0", "chrome", "2026-07-02T00:00:00Z", 55.0, "medium"),
+            ("A4", "extension", "asset-4", "1.0", "chrome", "2026-07-02T00:00:00Z", 30.0, "low"),
+            ("A5", "extension", "asset-5", "1.0", "chrome", "2026-07-02T00:00:00Z", 15.0, "info"),
+            ("A6", "extension", "asset-6", "1.0", "chrome", "2026-07-02T00:00:00Z", None, None),  # unscored
+        ]
+        for asset_id, atype, name, ver, source, scanned, score, band in seed:
+            conn.execute(
+                "INSERT INTO assets (id, type, name, version, source, last_scanned, "
+                "current_state, risk_score, risk_band, ontology_tags, risk_factors, "
+                "first_seen, last_seen, is_vigil_component) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)",
+                (
+                    asset_id,
+                    atype,
+                    name,
+                    ver,
+                    source,
+                    scanned,
+                    "{}",  # current_state — minimal JSON blob to satisfy NOT NULL
+                    score,
+                    band,
+                    "[]",
+                    None,
+                    __import__("time").time(),
+                    __import__("time").time(),
+                ),
+            )
+        conn.commit()
+        return conn
+
+    def test_overview_on_empty_db_returns_zero_shape(self, tmp_path):
+        """Empty DB → total=0, by_band all zero, top_5=[], last_scan_ts=None."""
+        from claude_monitoring.attack_surface.dashboard_api import get_overview
+
+        conn = self._empty_db(tmp_path)
+        result = get_overview(conn)
+        assert result["total"] == 0
+        assert result["by_band"] == {
+            "critical": 0,
+            "high": 0,
+            "medium": 0,
+            "low": 0,
+            "info": 0,
+            "unscored": 0,
+        }
+        assert result["top_5"] == []
+        assert result["last_scan_ts"] is None
+        assert result["scan_in_progress"] is None
+        assert result["new_cves_24h"] == {"count": 0, "status": "unavailable"}
+        conn.close()
+
+    def test_overview_populated_by_band_reconciles(self, tmp_path):
+        """Populated DB → each band = 1, unscored = 1, total = 6.
+        CF-5 pin: sum of scored bands + unscored = total."""
+        from claude_monitoring.attack_surface.dashboard_api import get_overview
+
+        conn = self._populated_db(tmp_path)
+        result = get_overview(conn)
+        assert result["total"] == 6
+        bb = result["by_band"]
+        assert bb["critical"] == 1
+        assert bb["high"] == 1
+        assert bb["medium"] == 1
+        assert bb["low"] == 1
+        assert bb["info"] == 1
+        assert bb["unscored"] == 1
+        assert bb["critical"] + bb["high"] + bb["medium"] + bb["low"] + bb["info"] + bb["unscored"] == result["total"]
+        conn.close()
+
+    def test_overview_top_5_capped_and_score_ordered(self, tmp_path):
+        """M7 pin: top_5 returns ≤ 5 rows AND ordered by risk_score DESC."""
+        from claude_monitoring.attack_surface.dashboard_api import get_overview
+
+        conn = self._populated_db(tmp_path)
+        result = get_overview(conn)
+        assert len(result["top_5"]) <= 5
+        # Descending score order (unscored A6 falls off the top-5 tail)
+        scores = [row["risk_score"] for row in result["top_5"] if row["risk_score"] is not None]
+        assert scores == sorted(scores, reverse=True), f"top_5 must be risk_score DESC; got {scores}"
+        # Top asset is the critical one (highest score)
+        assert result["top_5"][0]["name"] == "asset-1"
+        conn.close()
+
+    def test_overview_scan_in_progress_populated_when_run_open(self, tmp_path):
+        """State-router pin: scan_in_progress is non-null when there's an
+        open discovery_runs row (completed_at IS NULL)."""
+        from claude_monitoring.attack_surface.dashboard_api import get_overview
+
+        conn = self._populated_db(tmp_path)
+        # Insert an in-flight discovery_runs row.
+        conn.execute(
+            "INSERT INTO discovery_runs (started_at, completed_at, trigger, "
+            "assets_discovered, new_assets, removed_assets, new_cves, errors) "
+            "VALUES (?, NULL, 'on_demand', 0, 0, 0, 0, NULL)",
+            (__import__("time").time(),),
+        )
+        conn.commit()
+        result = get_overview(conn)
+        assert result["scan_in_progress"] is not None
+        assert result["scan_in_progress"]["trigger"] == "on_demand"
+        conn.close()
+
+    def test_overview_last_scan_ts_reflects_completed_run(self, tmp_path):
+        """last_scan_ts = MAX(completed_at) over completed runs (no trigger filter)."""
+        import time
+
+        from claude_monitoring.attack_surface.dashboard_api import get_overview
+
+        conn = self._populated_db(tmp_path)
+        conn.execute(
+            "INSERT INTO discovery_runs (started_at, completed_at, trigger, "
+            "assets_discovered, new_assets, removed_assets, new_cves, errors) "
+            "VALUES (?, ?, 'scheduled', 6, 6, 0, 0, NULL)",
+            (time.time() - 3600, time.time() - 3600),
+        )
+        conn.commit()
+        result = get_overview(conn)
+        assert result["last_scan_ts"] is not None
+        conn.close()
