@@ -1067,11 +1067,20 @@ class TestDashboardAPI:
                 f"?source= filter must apply; got row with source={row.get('source')!r}"
             )
 
-    def test_attack_surface_scan_now_returns_202_or_409(self, api_server):
+    def test_attack_surface_scan_now_returns_202_or_409(self, api_server, monkeypatch):
         """P7-A rewired scan-now from 501 stub to real run_discover trigger.
-        Test-env DB has no live scan → expect 202 Accepted with
-        {ok:True, started:True, started_at, trigger:'on_demand'}.
+        MONKEYPATCH run_discover to a no-op so the HTTP contract is verified
+        WITHOUT actually starting a scan in a background thread — a real scan
+        would pollute shared orchestrator / lock module state and break
+        downstream tests (this was the Ubuntu 3.10/3.11 CI collision root
+        cause).
         (P7.1 shipped 501; P7-A rewire replaces per judge Ask #1 ratification.)"""
+        import time as _t
+
+        from claude_monitoring import discovery_scheduler as _ds
+
+        monkeypatch.setattr(_ds, "run_discover", lambda json_out=True: 0)
+
         req = Request(
             f"{api_server}/api/attack-surface/scan-now",
             data=json.dumps({}).encode(),
@@ -1079,8 +1088,6 @@ class TestDashboardAPI:
             method="POST",
         )
         resp = urlopen(req)
-        # 202 = fresh trigger accepted; 409 = concurrent scan blocked us
-        # (test-order dependency; both are truthful responses).
         assert resp.status in (202, 409), (
             f"P7-A scan-now must return 202 (accepted) or 409 (concurrent); got {resp.status}"
         )
@@ -1090,6 +1097,70 @@ class TestDashboardAPI:
             assert data.get("trigger") == "on_demand"
         else:
             assert data.get("ok") is False
+
+        # Drain the background runner + reset in-memory state so subsequent
+        # tests see a clean idle slate (poll up to 2s for thread completion).
+        from claude_monitoring.dashboard_handler import (
+            _discovery_scan_state,
+            _discovery_scan_state_lock,
+        )
+
+        for _ in range(20):
+            with _discovery_scan_state_lock:
+                if _discovery_scan_state["status"] != "running":
+                    break
+            _t.sleep(0.1)
+        with _discovery_scan_state_lock:
+            _discovery_scan_state["status"] = "idle"
+            _discovery_scan_state["started_at"] = None
+            _discovery_scan_state["finished_at"] = None
+
+    def test_attack_surface_overview_envelope(self, api_server):
+        """P7-A: /api/attack-surface/overview returns composite State C payload
+        with 7 required keys per D-overview-endpoint spec."""
+        resp = urlopen(f"{api_server}/api/attack-surface/overview")
+        assert resp.status == 200
+        data = json.loads(resp.read())
+        required_keys = {
+            "total",
+            "by_band",
+            "top_5",
+            "new_assets_24h",
+            "new_cves_24h",
+            "last_scan_ts",
+            "scan_in_progress",
+        }
+        assert required_keys.issubset(data.keys()), f"Missing keys: {required_keys - data.keys()}"
+        # CF-5: by_band has distinct unscored bucket
+        assert "unscored" in data["by_band"]
+        # M7: top_5 has at most 5 rows
+        assert len(data["top_5"]) <= 5
+        # M9: new_cves_24h always {count:0, status:'unavailable'} in v0.2.2
+        assert data["new_cves_24h"]["count"] == 0
+        assert data["new_cves_24h"]["status"] == "unavailable"
+
+    def test_attack_surface_overview_by_band_sums_to_total(self, api_server):
+        """CF-5 sibling: by_band sums (including unscored) reconcile with total."""
+        resp = urlopen(f"{api_server}/api/attack-surface/overview")
+        data = json.loads(resp.read())
+        bb = data["by_band"]
+        band_sum = bb["critical"] + bb["high"] + bb["medium"] + bb["low"] + bb["info"] + bb["unscored"]
+        assert band_sum <= data["total"], f"by_band sum {band_sum} must be ≤ total {data['total']}"
+
+    def test_attack_surface_scan_progress_returns_snapshot(self, api_server):
+        """P7-A: /api/attack-surface/scan-progress returns the module-level
+        _discovery_scan_state snapshot for State B polling. Idle DB → status='idle'
+        (unless a prior test triggered a scan)."""
+        resp = urlopen(f"{api_server}/api/attack-surface/scan-progress")
+        assert resp.status == 200
+        data = json.loads(resp.read())
+        # Envelope keys expected regardless of state
+        assert "status" in data
+        assert "current_source" in data
+        assert "completed_sources" in data
+        assert "trigger" in data
+        # status is one of the terminal states we defined
+        assert data["status"] in ("idle", "running", "done", "error", "skipped_lock_held")
 
     def test_severity_counts_correct(self, api_server):
         resp = urlopen(f"{api_server}/api/alerts?include_dismissed=true")
