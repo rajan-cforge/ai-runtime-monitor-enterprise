@@ -88,6 +88,28 @@ body { background:var(--bg); color:var(--text); font-family:var(--font-sans); fo
 .session-item[data-risk="medium"] { border-left-color:#d97706 !important; }
 .session-item[data-risk="low"]:not(.active) { border-left-color:#6b7280; }
 .risk-badge { padding:2px 6px; border-radius:3px; font-size:0.65em; font-weight:700; text-transform:uppercase; letter-spacing:0.04em; margin-right:4px; }
+/* P7-C .bd-* breakdown popover CSS — from mockup vigil.css L256-266.
+   Rajan-ratified 2026-07-04 per LOCKED §6.4 "non-negotiable transparency".
+   T-1: unknown_capability_floor gets its own dedicated .bd-row-floor variant.
+   T-2: .bd-rule--suppressed grays out max()-suppressed rules but keeps them visible. */
+.bd-comp { display:flex; flex-direction:column; gap:11px; }
+.bd-row { display:grid; grid-template-columns:200px 1fr 64px; align-items:center; gap:14px; font-size:12.5px; }
+.bd-row__label { color:var(--text2); }
+.bd-row__label b { color:var(--text); font-weight:600; }
+.bd-row__val { text-align:right; font-variant-numeric:tabular-nums; color:var(--text); font-weight:600; }
+.bd-row__w { font-size:11px; color:var(--text2); }
+.bd-track { position:relative; height:6px; background:var(--surface2); border-radius:3px; overflow:hidden; }
+.bd-track > span { position:absolute; top:0; left:0; height:100%; background:var(--blue); border-radius:3px; }
+.bd-row-floor { border-left:3px solid #d97706; padding-left:8px; background:rgba(217,119,6,0.06); }
+.bd-rule { display:flex; gap:11px; padding:13px 15px; border-radius:9px; background:rgba(220,38,38,0.08); border:1px solid rgba(220,38,38,0.25); margin-top:14px; font-size:12.5px; }
+.bd-rule--suppressed { opacity:0.55; background:rgba(107,114,128,0.06); border-color:var(--border); }
+.bd-rule--suppressed::before { content:"superseded · "; font-style:italic; color:var(--text2); }
+.bd-sum { display:flex; align-items:center; justify-content:space-between; font-size:13px; padding:11px 0 2px; border-top:1px solid var(--border); margin-top:14px; }
+/* Popover container — singleton pattern, absolute-positioned near click origin. */
+.bd-popover { position:fixed; z-index:200; background:var(--surface); border:1px solid var(--border); border-radius:8px; box-shadow:0 8px 24px rgba(0,0,0,0.15); padding:16px; min-width:400px; max-width:520px; max-height:70vh; overflow-y:auto; }
+.bd-popover__title { font-weight:600; font-size:14px; margin-bottom:12px; display:flex; justify-content:space-between; align-items:center; }
+.bd-popover__close { background:none; border:none; font-size:20px; cursor:pointer; color:var(--text2); }
+@media (prefers-reduced-motion: reduce) { .bd-popover { transition:none !important; } }
 /* P7-B (2026-07-02): .atype asset-type icons + .otag ontology tags per
    LOCKED directive §Phase 7:260/:261 + mockup L80-100. Judge Ask #1 ratified
    AI Tools 6th shell; T-1/T-2 upgrades pin unknown-tag/unknown-type to
@@ -5402,6 +5424,259 @@ async function _populateToolSections() {
   _renderRecentActivitySection();
 }
 
+// ============================================================
+// P7-C: Risk-score breakdown popover + State D drill-down
+// Rajan-ratified 2026-07-04. LOCKED §6.4 "non-negotiable transparency".
+// ============================================================
+
+// Factor labels for the 4-factor formula (LOCKED §6.1).
+const BD_FACTOR_LABELS = {
+  max_cve_severity: "Max CVE severity",
+  permission_breadth: "Permission breadth",
+  integration_sensitivity: "Integration sensitivity",
+  activity_recency: "Activity recency",
+};
+
+// Reputation reason → distinct copy (T-3 pin).
+const BD_REPUTATION_REASON_COPY = {
+  rate_limited: "Reputation lookup rate-limited (retry pending)",
+  budget_exceeded: "Reputation lookup budget exceeded",
+  lookup_failed: "Reputation lookup failed",
+  dormant: "Reputation service dormant",
+};
+
+// Single source of truth for the breakdown HTML — used by BOTH the
+// popover AND the inline drill-down section (LOCKED §6.4 mandate:
+// same rendering everywhere).
+function renderRiskBreakdown(risk_factors, risk_score, risk_band) {
+  const rf = risk_factors;
+  // T-5: null risk_factors distinct from all-zero contributions.
+  if (!rf) {
+    return '<div class="bd-comp"><div class="bd-row"><span class="bd-row__label">'
+      + '<b>Not yet scored</b></span><span></span><span class="bd-row__val">—</span></div>'
+      + '<div style="font-size:12px;color:var(--text2);padding-top:8px">'
+      + escHtml("Scoring failed for this asset; it will be re-scored on the next scan.")
+      + '</div></div>';
+  }
+  const contribs = rf.contributions || {};
+  const weights = rf.weights || {};
+  const appliedRules = Array.isArray(rf.applied_rules) ? rf.applied_rules : [];
+  const appliedRep = Array.isArray(rf.applied_reputation) ? rf.applied_reputation : [];
+
+  let rowsHtml = '';
+  // T-1: unknown_capability_floor is a REPLACEMENT semantic.
+  // scoring.py:270-278 CLEARS the 4 factor keys when floor fires.
+  // Detect floor and render ONE dedicated row — NOT 4 zero-valued rows.
+  const hasFloor = 'unknown_capability_floor' in contribs;
+  if (hasFloor) {
+    const floorVal = contribs.unknown_capability_floor;
+    rowsHtml =
+      '<div class="bd-row bd-row-floor" data-floor="1">'
+      + '<span class="bd-row__label"><b>Unrecognized package tier</b> '
+      + '<span class="bd-row__w">· floor</span></span>'
+      + '<span class="bd-track"><span style="width:' + Math.min(100, floorVal) + '%"></span></span>'
+      + '<span class="bd-row__val">' + escHtml(String(floorVal)) + '</span>'
+      + '</div>'
+      + '<div style="font-size:11px;color:var(--text2);margin-top:4px;padding-left:10px">'
+      + escHtml("Introspection resolves in v0.3 — until then, unrecognized packages get the tier floor per spec §5.4.")
+      + '</div>';
+  } else {
+    // Render the 4 base factor rows. Raw value reconstructed as
+    // contributions[k] / weights[k] since raw is not persisted.
+    const factorKeys = ["max_cve_severity", "permission_breadth", "integration_sensitivity", "activity_recency"];
+    for (const k of factorKeys) {
+      const contrib = contribs[k];
+      const w = weights[k];
+      const raw = (contrib != null && w) ? (contrib / w) : 0;
+      const label = BD_FACTOR_LABELS[k] || k;
+      const contribStr = (contrib != null) ? Number(contrib).toFixed(1) : "—";
+      const wPct = w ? (Math.round(w * 100) + "%") : "—";
+      const rawStr = (contrib != null && w) ? Number(raw).toFixed(1) : "—";
+      const trackPct = Math.min(100, Math.max(0, raw));
+      rowsHtml +=
+        '<div class="bd-row" data-factor="' + escAttr(k) + '">'
+        + '<span class="bd-row__label">' + escHtml(label) + ' <b>' + escHtml(rawStr) + '</b> '
+        + '<span class="bd-row__w">· ' + escHtml(wPct) + '</span></span>'
+        + '<span class="bd-track"><span style="width:' + trackPct + '%"></span></span>'
+        + '<span class="bd-row__val">' + escHtml(contribStr) + '</span>'
+        + '</div>';
+    }
+  }
+
+  // Rules — T-2 pin: render winner + suppressed VISIBLY.
+  // rules.py:369 uses max() so only ONE rule contributes; the rest are
+  // suppressed. Popover shows all matched rules; winner marked normal,
+  // suppressed with .bd-rule--suppressed treatment.
+  let rulesHtml = '';
+  if (appliedRules.length > 0) {
+    // Winner = highest modifier_applied. Others = suppressed.
+    let winnerIdx = 0;
+    for (let i = 1; i < appliedRules.length; i++) {
+      if ((appliedRules[i].modifier_applied || 0) > (appliedRules[winnerIdx].modifier_applied || 0)) {
+        winnerIdx = i;
+      }
+    }
+    for (let i = 0; i < appliedRules.length; i++) {
+      const r = appliedRules[i];
+      const isWinner = (i === winnerIdx);
+      const cls = isWinner ? "bd-rule" : "bd-rule bd-rule--suppressed";
+      const modStr = (r.modifier_applied != null) ? ("+" + r.modifier_applied) : "";
+      const fw = r.framework_ref || {};
+      const cites = [];
+      if (fw.nist_csf) cites.push("NIST CSF " + fw.nist_csf);
+      if (fw.cis_controls) cites.push("CIS " + fw.cis_controls);
+      if (fw.mitre_attack) cites.push("MITRE " + fw.mitre_attack);
+      const citeStr = cites.length > 0 ? cites.join(" · ") : "Remediation guidance pending — no framework citations attached to this rule.";
+      const winnerTag = isWinner ? '<span style="color:var(--blue);font-weight:600;font-size:11px;margin-left:6px">WINNER</span>' : '';
+      rulesHtml +=
+        '<div class="' + cls + '" data-rule-id="' + escAttr(r.id || '') + '"' + (isWinner ? ' data-winner="1"' : ' data-suppressed="1"') + '>'
+        + '<div style="flex:1">'
+        + '<div style="font-weight:600">Rule <span style="font-family:monospace">' + escHtml(r.id || '') + '</span> · ' + escHtml(modStr) + winnerTag + '</div>'
+        + '<div style="color:var(--text2);margin-top:4px">' + escHtml(r.explanation || '') + '</div>'
+        + '<div style="color:var(--text2);margin-top:4px;font-size:11px">' + escHtml(citeStr) + '</div>'
+        + '</div></div>';
+    }
+  } else {
+    rulesHtml = '<div style="font-size:12px;color:var(--text2);padding-top:12px;font-style:italic">No curated rules matched this asset.</div>';
+  }
+
+  // Reputation — T-3 pin: all 5 states render distinct copy.
+  let repHtml = '';
+  if (appliedRep.length > 0) {
+    for (const rep of appliedRep) {
+      let copy;
+      if (rep.present === true) {
+        copy = "Checked, in registry · no reputation modifier applied.";
+      } else if (rep.present === false) {
+        copy = "Not present in registry — modifier applied +" + (rep.modifier_applied || 0);
+      } else {
+        // present === null — one of 4 reason variants.
+        copy = BD_REPUTATION_REASON_COPY[rep.reason] || "Reputation lookup indeterminate";
+      }
+      repHtml +=
+        '<div style="padding:10px 12px;border-radius:6px;background:var(--surface2);margin-top:10px;font-size:12.5px" data-reputation-reason="' + escAttr(rep.reason || '') + '">'
+        + '<div style="font-weight:600">' + escHtml(rep.signal || 'reputation') + '</div>'
+        + '<div style="color:var(--text2);margin-top:4px">' + escHtml(copy) + '</div>'
+        + '</div>';
+    }
+  } else {
+    repHtml = '<div style="font-size:12px;color:var(--text2);padding-top:8px;font-style:italic">Asset type does not participate in reputation lookups.</div>';
+  }
+
+  // Sum row — the math: min(100, base + max(rule_modifiers) + reputation).
+  const base = hasFloor
+    ? contribs.unknown_capability_floor
+    : Object.keys(BD_FACTOR_LABELS).reduce((acc, k) => acc + (contribs[k] || 0), 0);
+  const winnerMod = appliedRules.length > 0
+    ? Math.max.apply(null, appliedRules.map(r => r.modifier_applied || 0))
+    : 0;
+  const repMod = appliedRep.length > 0 ? (appliedRep[0].modifier_applied || 0) : 0;
+  const bandCopy = risk_band ? risk_band.toUpperCase() : "—";
+  const finalStr = (risk_score != null) ? String(risk_score) : "—";
+
+  const sumHtml =
+    '<div class="bd-sum">'
+    + '<span style="color:var(--text2)">Base ' + Number(base).toFixed(1) + ' + rules ' + Number(winnerMod).toFixed(1)
+    + (repMod ? ' + reputation ' + Number(repMod).toFixed(1) : '')
+    + '</span>'
+    + '<span style="font-weight:600">Final ' + escHtml(finalStr) + ' → <span class="risk-badge risk-' + escAttr(risk_band || 'unscored') + '">' + escHtml(bandCopy) + '</span></span>'
+    + '</div>';
+
+  return '<div class="bd-comp">' + rowsHtml + '</div>' + rulesHtml + repHtml + sumHtml;
+}
+
+// Popover state machine — singleton (only one open at a time).
+let _bdPopoverEl = null;
+let _bdPopoverOpener = null;  // The badge that opened it — for return focus.
+
+function closeBreakdown() {
+  if (_bdPopoverEl) {
+    _bdPopoverEl.remove();
+    _bdPopoverEl = null;
+  }
+  if (_bdPopoverOpener) {
+    try { _bdPopoverOpener.focus(); } catch (e) { /* ignore */ }
+    _bdPopoverOpener = null;
+  }
+  document.removeEventListener('keydown', _bdEscHandler);
+  document.removeEventListener('click', _bdClickOutsideHandler, true);
+}
+
+function _bdEscHandler(e) {
+  if (e.key === 'Escape') closeBreakdown();
+}
+
+function _bdClickOutsideHandler(e) {
+  if (_bdPopoverEl && !_bdPopoverEl.contains(e.target) && e.target !== _bdPopoverOpener) {
+    closeBreakdown();
+  }
+}
+
+function openBreakdownForAsset(assetId, anchorEl) {
+  // Close any prior popover — singleton pattern.
+  closeBreakdown();
+  fetch(API + '/api/asset/' + encodeURIComponent(assetId)).then(r => {
+    if (!r.ok) return;
+    return r.json();
+  }).then(data => {
+    if (!data) return;
+    const html = renderRiskBreakdown(data.risk_factors, data.risk_score, data.risk_band);
+    const pop = document.createElement('div');
+    pop.className = 'bd-popover';
+    pop.setAttribute('role', 'dialog');
+    pop.setAttribute('aria-modal', 'true');
+    pop.setAttribute('aria-labelledby', 'bd-popover-title');
+    pop.innerHTML =
+      '<div class="bd-popover__title" id="bd-popover-title">'
+      + escHtml("Risk score · how it was computed")
+      + '<button class="bd-popover__close" aria-label="Close breakdown">×</button>'
+      + '</div>'
+      + html;
+    // Position near anchor.
+    const rect = anchorEl.getBoundingClientRect();
+    pop.style.top = Math.max(8, rect.bottom + 6) + 'px';
+    pop.style.left = Math.min(window.innerWidth - 540, Math.max(8, rect.left)) + 'px';
+    document.body.appendChild(pop);
+    _bdPopoverEl = pop;
+    _bdPopoverOpener = anchorEl;
+    pop.querySelector('.bd-popover__close').addEventListener('click', closeBreakdown);
+    document.addEventListener('keydown', _bdEscHandler);
+    // Defer click-outside binding to next tick so the opening click doesn't fire it.
+    setTimeout(() => document.addEventListener('click', _bdClickOutsideHandler, true), 0);
+  }).catch(() => { /* silent */ });
+}
+
+// T-4 pin: scope click-wiring to `.risk-badge` INSIDE #panel-assets ONLY.
+// Session Explorer (L2248) + Processes (L3034) badges use unrelated
+// scoring pipelines — forcing them through this popover renders
+// nonsense math. DOM containment enforces scope.
+function _wireRiskBadgePopover() {
+  const panel = document.getElementById('panel-assets');
+  if (!panel || panel.dataset.bdWired === '1') return;
+  panel.dataset.bdWired = '1';
+  panel.addEventListener('click', function (e) {
+    const badge = e.target.closest('.risk-badge');
+    if (!badge) return;
+    // Skip badges that aren't real risk scores (e.g., P7-B call-count badges).
+    if (badge.classList.contains('risk-info')
+        && badge.textContent
+        && badge.textContent.indexOf('call') >= 0) return;
+    // Find the asset id from the nearest ancestor with data-asset-id.
+    const row = badge.closest('[data-asset-id]');
+    if (!row) return;
+    const assetId = row.getAttribute('data-asset-id');
+    if (!assetId) return;
+    e.stopPropagation();  // prevent row-click from also firing showAssetDetail
+    openBreakdownForAsset(assetId, badge);
+  });
+}
+// Wire on DOM ready.
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', _wireRiskBadgePopover);
+} else {
+  _wireRiskBadgePopover();
+}
+
 async function _legacyLoadAssets(offset) {
   // Wire pagination buttons via addEventListener (one-time) — matches
   // the .asset-row click wiring below and the comment that follows;
@@ -5694,56 +5969,24 @@ function renderAssetDetail(d, activity) {
     html += '</div>';
   }
 
-  // Risk breakdown (§6.4 transparency mandate)
-  if (Object.keys(contribs).length > 0) {
-    html += '<h4 style="margin:16px 0 4px 0;font-size:12px;color:var(--text2);text-transform:uppercase;letter-spacing:0.04em">Factor contributions</h4>';
-    html += '<table class="factor-table">';
-    Object.keys(contribs).forEach(function (k) {
-      var w = weights[k];
-      var wLabel = (typeof w === 'number') ? ' (×' + w.toFixed(2) + ')' : '';
-      html += '<tr><td>' + escHtml(k) + escHtml(wLabel) + '</td><td>' + escHtml(Number(contribs[k]).toFixed(1)) + '</td></tr>';
-    });
-    html += '</table>';
-  }
+  // P7-C: unified risk breakdown via renderRiskBreakdown() — single
+  // source of truth for both drill-down and popover. Replaces the prior
+  // ad-hoc factor-table + applied-rules + reputation sections.
+  // Handles T-1 (floor REPLACEMENT), T-2 (max()-of-rules winner +
+  // suppressed), T-3 (5-variant reputation copy), T-5 (null distinct).
+  html += '<h4 style="margin:16px 0 4px 0;font-size:12px;color:var(--text2);text-transform:uppercase;letter-spacing:0.04em">Risk score · how it was computed</h4>';
+  html += renderRiskBreakdown(rf, d.risk_score, d.risk_band);
 
-  // Applied rules — §6.4 transparency mandate requires explanation +
-  // framework_ref (NIST CSF / MITRE / CIS citations from the
-  // curated-rules YAML). Verdict dashboard-asset-view.a1 Finding 3
-  // — popover was dropping framework_ref.
-  if (appliedRules.length > 0) {
-    html += '<h4 style="margin:16px 0 4px 0;font-size:12px;color:var(--text2);text-transform:uppercase;letter-spacing:0.04em">Applied rules</h4>';
-    appliedRules.forEach(function (rule) {
-      html += '<div style="font-size:12px;margin:4px 0;padding:6px;background:var(--surface2);border-radius:3px">'
-        + '<strong>' + escHtml(rule.id || '') + '</strong> '
-        + '(' + escHtml(String(rule.modifier_applied || 0)) + ')'
-        + (rule.explanation ? '<div style="color:var(--text2);margin-top:2px">' + escHtml(rule.explanation) + '</div>' : '');
-      var fwRef = rule.framework_ref;
-      if (fwRef && typeof fwRef === 'object') {
-        var fwKeys = Object.keys(fwRef);
-        if (fwKeys.length > 0) {
-          html += '<div style="margin-top:4px;font-size:11px;color:var(--text2)">';
-          fwKeys.forEach(function (k, i) {
-            html += (i > 0 ? ' · ' : '')
-              + '<span style="color:var(--cyan)">' + escHtml(k) + ':</span> '
-              + escHtml(String(fwRef[k]));
-          });
-          html += '</div>';
-        }
-      }
-      html += '</div>';
-    });
-  }
-
-  // Applied reputation
-  if (appliedRep.length > 0) {
-    html += '<h4 style="margin:16px 0 4px 0;font-size:12px;color:var(--text2);text-transform:uppercase;letter-spacing:0.04em">Reputation</h4>';
-    appliedRep.forEach(function (rep) {
-      html += '<div style="font-size:12px;margin:4px 0;padding:6px;background:var(--surface2);border-radius:3px">'
-        + '<strong>' + escHtml(rep.signal || '') + '</strong> '
-        + (rep.modifier_applied ? '(' + escHtml(String(rep.modifier_applied)) + ')' : '')
-        + (rep.reason ? '<span style="color:var(--text2);margin-left:6px">' + escHtml(rep.reason) + '</span>' : '')
-        + '</div>';
-    });
+  // P7-C Q1 fold: Native permission text from current_state (LOCKED
+  // §Phase 7:259). Rendered as monospace pre block so the CISO can
+  // verify Vigil's interpretation against the raw manifest.
+  if (d.current_state) {
+    html += '<h4 style="margin:16px 0 4px 0;font-size:12px;color:var(--text2);text-transform:uppercase;letter-spacing:0.04em">Native permissions (raw)</h4>';
+    var nativeText = (typeof d.current_state === 'string')
+      ? d.current_state
+      : JSON.stringify(d.current_state, null, 2);
+    html += '<pre style="font-size:11px;background:var(--surface2);padding:8px;border-radius:4px;overflow-x:auto;white-space:pre-wrap">'
+      + escHtml(nativeText) + '</pre>';
   }
 
   // CVE list (when ok+[...])
