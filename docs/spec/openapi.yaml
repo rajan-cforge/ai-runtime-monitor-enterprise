@@ -724,6 +724,84 @@ paths:
                 items:
                   type: object
 
+  # P8-D permission grants + audit-log (JD-2 Option C, dormant in
+  # v0.2.2 core per LOCKED §8.4.1:1449). Debug-only render path in
+  # v0.2.2; goes live in v0.2.2.1 (GitHub integration).
+  /api/permissions/grants:
+    get:
+      summary: Current-state view of granted integration permissions
+      tags: [AttackSurface]
+      responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '200':
+          description: List of currently-granted integrations. Empty envelope in v0.2.2 core dormant state.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  grants:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        integration: {type: string}
+                        granted_at: {type: string, format: date-time}
+                        granted_scope: {type: string, nullable: true}
+  /api/permissions/audit:
+    get:
+      summary: Append-only permission grant/revoke audit history
+      tags: [AttackSurface]
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 100
+            minimum: 1
+            maximum: 1000
+      responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '200':
+          description: Reverse-chronological audit events. Empty envelope in dormant state.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  events:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: {type: integer}
+                        integration: {type: string}
+                        event: {type: string, enum: [granted, revoked]}
+                        event_at: {type: string, format: date-time}
+                        granted_scope: {type: string, nullable: true}
+  /api/permissions/debug-enabled:
+    get:
+      summary: Whether VIGIL_ENABLE_PERMISSION_PROMPT_DEBUG=1 is set (dev/debug only)
+      description: |
+        JD-1 hard pin per Rajan verdict 2026-07-08. Frontend query-param
+        `?debug-permission-prompt=1` MUST be AND'd with this daemon-side
+        env-var flag. Query-param alone → literally inert. Endpoint always
+        returns 200; the boolean payload is the gate.
+      tags: [AttackSurface]
+      responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '200':
+          description: Debug-enabled flag from daemon environment.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  debug_enabled: {type: boolean}
+
   /api/export:
     get:
       summary: Export captured data
@@ -767,3 +845,5 @@ tags:
     description: Unified activity timeline
   - name: Export
     description: Data export endpoints
+  - name: AttackSurface
+    description: Attack surface discovery, risk scoring, and permission audit (v0.2.2)
