@@ -92,6 +92,12 @@ def render_asset_row(row: sqlite3.Row) -> dict[str, Any]:
         "risk_score": risk_score,
         "risk_band": row["risk_band"],
         "ontology_tags": ontology_tags_list,
+        # P7-C Q1 fold (Rajan-ratified 2026-07-04): project current_state
+        # so the drill-down can render the raw manifest permissions block
+        # per LOCKED §Phase 7:259 ("native permission text + ontology
+        # tags"). Column was already SELECTed in _ASSET_COLUMNS; only the
+        # projection was missing.
+        "current_state": row["current_state"],
         "cve_status_hint": {"label": hint.label, "severity": hint.severity, "tooltip": hint.tooltip},
         "risk_score_hint": (
             {"label": rs_hint.label, "severity": rs_hint.severity, "tooltip": rs_hint.tooltip}
