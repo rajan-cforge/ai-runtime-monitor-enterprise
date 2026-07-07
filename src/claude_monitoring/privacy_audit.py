@@ -720,6 +720,15 @@ SAFE_COLUMNS_BY_TABLE: dict[str, dict[str, str]] = {
         "granted_at": "raw",
         "granted_scope": "masked",
     },
+    # P8-D append-only audit history (JD-2 Option C, migration v0.2.2.004).
+    # Same shape as permission_grants + surrogate id + event enum.
+    "permission_audit": {
+        "id": "raw",
+        "integration": "masked",
+        "event": "raw",
+        "event_at": "raw",
+        "granted_scope": "masked",
+    },
     "schema_meta": {
         "version": "raw",
         "applied_at": "raw",
