@@ -88,6 +88,10 @@ body { background:var(--bg); color:var(--text); font-family:var(--font-sans); fo
 .session-item[data-risk="medium"] { border-left-color:#d97706 !important; }
 .session-item[data-risk="low"]:not(.active) { border-left-color:#6b7280; }
 .risk-badge { padding:2px 6px; border-radius:3px; font-size:0.65em; font-weight:700; text-transform:uppercase; letter-spacing:0.04em; margin-right:4px; }
+/* P7-C frontend-design N-2 fold-in 2026-07-05: badge click affordance
+   so users know breakdown is one click away (LOCKED §6.4 discoverability). */
+.risk-badge[data-breakdown="attack-surface"] { cursor:pointer; }
+.risk-badge[data-breakdown="attack-surface"]:hover { filter:brightness(1.15); }
 /* P7-C .bd-* breakdown popover CSS — from mockup vigil.css L256-266.
    Rajan-ratified 2026-07-04 per LOCKED §6.4 "non-negotiable transparency".
    T-1: unknown_capability_floor gets its own dedicated .bd-row-floor variant.
@@ -5123,7 +5127,7 @@ function _renderAttackSurfaceOverview(d) {
   if (top5 && Array.isArray(d.top_5)) {
     top5.innerHTML = d.top_5.map(a =>
       '<div class="ov-top-5-row" style="padding:8px 12px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px;cursor:pointer" data-asset-id="' + escAttr(a.id) + '">'
-      + '<span class="risk-badge risk-' + escAttr(a.risk_band || 'unscored') + '">' + esc(a.risk_band || 'unscored') + '</span>'
+      + '<span class="risk-badge risk-' + escAttr(a.risk_band || 'unscored') + '" data-breakdown="attack-surface">' + esc(a.risk_band || 'unscored') + '</span>'
       + '<span style="font-weight:600">' + esc(a.name) + '</span>'
       + '<span style="color:var(--text2);font-size:12px">' + esc(a.source) + '</span>'
       + '</div>'
@@ -5272,7 +5276,7 @@ function renderOtag(tag) {
 // Render a single asset row inside a tool section body. Reuses render
 // primitives from _legacyLoadAssets/renderAssetRow patterns.
 function _renderToolSectionRow(a) {
-  const badge = a.risk_band ? '<span class="risk-badge risk-' + escAttr(a.risk_band) + '">' + escHtml(a.risk_band) + '</span>' : '<span class="risk-badge risk-unscored">unscored</span>';
+  const badge = a.risk_band ? '<span class="risk-badge risk-' + escAttr(a.risk_band) + '" data-breakdown="attack-surface">' + escHtml(a.risk_band) + '</span>' : '<span class="risk-badge risk-unscored" data-breakdown="attack-surface">unscored</span>';
   const tags = Array.isArray(a.ontology_tags) ? a.ontology_tags.map(renderOtag).join('') : '';
   return '<div style="padding:8px 0;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px" data-asset-id="' + escAttr(a.id) + '">'
     + renderAtype(a.type)
@@ -5464,9 +5468,17 @@ function renderRiskBreakdown(risk_factors, risk_score, risk_band) {
   const appliedRep = Array.isArray(rf.applied_reputation) ? rf.applied_reputation : [];
 
   let rowsHtml = '';
-  // T-1: unknown_capability_floor is a REPLACEMENT semantic.
-  // scoring.py:270-278 CLEARS the 4 factor keys when floor fires.
-  // Detect floor and render ONE dedicated row — NOT 4 zero-valued rows.
+  // T-1 (judge p7-C-independent-review.a1 correction 2026-07-05):
+  // unknown_capability_floor is a REPLACEMENT signal for base_risk,
+  // but the 4 factor keys REMAIN in `contributions`. Per scoring.py:259-282:
+  //   - The 4 factor keys are always populated (line 259-264).
+  //   - base_risk = sum of those 4 (line 265).
+  //   - If floor > base_risk: base_risk becomes the floor value AND
+  //     the floor key is added as a 5th entry (line 278-282).
+  //     The 4 factor keys are NOT cleared.
+  // Renderer must branch on floor-key presence and render ONE dedicated
+  // row (base==floor value); iterating over all contribution keys and
+  // showing 5 rows would double-count (sum of 5 keys > floor).
   const hasFloor = 'unknown_capability_floor' in contribs;
   if (hasFloor) {
     const floorVal = contribs.unknown_capability_floor;
@@ -5612,19 +5624,35 @@ function _bdClickOutsideHandler(e) {
   }
 }
 
+// Architect informational fold-in 2026-07-05: fetch-token invalidation
+// so stale responses can't append a popover after the user has dismissed
+// intent (Esc mid-fetch, clicked another badge, closed page). Each
+// openBreakdownForAsset call gets a fresh token; closeBreakdown bumps
+// the token to invalidate any in-flight fetch.
+let _bdFetchToken = 0;
+
 function openBreakdownForAsset(assetId, anchorEl) {
   // Close any prior popover — singleton pattern.
   closeBreakdown();
+  const myToken = ++_bdFetchToken;
   fetch(API + '/api/asset/' + encodeURIComponent(assetId)).then(r => {
     if (!r.ok) return;
     return r.json();
   }).then(data => {
     if (!data) return;
+    // Discard if superseded (user opened another badge, hit Esc, or
+    // navigated away between fetch start and completion).
+    if (myToken !== _bdFetchToken) return;
     const html = renderRiskBreakdown(data.risk_factors, data.risk_score, data.risk_band);
     const pop = document.createElement('div');
     pop.className = 'bd-popover';
+    // Frontend-design N-4 fold-in 2026-07-05: the modal-dialog ARIA
+    // attribute would promise screen readers that background is inert,
+    // which requires a focus trap. Focus trap deferred to Phase 8 a11y
+    // hardening PR. Using role=dialog alone (non-modal disclosure
+    // semantic) is the honest a11y contract — screen readers announce
+    // the dialog; background remains available for Tab. See CF-9.
     pop.setAttribute('role', 'dialog');
-    pop.setAttribute('aria-modal', 'true');
     pop.setAttribute('aria-labelledby', 'bd-popover-title');
     pop.innerHTML =
       '<div class="bd-popover__title" id="bd-popover-title">'
@@ -5646,10 +5674,14 @@ function openBreakdownForAsset(assetId, anchorEl) {
   }).catch(() => { /* silent */ });
 }
 
-// T-4 pin: scope click-wiring to `.risk-badge` INSIDE #panel-assets ONLY.
-// Session Explorer (L2248) + Processes (L3034) badges use unrelated
-// scoring pipelines — forcing them through this popover renders
-// nonsense math. DOM containment enforces scope.
+// T-4 pin (judge p7-C-independent-review.a1 tightened 2026-07-05):
+// scope click-wiring via TWO layers per D-Q3 original commitment:
+//   (1) DOM containment: delegated listener on #panel-assets only.
+//   (2) Attribute filter: badge must carry data-breakdown="attack-surface".
+// Session Explorer (L2270) + Processes render badges that lack the
+// data-breakdown attribute — the attribute filter catches any future
+// refactor that leaks a non-attack-surface badge into #panel-assets
+// (e.g., copy-pasted markup, nested sub-panel).
 function _wireRiskBadgePopover() {
   const panel = document.getElementById('panel-assets');
   if (!panel || panel.dataset.bdWired === '1') return;
@@ -5657,10 +5689,10 @@ function _wireRiskBadgePopover() {
   panel.addEventListener('click', function (e) {
     const badge = e.target.closest('.risk-badge');
     if (!badge) return;
-    // Skip badges that aren't real risk scores (e.g., P7-B call-count badges).
-    if (badge.classList.contains('risk-info')
-        && badge.textContent
-        && badge.textContent.indexOf('call') >= 0) return;
+    // Layer 2: attribute filter — MUST carry data-breakdown="attack-surface".
+    // Non-attack-surface badges (session risk, process risk, P7-B
+    // call-count badges) do not carry the attribute and are skipped.
+    if (badge.getAttribute('data-breakdown') !== 'attack-surface') return;
     // Find the asset id from the nearest ancestor with data-asset-id.
     const row = badge.closest('[data-asset-id]');
     if (!row) return;
@@ -5806,11 +5838,11 @@ function renderAssetRow(r) {
   var badge;
   if (r.risk_score === null || r.risk_score === undefined) {
     var rsHint = r.risk_score_hint || { label: 'not yet scored' };
-    badge = '<span class="risk-badge risk-unscored" title="' + escAttr(rsHint.tooltip || '') + '">'
+    badge = '<span class="risk-badge risk-unscored" data-breakdown="attack-surface" title="' + escAttr(rsHint.tooltip || '') + '">'
       + escHtml(rsHint.label) + '</span>';
   } else {
     var band = r.risk_band || 'info';
-    badge = '<span class="risk-badge risk-' + escAttr(band) + '" title="risk_score=' + escAttr(String(r.risk_score)) + '">'
+    badge = '<span class="risk-badge risk-' + escAttr(band) + '" data-breakdown="attack-surface" title="risk_score=' + escAttr(String(r.risk_score)) + '">'
       + escHtml(band.toUpperCase()) + ' ' + escHtml(String(r.risk_score)) + '</span>';
   }
 
@@ -5947,7 +5979,7 @@ function renderAssetDetail(d, activity) {
   // Risk score block
   if (d.risk_score !== null && d.risk_score !== undefined) {
     html += '<div style="margin:12px 0">'
-      + '<span class="risk-badge risk-' + escAttr(d.risk_band || 'info') + '">'
+      + '<span class="risk-badge risk-' + escAttr(d.risk_band || 'info') + '" data-breakdown="attack-surface">'
       + escHtml((d.risk_band || 'info').toUpperCase()) + ' ' + escHtml(String(d.risk_score))
       + '</span>'
       + '</div>';
