@@ -92,6 +92,45 @@ body { background:var(--bg); color:var(--text); font-family:var(--font-sans); fo
    so users know breakdown is one click away (LOCKED §6.4 discoverability). */
 .risk-badge[data-breakdown="attack-surface"] { cursor:pointer; }
 .risk-badge[data-breakdown="attack-surface"]:hover { filter:brightness(1.15); }
+
+/* ===== P8-D Permission-prompt component (LOCKED, dormant in v0.2.2 core) =====
+   Per LOCKED §4.5.1 + §8.4 + component-spec:56 + mockup L221-226.
+   Identity B (Keyed) — reserved --vigil-key hue, non-modal inline panel
+   within Tool Section shells. v0.2.2 core NEVER renders this in
+   production (§8.4.1:1449); only debug-triggered via env-var +
+   query-param AND-gate (JD-1 Rajan verdict 2026-07-08). */
+.pp { position:relative; border:1px solid var(--v-border); border-radius:8px; padding:16px; margin:12px 0; background:var(--surface); font-size:14px; }
+.pp__bar { display:flex; align-items:center; justify-content:space-between; margin-bottom:12px; padding:6px 10px; border-radius:4px; font-size:12px; text-transform:uppercase; letter-spacing:0.05em; }
+.pp__glyph { display:inline-block; width:20px; height:20px; border-radius:50%; text-align:center; line-height:20px; font-weight:700; margin-right:8px; }
+.pp__sig { font-weight:600; }
+.pp__ask { font-weight:600; margin-bottom:8px; }
+.pp__calls { font-family:var(--v-mono); font-size:12px; color:var(--v-text-2); margin-bottom:6px; }
+/* Frontend R4 F5 fold-in 2026-07-08: no italic on the "token never
+   leaves your machine" guarantee. Italic reads as parenthetical
+   footnote; declarative guarantee should read plain. */
+.pp__local { font-size:12px; color:var(--v-text-2); margin-bottom:12px; display:flex; align-items:center; gap:6px; }
+.pp__actions { display:flex; gap:8px; }
+.pp__actions button { padding:6px 12px; border-radius:4px; border:1px solid var(--v-border); background:var(--surface); cursor:pointer; font-size:13px; }
+.pp__detail { display:none; }
+.pp.show-detail .pp__detail { display:block; margin-top:12px; padding-top:12px; border-top:1px solid var(--v-border); }
+.pp.show-detail .pp__detail dl { display:grid; grid-template-columns:180px 1fr; gap:6px 12px; font-size:13px; margin:0; }
+.pp.show-detail .pp__detail dt { color:var(--v-text-2); }
+.pp__post { display:none; padding:8px 12px; border-radius:4px; }
+.pp.is-granted .pp__post--grant,
+.pp.is-skipped .pp__post--skip { display:flex; align-items:center; justify-content:space-between; }
+.pp.is-granted .pp__actions,
+.pp.is-skipped .pp__actions { display:none; }
+/* Identity B — Keyed (reserved teal hue, key icon, hatch pattern).
+   The --vigil-key hue is the un-spoofable anti-spoof signature. */
+.pp--b { border:1px solid var(--vigil-key-bd); }
+.pp--b .pp__bar {
+  color: var(--vigil-key);
+  background: var(--vigil-key-bg) repeating-linear-gradient(135deg, rgba(34,189,214,0.07) 0 7px, transparent 7px 14px);
+}
+.pp--b .pp__glyph { background: var(--vigil-key); color: #042027; }
+.pp--b .pp__sig { color: var(--vigil-key); }
+/* ===== end P8-D ===== */
+
 /* P7-C .bd-* breakdown popover CSS — from mockup vigil.css L256-266.
    Rajan-ratified 2026-07-04 per LOCKED §6.4 "non-negotiable transparency".
    T-1: unknown_capability_floor gets its own dedicated .bd-row-floor variant.
@@ -480,6 +519,14 @@ body { background:var(--bg); color:var(--text); font-family:var(--font-sans); fo
   --v-cap-high:    #a78bff;   /* high capability  (violet dot)         */
   --v-cap-elevated:#5b93f0;   /* elevated         (blue dot)           */
   --v-cap-standard:#6a727b;   /* standard         (gray dot)           */
+
+  /* P8-D permission-prompt reserved hue — appears NOWHERE else in the
+     product (anti-spoof signature). LOCKED to Identity B "Keyed" per
+     vigil-v022-component-spec.md:56. De-greened from #2dd4bf so it
+     reads "deliberate handoff", not "success". */
+  --vigil-key:    #22bdd6;
+  --vigil-key-bg: rgba(34,189,214,.12);
+  --vigil-key-bd: rgba(34,189,214,.34);
 
   /* ---- 7. Type scale ---- */
   --v-font: 'Geist', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
@@ -1155,6 +1202,26 @@ body { background:var(--bg); color:var(--text); font-family:var(--font-sans); fo
         <span class="card__meta">per-host capture rate · matched conversation elements per heartbeat</span>
       </div>
       <div class="card__body card__body--flush" id="sys-perhost"></div>
+    </div>
+
+    <!-- P8-D Settings → Permissions panel (JD-2 Option C, dormant in v0.2.2 core). -->
+    <div class="card" style="margin-top:20px;" id="sys-permissions-card">
+      <div class="card__head">
+        <div class="card__title">Permissions</div>
+        <span class="card__meta">integration grants · audit log</span>
+      </div>
+      <div class="card__body">
+        <!-- Dormant-honest copy VERBATIM from LOCKED §8.4.1:1450 (CF-7).
+             Empirically verified 2026-07-08 against actual LOCKED file
+             after frontend-design R4 F1 caught executor + agents mirroring
+             a fabricated draft — same failure class as p4.5.a1 precedent
+             per memory feedback_never_invent_locked_text.md. -->
+        <p id="sys-permissions-dormant" style="color:var(--v-text-2); font-size:13px; margin:0 0 12px;">
+          No integrations yet — additional discovery sources arrive in subsequent releases. The Permissions panel will populate as integrations are activated.
+        </p>
+        <div id="sys-permissions-grants-list" style="display:none;"></div>
+        <div id="sys-permissions-audit-list" style="display:none;"></div>
+      </div>
     </div>
 
     <!-- Running AI processes (grouped by app) -->
@@ -6040,6 +6107,112 @@ function renderAssetDetail(d, activity) {
 
   return html;
 }
+
+// ===== P8-D permission-prompt debug-trigger (LOCKED §8.4.1:1452) =====
+// JD-1 Rajan verdict 2026-07-08: env-var (VIGIL_ENABLE_PERMISSION_PROMPT_DEBUG=1)
+// AND query-param (?debug-permission-prompt=1) BOTH required. Neither
+// alone renders anything. Env-var absent + query-param present →
+// literally inert (CF-JD1-B hard pin).
+async function _p8dCheckDebugTrigger() {
+  // Query-param check first — cheapest short-circuit.
+  const sp = new URLSearchParams(window.location.search || '');
+  if (sp.get('debug-permission-prompt') !== '1') return false;
+  // Query-param present → check daemon-side env-var via config endpoint.
+  try {
+    const r = await fetch(API + '/api/permissions/debug-enabled');
+    if (!r.ok) return false;
+    const data = await r.json();
+    // debugEnabled must be true — VIGIL_ENABLE_PERMISSION_PROMPT_DEBUG=1
+    // in the daemon's environment.
+    return data && data.debug_enabled === true;
+  } catch (e) {
+    // Network / parse error → inert. Never render on ambiguity.
+    return false;
+  }
+}
+
+// Identity B key glyph — inline SVG per mockup L1306 (F3 frontend R4 fold-in).
+// Text "K" was a weaker anti-spoof signal than the key silhouette.
+const _P8D_KEY_SVG = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="8" cy="15" r="4"/><path d="M10.85 12.15 19 4"/><path d="m18 5 2 2"/><path d="m15 8 2 2"/></svg>';
+const _P8D_CHECK_SVG = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>';
+const _P8D_X_SVG = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>';
+
+function _p8dRenderPromptSample(container) {
+  // Renders all 4 lifecycle states for debug/dev visual inspection
+  // per LOCKED §8.4.1:1452 test/dev mode. Mockup L1305-1350 verbatim.
+  // Frontend R4 fold-in 2026-07-08: F2 4th state (.show-detail
+  // expanded); F3 SVG key glyph; F4 button hierarchy; F5 post-state
+  // icons + emphasis; F6 a11y hooks (aria-expanded on toggle, role
+  // on containers).
+  container.innerHTML = ''
+    // State 1: default
+    + '<div class="pp pp--b" data-lifecycle="default" role="region" aria-label="Vigil permission prompt sample: default">'
+    +   '<div class="pp__bar"><span class="pp__glyph">' + _P8D_KEY_SVG + '</span><span class="pp__sig">Vigil · permission</span><span>Local · localhost:9081</span></div>'
+    +   '<div class="pp__ask">Use your <code>gh</code> CLI token to enumerate authorized GitHub apps?</div>'
+    +   '<div class="pp__calls">Vigil will call <span class="v-mono">/user/installations</span> and <span class="v-mono">/applications/grants</span>.</div>'
+    +   '<div class="pp__local">The token never leaves your machine.</div>'
+    +   '<div class="pp__actions"><button class="v-btn v-btn--primary v-btn--sm">Allow</button><button class="v-btn v-btn--sm">Skip</button><button class="pp__more" data-action="detail" aria-expanded="false">What does this access?</button></div>'
+    +   '<div class="pp__detail"><dl><dt>Token source</dt><dd class="v-mono">~/.config/gh/hosts.yml</dd><dt>Vigil will read</dt><dd>App names, scopes, grant dates.</dd><dt>Vigil will NOT</dt><dd>read repos, write, or send the token off-device.</dd><dt>Egress</dt><dd>2 TLS calls to <span class="v-mono">api.github.com</span>, audit-logged.</dd></dl></div>'
+    + '</div>'
+    // State 2: .show-detail expanded (F2 fold-in)
+    + '<div class="pp pp--b show-detail" data-lifecycle="expanded" role="region" aria-label="Vigil permission prompt sample: expanded detail">'
+    +   '<div class="pp__bar"><span class="pp__glyph">' + _P8D_KEY_SVG + '</span><span class="pp__sig">Vigil · permission</span><span>Local</span></div>'
+    +   '<div class="pp__ask">Use your <code>gh</code> CLI token to enumerate GitHub apps?</div>'
+    +   '<div class="pp__detail"><dl><dt>Token source</dt><dd class="v-mono">~/.config/gh/hosts.yml</dd><dt>Vigil will read</dt><dd>App names, scopes, grant dates.</dd><dt>Vigil will NOT</dt><dd>read repos, write, or send the token off-device.</dd><dt>Egress</dt><dd>2 TLS calls to <span class="v-mono">api.github.com</span>, audit-logged.</dd></dl><div class="pp__actions" style="margin-top:14px;"><button class="v-btn v-btn--primary v-btn--sm">Allow</button><button class="v-btn v-btn--sm">Skip</button></div></div>'
+    + '</div>'
+    // State 3: granted (F5: check icon + v-faint emphasis on "in audit trail")
+    + '<div class="pp pp--b is-granted" data-lifecycle="granted" role="region" aria-label="Vigil permission prompt sample: granted">'
+    +   '<div class="pp__bar"><span class="pp__glyph">' + _P8D_KEY_SVG + '</span><span class="pp__sig">Vigil · permission</span><span>granted 09:41</span></div>'
+    +   '<div class="pp__post pp__post--grant">' + _P8D_CHECK_SVG + '<span>Authorized · enumerated 3 GitHub apps · <span class="v-faint">in audit trail</span></span><button class="v-btn v-btn--sm">Revoke</button></div>'
+    + '</div>'
+    // State 4: skipped (F5: X icon + bold "Not authenticated")
+    + '<div class="pp pp--b is-skipped" data-lifecycle="skipped" role="region" aria-label="Vigil permission prompt sample: skipped">'
+    +   '<div class="pp__bar"><span class="pp__glyph">' + _P8D_KEY_SVG + '</span><span class="pp__sig">Vigil · permission</span><span>skipped</span></div>'
+    +   '<div class="pp__post pp__post--skip">' + _P8D_X_SVG + '<span>Skipped · listed as <b>Not authenticated</b> · everything else works</span><button class="v-btn v-btn--sm">Authenticate</button></div>'
+    + '</div>';
+
+  // F6 fold-in: wire the "What does this access?" toggle for the default
+  // state's detail collapse. Uses aria-expanded per WAI-ARIA disclosure.
+  const detailBtn = container.querySelector('[data-lifecycle="default"] [data-action="detail"]');
+  if (detailBtn) {
+    detailBtn.addEventListener('click', function () {
+      const pp = detailBtn.closest('.pp');
+      const expanded = pp.classList.toggle('show-detail');
+      detailBtn.setAttribute('aria-expanded', String(expanded));
+    });
+  }
+}
+
+async function _p8dInit() {
+  // Both gates required; either failing → inert (no render, no error).
+  const allowed = await _p8dCheckDebugTrigger();
+  if (!allowed) return;
+  // v0.2.2 debug-only placement — samples rendered at #panel-assets
+  // bottom for state-gallery inspection. In v0.2.2.1 GitHub integration,
+  // the LIVE prompt renders inline within the specific Tool Section it
+  // anchors to (LOCKED §9.5). This debug placement is NOT the live
+  // production shape; see design brief §9.5.
+  const panel = document.getElementById('panel-assets');
+  if (!panel) return;
+  let container = document.getElementById('_pp_debug_container');
+  if (!container) {
+    container = document.createElement('div');
+    container.id = '_pp_debug_container';
+    container.style.margin = '20px 0';
+    panel.appendChild(container);
+  }
+  _p8dRenderPromptSample(container);
+}
+
+// Fires unconditionally on DOMContentLoaded; the AND-gate inside
+// _p8dInit means nothing renders in production (env-var absent →
+// inert). Debug renders once at page load; SPA-style tab switching
+// does NOT re-fire (guarded by the container ID check above).
+document.addEventListener('DOMContentLoaded', function () {
+  _p8dInit().catch(function () { /* fail-inert */ });
+});
+// ===== end P8-D =====
+
 </script>
 </body>
 </html>

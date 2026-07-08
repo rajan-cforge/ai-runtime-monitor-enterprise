@@ -186,6 +186,15 @@ class DashboardHandler(BaseHTTPRequestHandler):
             "/api/attack-surface/scan-progress": self._api_attack_surface_scan_progress,
             # P7-B: Recent Activity Tool Section (3-state truthful envelope).
             "/api/attack-surface/recent-activity": self._api_attack_surface_recent_activity,
+            # P8-D: permission grants + append-only audit history
+            # (JD-2 Option C, Rajan-ratified 2026-07-08). Both auth-gated
+            # via blanket do_GET._check_auth; NEVER in exemption tuple.
+            "/api/permissions/grants": self._api_permissions_grants,
+            "/api/permissions/audit": self._api_permissions_audit,
+            # P8-D: debug-enabled flag exposure so frontend can AND
+            # the query-param with the daemon-side env-var (JD-1 hard
+            # pin: query-param alone is literally inert).
+            "/api/permissions/debug-enabled": self._api_permissions_debug_enabled,
         }
 
         # Match path prefixes for dynamic routes
@@ -2596,6 +2605,29 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
         payload, status = get_asset_history(get_thread_db(), asset_id)
         self._send_json(payload, status)
+
+    def _api_permissions_grants(self, params):
+        """P8-D: current-state view of granted integrations (JD-2 Option C)."""
+        from claude_monitoring.attack_surface.dashboard_api import get_permission_grants
+
+        self._send_json(get_permission_grants(get_thread_db()))
+
+    def _api_permissions_audit(self, params):
+        """P8-D: append-only permission_audit history (JD-2 Option C)."""
+        from claude_monitoring.attack_surface.dashboard_api import get_permission_audit
+
+        try:
+            limit = int(params.get("limit", ["100"])[0])
+        except (TypeError, ValueError):
+            limit = 100
+        self._send_json(get_permission_audit(get_thread_db(), limit=limit))
+
+    def _api_permissions_debug_enabled(self, params):
+        """P8-D JD-1 hard pin: exposes VIGIL_ENABLE_PERMISSION_PROMPT_DEBUG=1
+        so frontend can AND its query-param with the daemon-side env-var."""
+        from claude_monitoring.attack_surface.dashboard_api import permission_prompt_debug_enabled
+
+        self._send_json({"debug_enabled": permission_prompt_debug_enabled()})
 
     def _api_assets_new_in_24h(self, params):
         """Count assets with first_seen within the last 24h. Q1

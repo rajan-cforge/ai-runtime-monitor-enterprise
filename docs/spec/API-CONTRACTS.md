@@ -229,6 +229,26 @@ The local daemon API is currently versioned at v0.2. There is no `/v1/` prefix b
 - Deprecation warnings in the daemon log
 - A `/api/version` endpoint (planned for v1.0) that clients can query before making other calls
 
+## 13.1 Attack Surface — Permission grants + audit log (P8-D, v0.2.2)
+
+Added in P8-D per LOCKED §4.5.1 + directive §8.4.1. **Dormant in v0.2.2 core** (§8.4.1:1449 — "the prompt NEVER appears in production v0.2.2 core"); goes live in v0.2.2.1 (GitHub integration).
+
+Data model per Rajan JD-2 Option C ratification 2026-07-08:
+
+- **`permission_grants`** (existing, P0.2-shipped) — current-state view. PK=`integration`, columns `(integration, granted_at, granted_scope)`. Last-write-wins UPSERT on grant; DELETE on revoke.
+- **`permission_audit`** (NEW in v0.2.2.004 migration) — append-only history. Every grant/revoke event is an immutable row; grant → revoke → re-grant preserves all 3 rows. Schema `(id INTEGER PK AUTOINCREMENT, integration TEXT, event TEXT CHECK (event IN ('granted','revoked')), event_at TIMESTAMP, granted_scope TEXT)`.
+- Writes go through `record_permission_event()` which INSERTs to `permission_audit` and UPSERTs/DELETEs `permission_grants` in a single transaction (`with conn:` idiom).
+
+### Endpoints
+
+- **`GET /api/permissions/grants`** — current-state view. Envelope `{"grants": [{integration, granted_at, granted_scope}]}`. Empty list in dormant state.
+- **`GET /api/permissions/audit?limit=N`** — reverse-chronological audit history. `limit` clamped [1, 1000], default 100. Envelope `{"events": [{id, integration, event, event_at, granted_scope}]}`. Empty list in dormant state.
+- **`GET /api/permissions/debug-enabled`** — reflects `VIGIL_ENABLE_PERMISSION_PROMPT_DEBUG=1` env-var. Judge JD-1 hard pin (Rajan verdict 2026-07-08): frontend query-param `?debug-permission-prompt=1` MUST be AND'd with this daemon-side flag; query-param alone → literally inert. Envelope `{"debug_enabled": boolean}`.
+
+All three routes gated by the same `verify_token` path as every other `/api/*` route (CF-JD1-A hard pin: debug feature is a gate STACKED ON TOP of auth, never a bypass).
+
+Safe-default flip contract (p8-D.a1.verdict.md §4): any of the following → PR flips to security-C4, HALT for Rajan human review — enable a production trigger path; add a token column to either table; store a real API token; add a new host to `scripts/check_privacy_no_telemetry.py` ALLOWED_HOSTNAMES.
+
 ## 14. Future API changes
 
 These are explicitly out of scope for v0.2 but anticipated for future versions:

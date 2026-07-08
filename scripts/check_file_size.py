@@ -105,7 +105,20 @@ from pathlib import Path
 # for auth-gate proximity (do_GET._check_auth path) + method dispatch.
 # Real business logic lives in the pure-function `get_recent_activity`
 # module. Handler delta ~15 lines total.
-MAX_LINES = 3180
+#
+# 3180 → 3210 on P8-D permission-prompt + audit-log (2026-07-08, judge
+# p8-D.a1 APPROVE C3/C3, JD-2 Option C ratified). Three new auth-gated
+# GET routes: `/api/permissions/grants`, `/api/permissions/audit`, and
+# `/api/permissions/debug-enabled` (JD-1 hard pin — frontend query-param
+# AND'd with daemon env-var flag; both required per Rajan verdict
+# 2026-07-08). All three delegate methods are 3-4 lines each; real
+# logic lives in `attack_surface/dashboard_api.py::get_permission_*` +
+# `permission_prompt_debug_enabled` (module has room; handler was the
+# only place these can register for `verify_token` proximity). Per the
+# judge verdict carry-forward: "move to dashboard_api.py first before
+# ceiling bump" — done, then bump. Handler delta ~27 lines net after
+# tightening; 3 route dict entries + 3 thin delegates.
+MAX_LINES = 3210
 
 
 def file_line_count(path: Path) -> int:

@@ -412,6 +412,69 @@ keep all their dismissals.
 """
 
 
+_P8_D_PERMISSION_AUDIT_UP_SQL = """\
+CREATE TABLE permission_audit (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    integration TEXT NOT NULL,
+    event TEXT NOT NULL CHECK (event IN ('granted', 'revoked')),
+    event_at TIMESTAMP NOT NULL,
+    granted_scope TEXT
+);
+CREATE INDEX idx_permission_audit_integration ON permission_audit(integration);
+CREATE INDEX idx_permission_audit_event_at ON permission_audit(event_at);
+"""
+"""Up-SQL for v0.2.2.004 — P8-D append-only permission audit history.
+
+Per Rajan JD-2 ratification 2026-07-08 (Option C): separate append-only
+permission_audit table; existing permission_grants (P0.2-shipped) stays
+as the current-state view (last-write-wins UPSERT).
+
+The audit table preserves EVERY grant/revoke event as an immutable row,
+so grant → revoke → re-grant cycles never lose prior timestamps. Meets
+LOCKED spec §4.5.1 requirement 6 ("User-visible audit log") in the
+integrity-preserving way.
+
+Schema follows the shape proposed in p8-D.a1.result.md JD-2 Option C:
+- id: surrogate PK, auto-incremented (event ordering + reference)
+- integration: which integration was granted/revoked
+- event: 'granted' or 'revoked' (CHECK-enforced at DB layer; not
+  Python-only, so any bad write fails hard rather than corrupting audit)
+- event_at: when the event happened
+- granted_scope: optional scope string for the grant (NULL on revoke)
+
+CHECK-constraint choice: Rajan JD-2 required "append-only" — the CHECK
+means the write path CANNOT accidentally UPDATE a row to a different
+event value (would be a schema violation). Enforcement at DB layer
+rather than Python is a safe-default (§8 empirical ratchet cannot be
+bypassed by an application bug).
+
+Spec §9.1 amendment inline per project_v022_phase1_ratifications.md
+Decision 5 precedent — attach the amendment paragraph to the Phase C
+submission for Rajan external ratification (CF-11).
+
+Safe-default flip contract (p8-D.a1.verdict.md §4): NO token column, NO
+credential column, NO PII beyond localhost operator implicit identity.
+Adding any such column flips PR to security-C4 → HALT for Rajan.
+
+Foreign-key clause omitted per P0.2 deviation #3 (PRAGMA foreign_keys
+is OFF in db.py); integration-name orphans tolerated like every other
+table.
+"""
+
+
+_P8_D_PERMISSION_AUDIT_DOWN_SQL = """\
+DROP TABLE IF EXISTS permission_audit;
+"""
+"""Down-SQL for v0.2.2.004.
+
+Drops permission_audit; SQLite drops the two indexes automatically as
+part of DROP TABLE. Audit history is intentionally LOST on down-migration
+— restoring the pre-P8-D state means restoring an absence of the audit
+capability. permission_grants (existing table, P0.2-shipped) is
+unaffected.
+"""
+
+
 MIGRATIONS: list[Migration] = [
     Migration(
         version="0.2.2.001",
@@ -442,6 +505,17 @@ MIGRATIONS: list[Migration] = [
         ),
         up_sql=_P9_3_ALERT_TRIAGE_UP_SQL,
         down_sql=_P9_3_ALERT_TRIAGE_DOWN_SQL,
+    ),
+    Migration(
+        version="0.2.2.004",
+        description=(
+            "P8-D: append-only permission_audit table for grant/revoke "
+            "history (spec §9.1 amendment per Rajan JD-2 ratification "
+            "2026-07-08 Option C); permission_grants unchanged as "
+            "current-state view"
+        ),
+        up_sql=_P8_D_PERMISSION_AUDIT_UP_SQL,
+        down_sql=_P8_D_PERMISSION_AUDIT_DOWN_SQL,
     ),
 ]
 """Ordered registry of migrations.

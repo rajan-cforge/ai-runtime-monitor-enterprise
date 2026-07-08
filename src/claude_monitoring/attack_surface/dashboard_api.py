@@ -545,3 +545,134 @@ def get_recent_activity(db: sqlite3.Connection, capture_ok: bool) -> dict[str, A
     asset_rows = asset_rows[:50]
 
     return {"capture_status": "ok", "assets": asset_rows}
+
+
+# ---------------------------------------------------------------------------
+# P8-D: permission grants + audit log (JD-2 Option C, Rajan-ratified 2026-07-08)
+# ---------------------------------------------------------------------------
+
+
+def get_permission_grants(conn: sqlite3.Connection) -> dict[str, Any]:
+    """Return current-state view of granted integrations.
+
+    Reads permission_grants (existing P0.2-shipped table); every row is
+    the latest grant per integration (last-write-wins UPSERT).
+
+    Envelope: ``{"grants": [{"integration": ..., "granted_at": ...,
+    "granted_scope": ...}]}``. Empty list in v0.2.2 core (dormant per
+    LOCKED §8.4.1:1449).
+    """
+    # Architect R4 informational fold-in 2026-07-08: named row access
+    # for consistency with render_asset_row (:45); sqlite3.Row supports
+    # both, named is the file-local convention.
+    cur = conn.execute("SELECT integration, granted_at, granted_scope FROM permission_grants ORDER BY granted_at DESC")
+    grants = [
+        {"integration": row["integration"], "granted_at": row["granted_at"], "granted_scope": row["granted_scope"]}
+        for row in cur.fetchall()
+    ]
+    return {"grants": grants}
+
+
+def get_permission_audit(conn: sqlite3.Connection, limit: int = 100) -> dict[str, Any]:
+    """Return the append-only permission_audit history.
+
+    Rows returned reverse-chronologically (most recent first), capped at
+    ``limit`` (hot-path DoS guard, default 100, hard cap 1000).
+
+    Every event ever recorded is preserved; grant → revoke → re-grant
+    cycles produce 3 immutable rows, satisfying LOCKED spec §4.5.1
+    requirement 6's "audit log" contract.
+    """
+    limit = max(1, min(int(limit), 1000))
+    cur = conn.execute(
+        "SELECT id, integration, event, event_at, granted_scope "
+        "FROM permission_audit ORDER BY event_at DESC, id DESC LIMIT ?",
+        (limit,),
+    )
+    events = [
+        {
+            "id": row["id"],
+            "integration": row["integration"],
+            "event": row["event"],
+            "event_at": row["event_at"],
+            "granted_scope": row["granted_scope"],
+        }
+        for row in cur.fetchall()
+    ]
+    return {"events": events}
+
+
+def permission_prompt_debug_enabled() -> bool:
+    """P8-D JD-1 hard pin: True iff VIGIL_ENABLE_PERMISSION_PROMPT_DEBUG=1.
+
+    Frontend query-param ``?debug-permission-prompt=1`` MUST be AND'd
+    with this daemon-side flag. Query-param alone → literally inert.
+    """
+    import os
+
+    return os.environ.get("VIGIL_ENABLE_PERMISSION_PROMPT_DEBUG") == "1"
+
+
+def record_permission_event(
+    conn: sqlite3.Connection,
+    integration: str,
+    event: str,
+    granted_scope: str | None = None,
+    event_at: str | None = None,
+) -> None:
+    """Record a grant or revoke event.
+
+    Writes to BOTH tables in a single transaction — audit-integrity
+    guardrail per JD-2 Option C ratification. Either both commit or
+    neither.
+
+    - permission_audit: INSERT a new immutable row (append-only)
+    - permission_grants: UPSERT current-state view
+      - on 'granted': row is created/updated with new granted_at + scope
+      - on 'revoked': row is deleted (integration no longer in
+        current-state view; audit history preserves the revoke event)
+
+    Args:
+        conn: SQLite connection.
+        integration: Integration name (e.g., 'github', 'gitlab').
+        event: 'granted' or 'revoked'.
+        granted_scope: Optional scope string; NULL for revoke.
+        event_at: Optional ISO timestamp; defaults to
+            ``datetime.datetime.now(UTC).isoformat()``.
+
+    Raises:
+        ValueError: if ``event`` is not one of the allowed values.
+        sqlite3.IntegrityError: if the DB-layer CHECK constraint fails
+            (defense in depth against a Python-side bypass).
+    """
+    if event not in ("granted", "revoked"):
+        raise ValueError(f"event must be 'granted' or 'revoked'; got {event!r}")
+
+    if event_at is None:
+        import datetime as _dt
+
+        # Code-review R4 fold-in 2026-07-08: `_dt.UTC` requires Python 3.11+;
+        # pyproject.toml supports >=3.10. `timezone.utc` is the 3.10-compat
+        # form and matches this file's existing pattern at :477.
+        event_at = _dt.datetime.now(_dt.timezone.utc).isoformat()
+
+    # `with conn:` is sqlite3's transactional idiom — commits on exit,
+    # rolls back on exception. Both writes commit or neither.
+    with conn:
+        conn.execute(
+            "INSERT INTO permission_audit (integration, event, event_at, granted_scope) VALUES (?, ?, ?, ?)",
+            (integration, event, event_at, granted_scope),
+        )
+        if event == "granted":
+            conn.execute(
+                "INSERT INTO permission_grants (integration, granted_at, granted_scope) "
+                "VALUES (?, ?, ?) "
+                "ON CONFLICT(integration) DO UPDATE SET "
+                "granted_at = excluded.granted_at, granted_scope = excluded.granted_scope",
+                (integration, event_at, granted_scope),
+            )
+        else:  # 'revoked'
+            conn.execute(
+                "DELETE FROM permission_grants WHERE integration = ?",
+                (integration,),
+            )
