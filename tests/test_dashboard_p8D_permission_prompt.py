@@ -695,6 +695,81 @@ class TestPermissionAuditBehavioralIntegration:
         result = get_permission_audit(_p8d_migrated_conn)
         assert result == {"events": []}
 
+    def test_permission_prompt_debug_enabled_true_when_env_set(self, monkeypatch):
+        """JD-1 gate: env-var =1 → True."""
+        from claude_monitoring.attack_surface.dashboard_api import permission_prompt_debug_enabled
+
+        monkeypatch.setenv("VIGIL_ENABLE_PERMISSION_PROMPT_DEBUG", "1")
+        assert permission_prompt_debug_enabled() is True
+
+    def test_permission_prompt_debug_enabled_false_when_env_unset(self, monkeypatch):
+        """JD-1 gate: env-var absent → False (dormant default)."""
+        from claude_monitoring.attack_surface.dashboard_api import permission_prompt_debug_enabled
+
+        monkeypatch.delenv("VIGIL_ENABLE_PERMISSION_PROMPT_DEBUG", raising=False)
+        assert permission_prompt_debug_enabled() is False
+
+    def test_permission_prompt_debug_enabled_false_when_env_set_to_other(self, monkeypatch):
+        """JD-1 gate: env-var must be exactly '1'. '0', 'true', 'yes'
+        do NOT enable. Strict-mode gate."""
+        from claude_monitoring.attack_surface.dashboard_api import permission_prompt_debug_enabled
+
+        monkeypatch.setenv("VIGIL_ENABLE_PERMISSION_PROMPT_DEBUG", "0")
+        assert permission_prompt_debug_enabled() is False
+        monkeypatch.setenv("VIGIL_ENABLE_PERMISSION_PROMPT_DEBUG", "true")
+        assert permission_prompt_debug_enabled() is False
+
+    def test_record_permission_event_default_event_at_uses_current_utc(self, _p8d_migrated_conn):
+        """Coverage: the `event_at=None` fallback path constructs a
+        current-UTC timestamp via `datetime.timezone.utc` (Python 3.10
+        compatible per code-review R4 fold-in)."""
+        from claude_monitoring.attack_surface.dashboard_api import record_permission_event
+
+        # Call without event_at — defaults to now-UTC.
+        record_permission_event(_p8d_migrated_conn, "github", "granted", "repo:read")
+        rows = _p8d_migrated_conn.execute("SELECT event_at FROM permission_audit").fetchall()
+        assert len(rows) == 1
+        # ISO-format check: must contain 'T' and end with '+00:00' or 'Z'.
+        stamp = rows[0]["event_at"]
+        assert "T" in stamp
+        assert stamp.endswith("+00:00") or stamp.endswith("Z"), f"event_at must be ISO UTC; got {stamp!r}"
+
+    def test_get_permission_audit_limit_is_clamped(self, _p8d_migrated_conn):
+        """Coverage: `limit` clamped to [1, 1000]; oversized values snap."""
+        from claude_monitoring.attack_surface.dashboard_api import get_permission_audit, record_permission_event
+
+        # Seed 3 events.
+        for i in range(3):
+            record_permission_event(_p8d_migrated_conn, f"int-{i}", "granted", None, f"2026-07-0{i + 1}T00:00:00+00:00")
+        # Oversized limit clamps to 1000 (no effect on 3-row result).
+        result = get_permission_audit(_p8d_migrated_conn, limit=100000)
+        assert len(result["events"]) == 3
+        # Zero/negative snaps to 1.
+        result = get_permission_audit(_p8d_migrated_conn, limit=0)
+        assert len(result["events"]) == 1
+
+    def test_get_permission_audit_reverse_chronological(self, _p8d_migrated_conn):
+        """Coverage: returned events are ORDERed by event_at DESC."""
+        from claude_monitoring.attack_surface.dashboard_api import get_permission_audit, record_permission_event
+
+        record_permission_event(_p8d_migrated_conn, "a", "granted", None, "2026-07-01T00:00:00+00:00")
+        record_permission_event(_p8d_migrated_conn, "b", "granted", None, "2026-07-03T00:00:00+00:00")
+        record_permission_event(_p8d_migrated_conn, "c", "granted", None, "2026-07-02T00:00:00+00:00")
+        result = get_permission_audit(_p8d_migrated_conn)
+        integrations = [e["integration"] for e in result["events"]]
+        assert integrations == ["b", "c", "a"], f"Expected reverse-chronological order [b, c, a]; got {integrations!r}"
+
+    def test_get_permission_grants_reverse_chronological(self, _p8d_migrated_conn):
+        """Coverage: current-state view ordered by granted_at DESC."""
+        from claude_monitoring.attack_surface.dashboard_api import get_permission_grants, record_permission_event
+
+        record_permission_event(_p8d_migrated_conn, "a", "granted", None, "2026-07-01T00:00:00+00:00")
+        record_permission_event(_p8d_migrated_conn, "b", "granted", None, "2026-07-03T00:00:00+00:00")
+        record_permission_event(_p8d_migrated_conn, "c", "granted", None, "2026-07-02T00:00:00+00:00")
+        result = get_permission_grants(_p8d_migrated_conn)
+        integrations = [g["integration"] for g in result["grants"]]
+        assert integrations == ["b", "c", "a"]
+
     def test_migration_round_trip_up_then_down(self):
         """M10/CF-3 live: apply the P8-D migration up, then down,
         assert permission_audit no longer exists but permission_grants
