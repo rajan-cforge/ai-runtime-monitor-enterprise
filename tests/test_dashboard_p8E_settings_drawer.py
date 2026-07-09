@@ -623,6 +623,71 @@ class TestP8EEndpointsHTTPIntegration:
         data = _json.loads(resp.read())
         assert "cleared" in data
 
+    def test_post_revoke_400_on_non_dict(self, _p8e_api_server):
+        """Handler validates payload is dict before pulling integration."""
+        import urllib.error as _err
+        import urllib.request as _urllib
+
+        base, _, _json = _p8e_api_server
+        req = _urllib.Request(
+            f"{base}/api/permissions/revoke",
+            data=b'"not an object"',
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            _urllib.urlopen(req)
+            raise AssertionError("expected 400")
+        except _err.HTTPError as e:
+            assert e.code == 400
+
+    def test_post_revoke_success_writes_audit(self, _p8e_api_server):
+        """Revoke with valid integration succeeds; verifies handler wires
+        record_permission_event correctly."""
+        import urllib.request as _urllib
+
+        base, db_path, _json = _p8e_api_server
+        # Seed: grant first via direct DB write, then revoke via API.
+        from claude_monitoring.attack_surface.dashboard_api import record_permission_event
+        from claude_monitoring.persistence.migrations import apply_migrations
+
+        conn = sqlite3.connect(str(db_path))
+        conn.row_factory = sqlite3.Row
+        apply_migrations(conn)
+        record_permission_event(conn, "github", "granted", "repo:read", "2026-07-09T10:00:00Z")
+        conn.close()
+
+        req = _urllib.Request(
+            f"{base}/api/permissions/revoke",
+            data=_json.dumps({"integration": "github"}).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        resp = _urllib.urlopen(req)
+        assert resp.status == 200
+        data = _json.loads(resp.read())
+        assert data["ok"] is True
+        assert data["integration"] == "github"
+        assert data["event"] == "revoked"
+
+    def test_post_settings_400_on_invalid_json(self, _p8e_api_server):
+        """Handler's outer JSON-parse error path — before route dispatch."""
+        import urllib.error as _err
+        import urllib.request as _urllib
+
+        base, _, _json = _p8e_api_server
+        req = _urllib.Request(
+            f"{base}/api/settings",
+            data=b"{not valid json",
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            _urllib.urlopen(req)
+            raise AssertionError("expected 400")
+        except _err.HTTPError as e:
+            assert e.code == 400
+
 
 class TestP8DDormantCopyPreserved:
     """CF-7: P8-D's TestSettingsDormantHonestCopy locks the STRING
