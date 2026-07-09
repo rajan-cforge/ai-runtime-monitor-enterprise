@@ -371,6 +371,88 @@ class TestTabCountUnchanged:
 # ---------------------------------------------------------------------------
 
 
+class TestUserSettingsPersistence:
+    """M7 + M8: retention + schedule server-side persistence per JD-2
+    ratification. Uses tmp_path for isolation."""
+
+    def test_load_default_when_file_missing(self, tmp_path):
+        from claude_monitoring.attack_surface.user_settings import load_user_settings
+
+        result = load_user_settings(tmp_path / "missing.toml")
+        assert result == {"retention_days": 30, "schedule": "12h"}
+
+    def test_save_then_load_round_trip(self, tmp_path):
+        from claude_monitoring.attack_surface.user_settings import (
+            load_user_settings,
+            save_user_settings,
+        )
+
+        path = tmp_path / "user_settings.toml"
+        save_user_settings(90, "daily", path=path)
+        assert load_user_settings(path) == {"retention_days": 90, "schedule": "daily"}
+
+    def test_save_rejects_invalid_retention(self, tmp_path):
+        from claude_monitoring.attack_surface.user_settings import save_user_settings
+
+        with pytest.raises(ValueError, match="retention_days"):
+            save_user_settings(15, "12h", path=tmp_path / "x.toml")
+
+    def test_save_rejects_invalid_schedule(self, tmp_path):
+        from claude_monitoring.attack_surface.user_settings import save_user_settings
+
+        with pytest.raises(ValueError, match="schedule"):
+            save_user_settings(30, "hourly", path=tmp_path / "x.toml")
+
+    def test_load_falls_back_on_invalid_values_in_file(self, tmp_path):
+        from claude_monitoring.attack_surface.user_settings import load_user_settings
+
+        path = tmp_path / "bad.toml"
+        path.write_text('retention_days = 42\nschedule = "hourly"\n')
+        # Values fall back to defaults; load never raises.
+        result = load_user_settings(path)
+        assert result == {"retention_days": 30, "schedule": "12h"}
+
+
+class TestRevokeEndpointHelper:
+    """M6: revoke wires to record_permission_event with event='revoked'."""
+
+    def test_revoke_writes_audit_and_deletes_current_state(self, _p8e_migrated_conn):
+        from claude_monitoring.attack_surface.dashboard_api import record_permission_event
+
+        # Set up: grant, then revoke.
+        record_permission_event(_p8e_migrated_conn, "github", "granted", "repo:read", "2026-07-09T10:00:00Z")
+        record_permission_event(_p8e_migrated_conn, "github", "revoked", None, "2026-07-09T11:00:00Z")
+        audit = _p8e_migrated_conn.execute(
+            "SELECT event FROM permission_audit WHERE integration=? ORDER BY id",
+            ("github",),
+        ).fetchall()
+        grants = _p8e_migrated_conn.execute(
+            "SELECT integration FROM permission_grants WHERE integration=?", ("github",)
+        ).fetchall()
+        assert [r["event"] for r in audit] == ["granted", "revoked"]
+        assert grants == []
+
+
+class TestClearAttackSurfaceData:
+    """Section 6 destructive: clear_attack_surface_data DELETEs all
+    attack-surface tables. Capture tables untouched."""
+
+    def test_clear_leaves_permission_grants_empty(self, _p8e_migrated_conn):
+        from claude_monitoring.attack_surface.dashboard_api import (
+            clear_attack_surface_data,
+            record_permission_event,
+        )
+
+        record_permission_event(_p8e_migrated_conn, "github", "granted", None, "2026-07-09T10:00:00Z")
+        result = clear_attack_surface_data(_p8e_migrated_conn)
+        remaining_grants = _p8e_migrated_conn.execute("SELECT COUNT(*) FROM permission_grants").fetchone()[0]
+        remaining_audit = _p8e_migrated_conn.execute("SELECT COUNT(*) FROM permission_audit").fetchone()[0]
+        assert remaining_grants == 0
+        assert remaining_audit == 0
+        assert "cleared" in result
+        assert result["cleared"]["permission_grants"] == 1
+
+
 class TestP8DDormantCopyPreserved:
     """CF-7: P8-D's TestSettingsDormantHonestCopy locks the STRING
     not the DOM ancestor. After JD-1 Position B move, the strings

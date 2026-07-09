@@ -676,3 +676,84 @@ def record_permission_event(
                 "DELETE FROM permission_grants WHERE integration = ?",
                 (integration,),
             )
+
+
+# ---------------------------------------------------------------------------
+# P8-E: user settings (retention + discovery schedule) + destructive clear
+# ---------------------------------------------------------------------------
+
+
+def get_user_settings_payload() -> dict[str, Any]:
+    """Return the current user settings envelope for the Settings drawer.
+
+    JD-2 ratification 2026-07-09: server-side persistence. This helper
+    is the read-side entry point for `GET /api/settings`.
+
+    Envelope: ``{"retention_days": N, "schedule": "..."}``. Falls back
+    to defaults if the settings file is missing/malformed.
+    """
+    from claude_monitoring.attack_surface.user_settings import load_user_settings
+
+    return load_user_settings()
+
+
+def update_user_settings_payload(payload: dict[str, Any]) -> tuple[dict[str, Any], int]:
+    """Validate + persist a settings-update request.
+
+    Returns (envelope, status). Envelope on success is the newly-saved
+    values. Malformed input → (`{"error": ...}`, 400).
+    """
+    from claude_monitoring.attack_surface.user_settings import (
+        load_user_settings,
+        save_user_settings,
+    )
+
+    if not isinstance(payload, dict):
+        return {"error": "payload must be a JSON object"}, 400
+
+    retention = payload.get("retention_days")
+    schedule = payload.get("schedule")
+    if retention is None or schedule is None:
+        return {"error": "retention_days and schedule are required"}, 400
+
+    try:
+        retention_int = int(retention)
+    except (TypeError, ValueError):
+        return {"error": "retention_days must be an integer"}, 400
+
+    try:
+        save_user_settings(retention_int, str(schedule))
+    except ValueError as exc:
+        return {"error": str(exc)}, 400
+
+    return load_user_settings(), 200
+
+
+def clear_attack_surface_data(conn: sqlite3.Connection) -> dict[str, Any]:
+    """Destructive: DELETE all rows from the attack-surface tables.
+
+    Per directive §8.5:1470 "Clear Attack Surface data — destructive,
+    confirm". This is the write path for the drawer's Section 6 button
+    after the user confirms.
+
+    Explicitly does NOT touch: capture tables (events, alerts,
+    connections, etc.). Only the 6 attack-surface tables shipped in
+    P0.2 + P4.4/P8-D amendments.
+
+    Returns a summary envelope: rows-deleted per table.
+    """
+    tables = [
+        "asset_history",
+        "asset_cves",
+        "assets",
+        "cve_cache",
+        "discovery_runs",
+        "permission_grants",
+        "permission_audit",
+    ]
+    counts: dict[str, int] = {}
+    with conn:
+        for table in tables:
+            cur = conn.execute(f"DELETE FROM {table}")  # nosec B608 — literal table names
+            counts[table] = cur.rowcount if cur.rowcount is not None else 0
+    return {"cleared": counts}
