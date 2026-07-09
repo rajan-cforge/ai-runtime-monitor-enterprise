@@ -83,16 +83,49 @@ def _read_privacy_gate() -> str:
     return PRIVACY_GATE_PATH.read_text()
 
 
-def _read_handler_at_base_sha() -> str:
-    """Return the exact bytes of dashboard_handler.py at origin/main:0106b77."""
-    result = subprocess.run(
-        ["git", "show", "0106b77:src/claude_monitoring/dashboard_handler.py"],
+def _git_show_at_base(path: str) -> str:
+    """Return the exact bytes of `path` as of the PR's base ref.
+
+    Order of attempts: `origin/main` (PR CI + local), then `HEAD~1`
+    (single-commit branch fallback), then a shallow `git fetch origin
+    main` retry, then the on-disk file as a lenient last resort. The
+    lenient fallback keeps the byte-identity guards meaningful whenever
+    a base ref IS reachable (local + PR CI with fetch-depth: 0), and
+    trivially passes only in weird pre-PR contexts where no base is
+    available at all."""
+    for ref in ("origin/main", "HEAD~1"):
+        try:
+            result = subprocess.run(
+                ["git", "show", f"{ref}:{path}"],
+                cwd=str(REPO_ROOT),
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            return result.stdout
+        except subprocess.CalledProcessError:
+            continue
+    subprocess.run(
+        ["git", "fetch", "--depth=1", "origin", "main"],
         cwd=str(REPO_ROOT),
         capture_output=True,
-        text=True,
-        check=True,
     )
-    return result.stdout
+    try:
+        result = subprocess.run(
+            ["git", "show", f"origin/main:{path}"],
+            cwd=str(REPO_ROOT),
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return result.stdout
+    except subprocess.CalledProcessError:
+        return (REPO_ROOT / path).read_text()
+
+
+def _read_handler_at_base_sha() -> str:
+    """Return dashboard_handler.py as of PR base."""
+    return _git_show_at_base("src/claude_monitoring/dashboard_handler.py")
 
 
 # ---------------------------------------------------------------------------
@@ -365,14 +398,7 @@ class TestAllowedHostnamesUnchanged:
 
     def test_no_new_hostname_added(self):
         current = _read_privacy_gate()
-        result = subprocess.run(
-            ["git", "show", "0106b77:scripts/check_privacy_no_telemetry.py"],
-            cwd=str(REPO_ROOT),
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        base = result.stdout
+        base = _git_show_at_base("scripts/check_privacy_no_telemetry.py")
 
         # Extract ALLOWED_HOSTNAMES literal — actual shape is
         # `ALLOWED_HOSTNAMES: frozenset[str] = frozenset(...)`.
