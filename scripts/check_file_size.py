@@ -118,7 +118,20 @@ from pathlib import Path
 # judge verdict carry-forward: "move to dashboard_api.py first before
 # ceiling bump" — done, then bump. Handler delta ~27 lines net after
 # tightening; 3 route dict entries + 3 thin delegates.
-MAX_LINES = 3210
+#
+# 3210 → 3260 on P8-E Settings drawer batched (2026-07-09, judge
+# p8-E.a2 Rajan informal APPROVE C2/C2 pending formal verdict; sandbox
+# outage). Adds 4 new auth-gated routes (one GET + three POST): GET
+# /api/settings, POST /api/settings, POST /api/permissions/revoke,
+# POST /api/attack-surface/clear. All 4 delegate methods are 3-6 lines
+# each; real logic lives in `attack_surface/dashboard_api.py` (settings
+# read/update, revoke via record_permission_event, clear_attack_surface_data)
+# and `attack_surface/user_settings.py` (new module for TOML persistence).
+# JD-2 ratification (server-side settings): retention + schedule persist
+# via ~/.config/vigil/user_settings.toml with atomic writes.
+# Handler delta ~42 lines net after moving all business logic to
+# dashboard_api.py. Ceiling bump justified per same precedent as P8-D.
+MAX_LINES = 3260
 
 
 def file_line_count(path: Path) -> int:

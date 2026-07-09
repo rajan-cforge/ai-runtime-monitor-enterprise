@@ -195,6 +195,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
             # the query-param with the daemon-side env-var (JD-1 hard
             # pin: query-param alone is literally inert).
             "/api/permissions/debug-enabled": self._api_permissions_debug_enabled,
+            # P8-E: Settings drawer read path (retention + schedule).
+            "/api/settings": self._api_settings_get,
         }
 
         # Match path prefixes for dynamic routes
@@ -270,6 +272,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
             "/api/supply-chain/intel-refresh": self._api_supply_chain_intel_refresh,
             # P7.1: Discover CTA route stub; behavior lands in P7.2.
             "/api/attack-surface/scan-now": self._api_attack_surface_scan_now,
+            # P8-E: Settings drawer write paths.
+            "/api/settings": self._api_settings_post,
+            "/api/permissions/revoke": self._api_permissions_revoke,
+            "/api/attack-surface/clear": self._api_attack_surface_clear,
         }
 
         handler = post_routes.get(path)
@@ -2628,6 +2634,45 @@ class DashboardHandler(BaseHTTPRequestHandler):
         from claude_monitoring.attack_surface.dashboard_api import permission_prompt_debug_enabled
 
         self._send_json({"debug_enabled": permission_prompt_debug_enabled()})
+
+    def _api_settings_get(self, params):
+        """P8-E: Settings drawer read — retention + schedule."""
+        from claude_monitoring.attack_surface.dashboard_api import get_user_settings_payload
+
+        self._send_json(get_user_settings_payload())
+
+    def _api_settings_post(self, payload):
+        """P8-E: Settings drawer write — validates + persists atomically."""
+        from claude_monitoring.attack_surface.dashboard_api import update_user_settings_payload
+
+        result, status = update_user_settings_payload(payload)
+        self._send_json(result, status)
+
+    def _api_permissions_revoke(self, payload):
+        """P8-E: revoke a granted integration — writes to permission_audit
+        + permission_grants via record_permission_event('revoked')."""
+        from claude_monitoring.attack_surface.dashboard_api import record_permission_event
+
+        if not isinstance(payload, dict):
+            self._send_json({"error": "payload must be JSON object"}, 400)
+            return
+        integration = payload.get("integration")
+        if not integration or not isinstance(integration, str):
+            self._send_json({"error": "integration required"}, 400)
+            return
+        try:
+            record_permission_event(get_thread_db(), integration, "revoked")
+        except ValueError as exc:
+            self._send_json({"error": str(exc)}, 400)
+            return
+        self._send_json({"ok": True, "integration": integration, "event": "revoked"})
+
+    def _api_attack_surface_clear(self, payload):
+        """P8-E: Destructive — DELETEs all attack-surface tables.
+        Capture tables untouched."""
+        from claude_monitoring.attack_surface.dashboard_api import clear_attack_surface_data
+
+        self._send_json(clear_attack_surface_data(get_thread_db()))
 
     def _api_assets_new_in_24h(self, params):
         """Count assets with first_seen within the last 24h. Q1
