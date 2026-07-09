@@ -67,6 +67,8 @@ from __future__ import annotations
 import re
 import sqlite3
 from pathlib import Path
+from unittest.mock import patch
+from urllib.request import urlopen
 
 import pytest
 
@@ -451,6 +453,175 @@ class TestClearAttackSurfaceData:
         assert remaining_audit == 0
         assert "cleared" in result
         assert result["cleared"]["permission_grants"] == 1
+
+
+class TestDashboardAPIPayloadHelpers:
+    """Coverage lift for get_user_settings_payload +
+    update_user_settings_payload in attack_surface/dashboard_api.py.
+    monkeypatches the default settings path to a tmp location."""
+
+    def test_get_returns_defaults_when_file_missing(self, tmp_path, monkeypatch):
+        from claude_monitoring.attack_surface import dashboard_api, user_settings
+
+        monkeypatch.setattr(user_settings, "_default_settings_path", lambda: tmp_path / "missing.toml")
+        result = dashboard_api.get_user_settings_payload()
+        assert result == {"retention_days": 30, "schedule": "12h"}
+
+    def test_update_persists_and_returns_envelope(self, tmp_path, monkeypatch):
+        from claude_monitoring.attack_surface import dashboard_api, user_settings
+
+        target = tmp_path / "user_settings.toml"
+        monkeypatch.setattr(user_settings, "_default_settings_path", lambda: target)
+        result, status = dashboard_api.update_user_settings_payload({"retention_days": 90, "schedule": "daily"})
+        assert status == 200
+        assert result == {"retention_days": 90, "schedule": "daily"}
+        # Round-trip: subsequent GET returns the same values.
+        assert dashboard_api.get_user_settings_payload() == {
+            "retention_days": 90,
+            "schedule": "daily",
+        }
+
+    def test_update_rejects_non_dict(self):
+        from claude_monitoring.attack_surface.dashboard_api import update_user_settings_payload
+
+        result, status = update_user_settings_payload("not a dict")
+        assert status == 400
+        assert "error" in result
+
+    def test_update_rejects_missing_fields(self):
+        from claude_monitoring.attack_surface.dashboard_api import update_user_settings_payload
+
+        result, status = update_user_settings_payload({"retention_days": 30})
+        assert status == 400
+
+    def test_update_rejects_non_int_retention(self):
+        from claude_monitoring.attack_surface.dashboard_api import update_user_settings_payload
+
+        result, status = update_user_settings_payload({"retention_days": "thirty", "schedule": "12h"})
+        assert status == 400
+
+    def test_update_rejects_invalid_enum_via_save(self, tmp_path, monkeypatch):
+        from claude_monitoring.attack_surface import dashboard_api, user_settings
+
+        monkeypatch.setattr(user_settings, "_default_settings_path", lambda: tmp_path / "x.toml")
+        result, status = dashboard_api.update_user_settings_payload({"retention_days": 42, "schedule": "12h"})
+        assert status == 400
+        assert "retention_days" in result["error"]
+
+
+class TestP8EEndpointsHTTPIntegration:
+    """Coverage lift for dashboard_handler.py P8-E delegate methods.
+    Same DashboardHandler HTTP fixture pattern as P8-D."""
+
+    @pytest.fixture()
+    def _p8e_api_server(self, tmp_path, monkeypatch):
+        import json as _json
+        import threading
+        from http.server import HTTPServer
+
+        from claude_monitoring.attack_surface import user_settings
+        from claude_monitoring.db import init_db
+
+        monkeypatch.setenv("DISABLE_DASHBOARD_AUTH", "1")
+        # Also isolate the user_settings TOML path.
+        toml_target = tmp_path / "user_settings.toml"
+        monkeypatch.setattr(user_settings, "_default_settings_path", lambda: toml_target)
+
+        db_path = tmp_path / "test.db"
+        output_dir = tmp_path / "output"
+        output_dir.mkdir(exist_ok=True)
+        init_db(db_path).close()
+        with (
+            patch("claude_monitoring.monitor.DB_PATH", db_path),
+            patch("claude_monitoring.monitor.OUTPUT_DIR", output_dir),
+            patch("claude_monitoring.config.get_db_path", return_value=db_path),
+            patch("claude_monitoring.config.get_output_dir", return_value=output_dir),
+            patch("claude_monitoring.db.get_db_path", return_value=db_path),
+            patch("claude_monitoring.db.get_output_dir", return_value=output_dir),
+        ):
+            from claude_monitoring.monitor import DashboardHandler
+
+            server = HTTPServer(("127.0.0.1", 0), DashboardHandler)
+            port = server.server_address[1]
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            yield f"http://127.0.0.1:{port}", db_path, _json
+            server.shutdown()
+
+    def test_get_settings_returns_defaults(self, _p8e_api_server):
+        base, _, _json = _p8e_api_server
+        resp = urlopen(f"{base}/api/settings")
+        assert resp.status == 200
+        data = _json.loads(resp.read())
+        assert data == {"retention_days": 30, "schedule": "12h"}
+
+    def test_post_settings_round_trip(self, _p8e_api_server):
+        import urllib.request as _urllib
+
+        base, _, _json = _p8e_api_server
+        req = _urllib.Request(
+            f"{base}/api/settings",
+            data=_json.dumps({"retention_days": 7, "schedule": "off"}).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        resp = _urllib.urlopen(req)
+        assert resp.status == 200
+        data = _json.loads(resp.read())
+        assert data == {"retention_days": 7, "schedule": "off"}
+        # Round-trip: GET returns the new values.
+        resp2 = urlopen(f"{base}/api/settings")
+        data2 = _json.loads(resp2.read())
+        assert data2 == {"retention_days": 7, "schedule": "off"}
+
+    def test_post_settings_400_on_missing_fields(self, _p8e_api_server):
+        import urllib.error as _err
+        import urllib.request as _urllib
+
+        base, _, _json = _p8e_api_server
+        req = _urllib.Request(
+            f"{base}/api/settings",
+            data=_json.dumps({"retention_days": 30}).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            _urllib.urlopen(req)
+            raise AssertionError("expected 400")
+        except _err.HTTPError as e:
+            assert e.code == 400
+
+    def test_post_revoke_400_on_missing_integration(self, _p8e_api_server):
+        import urllib.error as _err
+        import urllib.request as _urllib
+
+        base, _, _json = _p8e_api_server
+        req = _urllib.Request(
+            f"{base}/api/permissions/revoke",
+            data=_json.dumps({}).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            _urllib.urlopen(req)
+            raise AssertionError("expected 400")
+        except _err.HTTPError as e:
+            assert e.code == 400
+
+    def test_post_clear_returns_ok_on_empty_db(self, _p8e_api_server):
+        import urllib.request as _urllib
+
+        base, _, _json = _p8e_api_server
+        req = _urllib.Request(
+            f"{base}/api/attack-surface/clear",
+            data=b"{}",
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        resp = _urllib.urlopen(req)
+        assert resp.status == 200
+        data = _json.loads(resp.read())
+        assert "cleared" in data
 
 
 class TestP8DDormantCopyPreserved:
