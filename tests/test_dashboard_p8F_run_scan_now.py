@@ -84,27 +84,31 @@ def _read_privacy_gate() -> str:
 
 
 def _git_show_at_base(path: str) -> str:
-    """Return the exact bytes of `path` as of the PR's base ref.
+    """Return the exact bytes of `path` as of `origin/main` (the PR
+    merge base).
 
-    Order of attempts: `origin/main` (PR CI + local), then `HEAD~1`
-    (single-commit branch fallback), then a shallow `git fetch origin
-    main` retry, then the on-disk file as a lenient last resort. The
-    lenient fallback keeps the byte-identity guards meaningful whenever
-    a base ref IS reachable (local + PR CI with fetch-depth: 0), and
-    trivially passes only in weird pre-PR contexts where no base is
-    available at all."""
-    for ref in ("origin/main", "HEAD~1"):
-        try:
-            result = subprocess.run(
-                ["git", "show", f"{ref}:{path}"],
-                cwd=str(REPO_ROOT),
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-            return result.stdout
-        except subprocess.CalledProcessError:
-            continue
+    Two attempts: read `origin/main` directly, then explicit shallow
+    fetch + retry. **HEAD~1 is NOT a fallback** — on a multi-commit
+    branch it's the previous commit ON the branch, not the base, and
+    would silently trivialize the safe-default flip guards. Same
+    reason no on-disk fallback (security review 2026-07-09 control-
+    regression flag).
+
+    Hard-fail with an actionable message if `origin/main` isn't
+    reachable — the fix in that case is CI-side (`fetch-depth: 0` on
+    the checkout action), not weakening the guardrail here."""
+    try:
+        result = subprocess.run(
+            ["git", "show", f"origin/main:{path}"],
+            cwd=str(REPO_ROOT),
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return result.stdout
+    except subprocess.CalledProcessError:
+        pass
+    # Explicit shallow fetch (works even on shallow clones).
     subprocess.run(
         ["git", "fetch", "--depth=1", "origin", "main"],
         cwd=str(REPO_ROOT),
@@ -119,8 +123,14 @@ def _git_show_at_base(path: str) -> str:
             check=True,
         )
         return result.stdout
-    except subprocess.CalledProcessError:
-        return (REPO_ROOT / path).read_text()
+    except subprocess.CalledProcessError as exc:
+        raise AssertionError(
+            f"P8-F safe-default flip guard cannot resolve `origin/main:"
+            f"{path}`. Tried direct read + shallow fetch, both failed. "
+            f"Silent fallback would be a control regression. Fix: CI "
+            f"must checkout with `fetch-depth: 0` so origin/main is "
+            f"reachable. Underlying error: {exc.stderr!r}"
+        ) from exc
 
 
 def _read_handler_at_base_sha() -> str:
