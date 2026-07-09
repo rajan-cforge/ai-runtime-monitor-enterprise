@@ -91,6 +91,11 @@ jobs:
             python-version: "3.13"
     steps:
       - uses: actions/checkout@v4
+        with:
+          # P8-F safe-default flip guards need origin/main reachable
+          # for byte-identity comparison (M7/M8/M9 pins). Same value
+          # already used by ci-security and coverage-ratchet jobs.
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
