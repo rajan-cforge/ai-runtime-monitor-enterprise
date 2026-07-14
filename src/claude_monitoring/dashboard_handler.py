@@ -1812,6 +1812,17 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _send_download_payload(self, body_str: str, content_type: str, filename: str) -> None:
+        """AS Visual Refresh PR-1 2026-07-13: shared 200-download helper.
+        Encodes body_str, sets Content-Type / Content-Disposition, writes."""
+        body = body_str.encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+        self.send_header("Content-Length", len(body))
+        self.end_headers()
+        self.wfile.write(body)
+
     def _send_csv(self, rows, filename):
         """Send rows as CSV with download headers."""
         if not rows:
@@ -1926,6 +1937,18 @@ class DashboardHandler(BaseHTTPRequestHandler):
             data = [dict(r) for r in rows]
             fname = f"ai_monitor_traffic_{now_iso()[:10]}"
 
+        elif export_type == "attack-surface":
+            # AS Visual Refresh PR-1 2026-07-13 — full logic in dashboard_api.
+            from claude_monitoring.attack_surface.dashboard_api import (
+                render_attack_surface_export,
+            )
+
+            result, status = render_attack_surface_export(fmt, db)
+            if status != 200:
+                self._send_json(result, status)
+                return
+            self._send_download_payload(result["body"], result["content_type"], result["filename"])
+            return
         else:
             self._send_json({"error": f"Unknown export type: {export_type}"}, 400)
             return

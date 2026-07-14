@@ -1445,9 +1445,21 @@ body { background:var(--bg); color:var(--text); font-family:var(--font-sans); fo
       <span>All figures below are synthetic. Real scans resume when demo mode is turned off.</span>
       <button class="v-btn v-btn--sm" data-demo-toggle>Turn off</button>
     </div>
-    <!-- P8-E gear-icon settings trigger per LOCKED directive §8.5:1460 +
-         mockup L451. Visible only when panel-assets is the active tab. -->
-    <div style="display:flex;justify-content:flex-end;margin-bottom:8px;">
+    <!-- AS Visual Refresh PR-1 2026-07-13: section head per mockup L440.
+         h1 "Attack surface" + subtitle summary (total assets + tool count
+         + last scan). Populated by _renderAttackSurfaceOverview so counts
+         reflect real state. -->
+    <div id="as-section-head" style="display:flex;align-items:flex-end;justify-content:space-between;gap:12px;padding-bottom:12px;margin-bottom:16px;border-bottom:1px solid var(--v-border,#23282e)">
+      <div>
+        <h1 style="margin:0;font-size:22px;font-weight:600;letter-spacing:-0.01em">Attack surface</h1>
+        <div id="as-section-summary" style="margin-top:6px;font-size:12.5px;color:var(--v-text-3,#7a8089)">
+          <span id="as-section-summary-text">Ready</span>
+          <span id="as-section-summary-intel" style="margin-left:14px" class="v-faint">intel · OSV.dev + Chrome Web Store</span>
+        </div>
+      </div>
+      <!-- P8-E gear-icon settings trigger per LOCKED directive §8.5:1460
+           + mockup L451. Moved into section head per Visual Refresh. -->
+      <div style="display:flex;justify-content:flex-end;margin-bottom:8px;">
       <button class="iconbtn" data-open-settings title="Attack Surface settings"
         style="background:transparent;border:1px solid var(--v-border);border-radius:6px;
         padding:6px 8px;cursor:pointer;color:var(--v-text-2);"
@@ -1456,6 +1468,7 @@ body { background:var(--bg); color:var(--text); font-family:var(--font-sans); fo
           <circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
         </svg>
       </button>
+      </div>
     </div>
     <!-- P7.1 (Rajan-ratified 2026-06-30): empty-state shell per LOCKED §3.3:293.
          HIDDEN by default; JS toggles visibility ONLY when `total === 0` so
@@ -5253,6 +5266,31 @@ function _renderAttackSurfaceOverview(d) {
     const el = document.getElementById('ov-last-scan');
     if (el) el.textContent = new Date(d.last_scan_ts * 1000).toLocaleString();
   }
+  // AS Visual Refresh PR-1 2026-07-13: section head summary line —
+  // total assets across N AI tools, with M needing attention.
+  const summaryEl = document.getElementById('as-section-summary-text');
+  if (summaryEl) {
+    const t = Number(d.total || 0);
+    const c = Number(bb.critical || 0);
+    const h = Number(bb.high || 0);
+    const attn = c + h;
+    let parts = [];
+    if (t > 0) {
+      parts.push(t + ' asset' + (t === 1 ? '' : 's'));
+      if (attn > 0) parts.push(attn + ' need' + (attn === 1 ? 's' : '') + ' attention');
+    } else {
+      parts.push('No scan yet');
+    }
+    if (d.last_scan_ts) {
+      const ago = Math.max(0, Math.floor((Date.now() - d.last_scan_ts * 1000) / 60000));
+      const when = ago < 1 ? 'just now'
+        : ago < 60 ? ago + 'm ago'
+        : ago < 1440 ? Math.floor(ago/60) + 'h ago'
+        : Math.floor(ago/1440) + 'd ago';
+      parts.push('scanned ' + when);
+    }
+    summaryEl.textContent = parts.join(' · ');
+  }
   // Top 5 risks — clickable rows routing to drill-down. Reuses the
   // existing `showAssetDetail(assetId)` overlay (defined further down
   // this file). Wiring here rather than deferring to P7-C — the drill-
@@ -6393,13 +6431,41 @@ document.addEventListener('DOMContentLoaded', function () {
     if (clearBtn) { e.preventDefault(); _p8eOpenClearConfirm(); return; }
     const clearYes = e.target.closest('[data-clear-confirm-yes]');
     if (clearYes) {
-      // Wired at Phase B follow-up; deletion routes through DELETE
-      // /api/attack-surface/data (auth-gated, see handler).
-      _p8eCloseClearConfirm();
+      // AS Visual Refresh PR-1 2026-07-13: actually fire the DELETE.
+      // Route is POST /api/attack-surface/clear (P8-E backend).
+      fetch(API + '/api/attack-surface/clear', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: '{}',
+      }).then(() => {
+        _p8eCloseClearConfirm();
+        // Re-run the state router — populated → empty A transition.
+        if (typeof loadAssets === 'function') loadAssets(0);
+      }).catch(() => {
+        // Silent on transient error; user can retry.
+        _p8eCloseClearConfirm();
+      });
       return;
     }
     const clearNo = e.target.closest('[data-clear-confirm-no]');
     if (clearNo) { _p8eCloseClearConfirm(); return; }
+    // AS Visual Refresh PR-1 2026-07-13: export buttons in drawer.
+    // Downloads attack-surface assets in the chosen format from
+    // /api/export?type=attack-surface&format=<json|csv|markdown>.
+    // MUST route through window.withAuthToken (see comment L1737): the
+    // global fetch monkey-patch does NOT intercept full-page navigations
+    // or window.open, so /api/export would 401 without an explicit token.
+    // Mirror of the sibling pattern at L4110.
+    const exportBtn = e.target.closest('[data-export]');
+    if (exportBtn) {
+      e.preventDefault();
+      const fmt = exportBtn.getAttribute('data-export');
+      if (fmt) {
+        const url = API + '/api/export?type=attack-surface&format=' + encodeURIComponent(fmt);
+        window.open(window.withAuthToken(url), '_blank');
+      }
+      return;
+    }
   });
 
   // Esc key → close drawer / any open confirm.

@@ -350,12 +350,18 @@ class TestHandlerBodyByteIdenticalVsBase:
 
 
 def _extract_method_body(source: str, start_idx: int) -> str:
-    """Return method body from `def X` through last body line before
-    the next same-indent def / class-end. Approximate but stable."""
-    # Read from def line forward.
-    remaining = source[start_idx:]
+    """Return method body from `def X` through the last line before
+    the next same-indent def / class boundary.
+
+    Bug fix 2026-07-13: earlier version passed `source[start_idx:]` which
+    dropped the leading whitespace on the def line, causing `def_indent`
+    to compute as 0 (top-level) and the extraction never stopped at
+    method boundaries. Fixed by rewinding to the line start so the
+    actual class-method indent is captured."""
+    # Rewind to the start of the line containing `def`.
+    line_start = source.rfind("\n", 0, start_idx) + 1
+    remaining = source[line_start:]
     lines = remaining.split("\n")
-    # First line is the def; subsequent must be indented more than def.
     def_line = lines[0]
     def_indent = len(def_line) - len(def_line.lstrip())
     body: list[str] = [def_line]

@@ -757,3 +757,58 @@ def clear_attack_surface_data(conn: sqlite3.Connection) -> dict[str, Any]:
             cur = conn.execute(f"DELETE FROM {table}")  # nosec B608 — literal table names
             counts[table] = cur.rowcount if cur.rowcount is not None else 0
     return {"cleared": counts}
+
+
+def render_attack_surface_export(fmt: str, conn: sqlite3.Connection) -> tuple[dict[str, Any], int]:
+    """AS Visual Refresh PR-1 2026-07-13: render attack-surface asset
+    inventory in requested format.
+
+    Delegates to ``claude_monitoring.exports.export_assets`` which handles
+    JSON/CSV/Markdown rendering and routes through the P5.3
+    ``redact_value_for_display`` primitive on demo-mode data.
+
+    Args:
+        fmt: Requested format from the frontend button
+             ("json", "ndjson", "csv", "markdown"). Normalized to the
+             canonical export vocabulary from ``exports.supported_formats()``
+             which uses ``("json", "csv", "md")``. "ndjson" → "json"
+             (attack-surface export is one document, not a stream);
+             "markdown" → "md" (frontend UX name → CLI/canonical name).
+        conn: SQLite connection.
+
+    Returns:
+        On success: ``({"body": rendered_str, "content_type": mime,
+        "filename": name}, 200)``.
+        On format-error: ``({"error": msg}, 400)``.
+        On render-failure: ``({"error": msg}, 500)``.
+    """
+    import datetime as _dt
+
+    from claude_monitoring.exports import export_assets, supported_formats
+
+    _fmt_alias = {"ndjson": "json", "markdown": "md"}
+    as_fmt = _fmt_alias.get(fmt, fmt)
+    if as_fmt not in supported_formats():
+        return (
+            {"error": f"Unknown export format: {fmt!r}; want one of {sorted(supported_formats())}"},
+            400,
+        )
+    try:
+        rendered = export_assets(as_fmt, conn)
+    except Exception as exc:  # nosec B902 — defensive at boundary
+        return ({"error": f"export failed: {exc}"}, 500)
+
+    date_str = _dt.datetime.now(_dt.timezone.utc).date().isoformat()
+    ct_map = {
+        "json": "application/json; charset=utf-8",
+        "csv": "text/csv; charset=utf-8",
+        "md": "text/markdown; charset=utf-8",
+    }
+    return (
+        {
+            "body": rendered,
+            "content_type": ct_map[as_fmt],
+            "filename": f"vigil_attack_surface_{date_str}.{as_fmt}",
+        },
+        200,
+    )
