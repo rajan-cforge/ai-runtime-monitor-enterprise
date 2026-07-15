@@ -119,6 +119,16 @@ from pathlib import Path
 # ceiling bump" — done, then bump. Handler delta ~27 lines net after
 # tightening; 3 route dict entries + 3 thin delegates.
 #
+# 3260 → 3280 on AS Visual Refresh PR-1 (2026-07-13): attack-surface
+# asset export branch on the existing /api/export route. Business logic
+# extracted to `attack_surface/dashboard_api.py::render_attack_surface_export`
+# (~55 lines there); handler-side is a 10-line elif branch that
+# delegates + calls a new shared `_send_download_payload` helper. Net
+# handler delta: +15 lines. `_send_download_payload` is reusable
+# by future export types — replaces duplicated header-boilerplate
+# patterns in `_send_csv` / `_send_ndjson` (technical debt for a
+# follow-up).
+#
 # 3210 → 3260 on P8-E Settings drawer batched (2026-07-09, judge
 # p8-E.a2 Rajan informal APPROVE C2/C2 pending formal verdict; sandbox
 # outage). Adds 4 new auth-gated routes (one GET + three POST): GET
@@ -131,7 +141,7 @@ from pathlib import Path
 # via ~/.config/vigil/user_settings.toml with atomic writes.
 # Handler delta ~42 lines net after moving all business logic to
 # dashboard_api.py. Ceiling bump justified per same precedent as P8-D.
-MAX_LINES = 3260
+MAX_LINES = 3280
 
 
 def file_line_count(path: Path) -> int:
